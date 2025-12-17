@@ -2,7 +2,6 @@
   "name": "stripe-no-webhooks",
   "version": "0.0.1",
   "description": "Stripe integration without dealing with webhooks",
-  "type": "module",
   "bin": {
     "stripe-no-webhooks": "./bin/cli.js"
   },

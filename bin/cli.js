@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { runMigrations } from "@supabase/stripe-sync-engine";
+const { runMigrations } = require("@supabase/stripe-sync-engine");
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -30,13 +30,17 @@ async function migrate(databaseUrl) {
   }
 }
 
-switch (command) {
-  case "migrate":
-    await migrate(databaseUrl);
-    break;
+async function main() {
+  switch (command) {
+    case "migrate":
+      await migrate(databaseUrl);
+      break;
 
-  default:
-    console.log("Usage:");
-    console.log("  npx stripe-no-webhooks migrate <connection_string>");
-    process.exit(1);
+    default:
+      console.log("Usage:");
+      console.log("  npx stripe-no-webhooks migrate <connection_string>");
+      process.exit(1);
+  }
 }
+
+main();
