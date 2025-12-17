@@ -1,11 +1,47 @@
 {
   "name": "stripe-no-webhooks",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Stripe integration without dealing with webhooks",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
   "bin": {
     "stripe-no-webhooks": "./bin/cli.js"
   },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "prepublishOnly": "npm run build"
+  },
   "dependencies": {
     "@supabase/stripe-sync-engine": "^0.47.0"
-  }
+  },
+  "peerDependencies": {
+    "stripe": ">=14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "stripe": "^17.4.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "keywords": [
+    "stripe",
+    "webhooks",
+    "nextjs",
+    "supabase",
+    "sync"
+  ],
+  "license": "MIT"
 }
