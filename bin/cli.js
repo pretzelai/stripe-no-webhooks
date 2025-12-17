@@ -51,9 +51,11 @@ function questionHidden(rl, query) {
         // Backspace
         if (input.length > 0) {
           input = input.slice(0, -1);
+          stdout.write("\b \b"); // Erase character from display
         }
       } else {
         input += char;
+        stdout.write("**************"); // Show asterisk for each character
       }
     };
 
