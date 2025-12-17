@@ -107,19 +107,25 @@ export default async function webhookHandler(
 
 ### 3. Configure Stripe webhook
 
-In your Stripe Dashboard:
+Run the config command to automatically create a webhook in your Stripe account:
 
-1. Go to **Developers → Webhooks**
-2. Add an endpoint pointing to your webhook URL (e.g., `https://yourapp.com/api/stripe/webhook`)
-3. Select the events you want to receive (at minimum: `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`)
-4. Copy the signing secret and add it to your environment variables as `STRIPE_WEBHOOK_SECRET`
+```bash
+npx stripe-no-webhooks config
+```
+
+This will:
+
+1. Ask for your Stripe Secret Key
+2. Ask for your site URL (defaults to `NEXT_PUBLIC_SITE_URL` if set)
+3. Create a webhook endpoint at `https://yoursite.com/api/stripe/webhook` listening to all events
+4. Automatically add `STRIPE_WEBHOOK_SECRET` to your `.env` files (if they exist)
 
 ## Environment Variables
 
 ```env
 DATABASE_URL=postgresql://user:pass@host:port/db
 STRIPE_SECRET_KEY=sk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_WEBHOOK_SECRET=whsec_...  # Output from `npx stripe-no-webhooks config`
 ```
 
 ## What gets synced?
