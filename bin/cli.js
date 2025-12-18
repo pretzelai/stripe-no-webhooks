@@ -80,11 +80,55 @@ async function migrate(databaseUrl) {
       logger: console,
     });
     console.log("✅ Migrations completed successfully!");
+
+    // Save DATABASE_URL to env files
+    const envVars = [{ key: "DATABASE_URL", value: databaseUrl }];
+    const updatedFiles = saveToEnvFiles(envVars);
+    if (updatedFiles.length > 0) {
+      console.log(`📝 Updated ${updatedFiles.join(", ")} with DATABASE_URL`);
+    }
   } catch (error) {
     console.error("❌ Migration failed:");
     console.error(error);
     process.exit(1);
   }
+}
+
+function saveToEnvFiles(envVars) {
+  const envFiles = [
+    ".env",
+    ".env.local",
+    ".env.development",
+    ".env.production",
+  ];
+  const cwd = process.cwd();
+  const updatedFiles = [];
+
+  for (const envFile of envFiles) {
+    const envPath = path.join(cwd, envFile);
+    if (fs.existsSync(envPath)) {
+      let content = fs.readFileSync(envPath, "utf8");
+
+      for (const { key, value } of envVars) {
+        const line = `${key}=${value}`;
+        const regex = new RegExp(`^${key}=.*`, "m");
+
+        if (regex.test(content)) {
+          // Replace existing value
+          content = content.replace(regex, line);
+        } else {
+          // Append to file
+          const newline = content.endsWith("\n") ? "" : "\n";
+          content = content + newline + line + "\n";
+        }
+      }
+
+      fs.writeFileSync(envPath, content);
+      updatedFiles.push(envFile);
+    }
+  }
+
+  return updatedFiles;
 }
 
 function getTemplatesDir() {
@@ -220,13 +264,18 @@ async function config() {
     process.exit(1);
   }
 
-  // Get DATABASE_URL (optional)
-  const defaultDatabaseUrl = process.env.DATABASE_URL || "";
-  const databaseUrlInput = await question(
-    rl,
-    "Enter your DATABASE_URL (optional, press Enter to skip)",
-    defaultDatabaseUrl
-  );
+  // Get DATABASE_URL (optional) - skip if already set in env
+  let databaseUrlInput = "";
+  if (process.env.DATABASE_URL) {
+    console.log("✓ DATABASE_URL already set in environment");
+    databaseUrlInput = process.env.DATABASE_URL;
+  } else {
+    databaseUrlInput = await question(
+      rl,
+      "Enter your DATABASE_URL (optional, press Enter to skip)",
+      ""
+    );
+  }
 
   rl.close();
 
@@ -266,16 +315,6 @@ async function config() {
     });
     console.log("✅ Webhook created successfully!\n");
 
-    // Try to add secrets to env files
-    const envFiles = [
-      ".env",
-      ".env.local",
-      ".env.development",
-      ".env.production",
-    ];
-    const cwd = process.cwd();
-    const updatedFiles = [];
-
     // Build list of env vars to update
     const envVars = [
       { key: "STRIPE_SECRET_KEY", value: stripeSecretKey },
@@ -286,29 +325,8 @@ async function config() {
       envVars.push({ key: "DATABASE_URL", value: databaseUrlInput });
     }
 
-    for (const envFile of envFiles) {
-      const envPath = path.join(cwd, envFile);
-      if (fs.existsSync(envPath)) {
-        let content = fs.readFileSync(envPath, "utf8");
-
-        for (const { key, value } of envVars) {
-          const line = `${key}=${value}`;
-          const regex = new RegExp(`^${key}=.*`, "m");
-
-          if (regex.test(content)) {
-            // Replace existing value
-            content = content.replace(regex, line);
-          } else {
-            // Append to file
-            const newline = content.endsWith("\n") ? "" : "\n";
-            content = content + newline + line + "\n";
-          }
-        }
-
-        fs.writeFileSync(envPath, content);
-        updatedFiles.push(envFile);
-      }
-    }
+    // Save to env files
+    const updatedFiles = saveToEnvFiles(envVars);
 
     const envVarNames = envVars.map((v) => v.key).join(", ");
     if (updatedFiles.length > 0) {
