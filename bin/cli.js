@@ -413,131 +413,83 @@ function findMatchingBrace(content, startIndex) {
   return -1;
 }
 
-function parseBillingConfig(content) {
-  // Extract the plans array from the file content
-  const plansStartMatch = content.match(/plans\s*:\s*\[/);
-  if (!plansStartMatch) {
-    return [];
+function getMode(stripeKey) {
+  if (stripeKey.includes("_test_")) {
+    return "test";
+  } else if (stripeKey.includes("_live_")) {
+    return "production";
+  } else {
+    throw new Error("Invalid Stripe key");
   }
-
-  const plansStart = plansStartMatch.index + plansStartMatch[0].length - 1;
-  const plansEnd = findMatchingBrace(content, plansStart);
-  if (plansEnd === -1) return [];
-
-  const plansContent = content.substring(plansStart + 1, plansEnd);
-  const plans = [];
-
-  // Find each plan object by looking for opening braces at the top level
-  let depth = 0;
-  let planStart = -1;
-
-  for (let i = 0; i < plansContent.length; i++) {
-    const char = plansContent[i];
-    if (char === "{") {
-      if (depth === 0) planStart = i;
-      depth++;
-    } else if (char === "}") {
-      depth--;
-      if (depth === 0 && planStart !== -1) {
-        const planRaw = plansContent.substring(planStart, i + 1);
-        const plan = parsePlanObject(planRaw);
-        if (plan.name) {
-          plans.push({
-            plan,
-            raw: planRaw,
-            startIndex:
-              plansStartMatch.index + plansStartMatch[0].length + planStart,
-          });
-        }
-        planStart = -1;
-      }
-    }
-  }
-
-  return plans;
 }
 
-function parsePlanObject(planContent) {
-  const plan = {};
-
-  // Extract id if present (product id)
-  const idMatch = planContent.match(/^\s*\{\s*id\s*:\s*["']([^"']+)["']/);
-  if (idMatch) plan.id = idMatch[1];
-
-  // Also try to find id not at start
-  if (!plan.id) {
-    const idMatch2 = planContent.match(/[,{]\s*id\s*:\s*["']([^"']+)["']/);
-    if (idMatch2) plan.id = idMatch2[1];
-  }
-
-  // Extract name
-  const nameMatch = planContent.match(/name\s*:\s*["']([^"']+)["']/);
-  if (nameMatch) plan.name = nameMatch[1];
-
-  // Extract description
-  const descMatch = planContent.match(/description\s*:\s*["']([^"']+)["']/);
-  if (descMatch) plan.description = descMatch[1];
-
-  // Extract price array
-  const priceStartMatch = planContent.match(/price\s*:\s*\[/);
-  if (priceStartMatch) {
-    const priceStart = priceStartMatch.index + priceStartMatch[0].length - 1;
-    const priceEnd = findMatchingBrace(planContent, priceStart);
-    if (priceEnd !== -1) {
-      const priceArrayContent = planContent.substring(priceStart + 1, priceEnd);
-      plan.prices = parsePriceArray(priceArrayContent);
-      plan.priceArrayStart = priceStart;
-      plan.priceArrayEnd = priceEnd;
-    }
-  }
-
-  return plan;
+function tsObjectToJson(tsContent) {
+  // Remove single-line comments
+  let json = tsContent.replace(/\/\/.*$/gm, "");
+  // Remove multi-line comments
+  json = json.replace(/\/\*[\s\S]*?\*\//g, "");
+  // Quote unquoted keys (word characters followed by colon)
+  json = json.replace(/(\s*)(\w+)(\s*:)/g, '$1"$2"$3');
+  // Remove trailing commas before ] or }
+  json = json.replace(/,(\s*[}\]])/g, "$1");
+  return json;
 }
 
-function parsePriceArray(priceArrayContent) {
-  const prices = [];
-  let depth = 0;
-  let priceStart = -1;
-
-  for (let i = 0; i < priceArrayContent.length; i++) {
-    const char = priceArrayContent[i];
-    if (char === "{") {
-      if (depth === 0) priceStart = i;
-      depth++;
-    } else if (char === "}") {
-      depth--;
-      if (depth === 0 && priceStart !== -1) {
-        const priceRaw = priceArrayContent.substring(priceStart, i + 1);
-        const price = parsePriceObject(priceRaw);
-        prices.push({ price, raw: priceRaw, localStart: priceStart });
-        priceStart = -1;
-      }
-    }
+function extractBillingConfigObject(content) {
+  // Find the start of the config object
+  const configStartMatch = content.match(
+    /const\s+billingConfig\s*:\s*BillingConfig\s*=\s*\{/
+  );
+  if (!configStartMatch) {
+    return null;
   }
 
-  return prices;
+  const objectStart = configStartMatch.index + configStartMatch[0].length - 1;
+  const objectEnd = findMatchingBrace(content, objectStart);
+  if (objectEnd === -1) return null;
+
+  const rawObject = content.substring(objectStart, objectEnd + 1);
+  return {
+    raw: rawObject,
+    start: objectStart,
+    end: objectEnd + 1,
+  };
 }
 
-function parsePriceObject(priceContent) {
-  const price = {};
+function parseBillingConfig(content, mode) {
+  const extracted = extractBillingConfigObject(content);
+  if (!extracted) {
+    return { config: null, plans: [] };
+  }
 
-  // Extract id if present (price id)
-  const idMatch = priceContent.match(/id\s*:\s*["']([^"']+)["']/);
-  if (idMatch) price.id = idMatch[1];
+  // Convert to JSON and parse
+  const jsonString = tsObjectToJson(extracted.raw);
+  let config;
+  try {
+    config = JSON.parse(jsonString);
+  } catch (e) {
+    console.error("Failed to parse billing config as JSON:", e.message);
+    return { config: null, plans: [] };
+  }
 
-  // Extract amount
-  const amountMatch = priceContent.match(/amount\s*:\s*(\d+)/);
-  if (amountMatch) price.amount = parseInt(amountMatch[1], 10);
+  // Get plans for the specified mode
+  const modeConfig = config[mode];
+  if (!modeConfig || !modeConfig.plans || modeConfig.plans.length === 0) {
+    return { config, plans: [], extracted };
+  }
 
-  // Extract currency
-  const currencyMatch = priceContent.match(/currency\s*:\s*["']([^"']+)["']/);
-  if (currencyMatch) price.currency = currencyMatch[1];
+  // Return parsed plans with their indices for updating
+  const plans = modeConfig.plans.map((plan, index) => ({
+    plan,
+    index,
+  }));
 
-  // Extract interval
-  const intervalMatch = priceContent.match(/interval\s*:\s*["']([^"']+)["']/);
-  if (intervalMatch) price.interval = intervalMatch[1];
+  return { config, plans, extracted };
+}
 
-  return price;
+function formatConfigToTs(config) {
+  // Pretty print with 2-space indent
+  return JSON.stringify(config, null, 2);
 }
 
 async function sync() {
@@ -572,28 +524,176 @@ async function sync() {
     process.exit(1);
   }
 
-  const stripe = new Stripe(stripeSecretKey);
-
-  console.log("\n📤 Pushing billing plans to Stripe...\n");
-
-  let content = fs.readFileSync(billingConfigPath, "utf8");
-  const parsedPlans = parseBillingConfig(content);
-
-  if (parsedPlans.length === 0) {
-    console.log("No plans found in billing.config.ts");
-    console.log("Add plans to the config file and run this command again.");
-    process.exit(0);
+  // Determine mode based on Stripe key
+  let mode;
+  try {
+    mode = getMode(stripeSecretKey);
+  } catch (e) {
+    console.error("❌", e.message);
+    process.exit(1);
   }
 
-  let updatedContent = content;
+  const stripe = new Stripe(stripeSecretKey);
+
+  console.log(`\n🔄 Syncing billing plans with Stripe (${mode} mode)...\n`);
+
+  let content = fs.readFileSync(billingConfigPath, "utf8");
+  const { config, plans, extracted } = parseBillingConfig(content, mode);
+
+  if (!config) {
+    console.error("❌ Failed to parse billing.config.ts");
+    process.exit(1);
+  }
+
+  // Ensure the mode config exists with plans array
+  if (!config[mode]) {
+    config[mode] = { plans: [] };
+  }
+  if (!config[mode].plans) {
+    config[mode].plans = [];
+  }
+
+  let configModified = false;
+  let productsPulled = 0;
+  let pricesPulled = 0;
   let productsCreated = 0;
   let pricesCreated = 0;
   let skippedProducts = 0;
   let skippedPrices = 0;
 
-  for (const { plan, raw } of parsedPlans) {
+  // === PULL: Fetch products and prices from Stripe and add missing ones ===
+  console.log("📥 Pulling products from Stripe...\n");
+
+  try {
+    // Fetch all active products from Stripe
+    const stripeProducts = await stripe.products.list({
+      active: true,
+      limit: 100,
+    });
+
+    // Fetch all active prices from Stripe
+    const stripePrices = await stripe.prices.list({ active: true, limit: 100 });
+
+    // Build a map of price by product
+    const pricesByProduct = {};
+    for (const price of stripePrices.data) {
+      const productId =
+        typeof price.product === "string" ? price.product : price.product.id;
+      if (!pricesByProduct[productId]) {
+        pricesByProduct[productId] = [];
+      }
+      pricesByProduct[productId].push(price);
+    }
+
+    // Get existing product IDs in config
+    const existingProductIds = new Set(
+      config[mode].plans.filter((p) => p.id).map((p) => p.id)
+    );
+
+    // Get existing price IDs in config
+    const existingPriceIds = new Set();
+    for (const plan of config[mode].plans) {
+      if (plan.price) {
+        for (const price of plan.price) {
+          if (price.id) {
+            existingPriceIds.add(price.id);
+          }
+        }
+      }
+    }
+
+    // Add missing products and their prices
+    for (const product of stripeProducts.data) {
+      if (existingProductIds.has(product.id)) {
+        // Product exists, but check if any prices are missing
+        const planIndex = config[mode].plans.findIndex(
+          (p) => p.id === product.id
+        );
+        const plan = config[mode].plans[planIndex];
+        const productPrices = pricesByProduct[product.id] || [];
+
+        for (const stripePrice of productPrices) {
+          if (!existingPriceIds.has(stripePrice.id)) {
+            // Add missing price to existing plan
+            const newPrice = {
+              id: stripePrice.id,
+              amount: stripePrice.unit_amount,
+              currency: stripePrice.currency,
+              interval: stripePrice.recurring?.interval || "one_time",
+            };
+            if (!plan.price) {
+              plan.price = [];
+            }
+            plan.price.push(newPrice);
+            existingPriceIds.add(stripePrice.id);
+            pricesPulled++;
+            configModified = true;
+            console.log(
+              `   📥 Added price ${stripePrice.unit_amount / 100} ${
+                stripePrice.currency
+              }/${newPrice.interval} to "${product.name}"`
+            );
+          }
+        }
+        continue;
+      }
+
+      // Product doesn't exist in config, add it
+      const productPrices = pricesByProduct[product.id] || [];
+      const newPlan = {
+        id: product.id,
+        name: product.name,
+        description: product.description || undefined,
+        price: productPrices.map((p) => ({
+          id: p.id,
+          amount: p.unit_amount,
+          currency: p.currency,
+          interval: p.recurring?.interval || "one_time",
+        })),
+      };
+
+      // Remove undefined description
+      if (!newPlan.description) {
+        delete newPlan.description;
+      }
+
+      config[mode].plans.push(newPlan);
+      productsPulled++;
+      pricesPulled += productPrices.length;
+      configModified = true;
+
+      console.log(`📥 Added product "${product.name}" (${product.id})`);
+      for (const price of newPlan.price) {
+        console.log(
+          `   📥 Added price ${price.amount / 100} ${price.currency}/${
+            price.interval
+          }`
+        );
+      }
+    }
+
+    if (productsPulled === 0 && pricesPulled === 0) {
+      console.log("   No new products or prices to pull from Stripe.\n");
+    } else {
+      console.log("");
+    }
+  } catch (error) {
+    console.error("❌ Failed to fetch products from Stripe:", error.message);
+  }
+
+  // === PUSH: Create products and prices in Stripe from config ===
+  console.log("📤 Pushing new plans to Stripe...\n");
+
+  // Re-get plans after potential modifications
+  const currentPlans = config[mode].plans || [];
+
+  if (currentPlans.length === 0) {
+    console.log(`   No plans in billing.config.ts for ${mode} mode.\n`);
+  }
+
+  for (let index = 0; index < currentPlans.length; index++) {
+    const plan = currentPlans[index];
     let productId = plan.id;
-    let updatedPlanRaw = raw;
 
     // Create product if needed
     if (!productId) {
@@ -608,12 +708,10 @@ async function sync() {
         productId = product.id;
         console.log(`✅ Created product "${plan.name}" (${productId})`);
 
-        // Add product id to plan
-        updatedPlanRaw = updatedPlanRaw.replace(
-          /\{/,
-          `{\n      id: "${productId}",`
-        );
+        // Update the config object with the new product id
+        config[mode].plans[index].id = productId;
         productsCreated++;
+        configModified = true;
       } catch (error) {
         console.error(
           `❌ Failed to create product "${plan.name}":`,
@@ -622,17 +720,15 @@ async function sync() {
         continue;
       }
     } else {
-      console.log(`⏭️  Product "${plan.name}" already exists (${productId})`);
       skippedProducts++;
     }
 
     // Create prices if needed
-    if (plan.prices && plan.prices.length > 0) {
-      for (const { price, raw: priceRaw } of plan.prices) {
+    if (plan.price && plan.price.length > 0) {
+      for (let priceIndex = 0; priceIndex < plan.price.length; priceIndex++) {
+        const price = plan.price[priceIndex];
+
         if (price.id) {
-          console.log(
-            `   ⏭️  Price ${price.interval}/${price.currency} already exists (${price.id})`
-          );
           skippedPrices++;
           continue;
         }
@@ -644,24 +740,27 @@ async function sync() {
             }...`
           );
 
-          const stripePrice = await stripe.prices.create({
+          const priceParams = {
             product: productId,
             unit_amount: price.amount,
             currency: price.currency.toLowerCase(),
-            recurring: {
+          };
+
+          // Only add recurring for non-one_time intervals
+          if (price.interval && price.interval !== "one_time") {
+            priceParams.recurring = {
               interval: price.interval,
-            },
-          });
+            };
+          }
+
+          const stripePrice = await stripe.prices.create(priceParams);
 
           console.log(`   ✅ Created price (${stripePrice.id})`);
 
-          // Add price id to price object
-          const updatedPriceRaw = priceRaw.replace(
-            /\{/,
-            `{\n          id: "${stripePrice.id}",`
-          );
-          updatedPlanRaw = updatedPlanRaw.replace(priceRaw, updatedPriceRaw);
+          // Update the config object with the new price id
+          config[mode].plans[index].price[priceIndex].id = stripePrice.id;
           pricesCreated++;
+          configModified = true;
         } catch (error) {
           console.error(
             `   ❌ Failed to create price ${price.interval}/${price.currency}:`,
@@ -670,26 +769,26 @@ async function sync() {
         }
       }
     }
-
-    // Update content with modified plan
-    if (updatedPlanRaw !== raw) {
-      updatedContent = updatedContent.replace(raw, updatedPlanRaw);
-    }
   }
 
-  // Write updated content back to file
-  if (productsCreated > 0 || pricesCreated > 0) {
-    fs.writeFileSync(billingConfigPath, updatedContent);
-    console.log(
-      `\n📝 Updated billing.config.ts with ${productsCreated} product(s) and ${pricesCreated} price(s)`
-    );
+  // Write updated config back to file
+  if (configModified) {
+    const newConfigJson = formatConfigToTs(config);
+    const newContent =
+      content.substring(0, extracted.start) +
+      newConfigJson +
+      content.substring(extracted.end);
+    fs.writeFileSync(billingConfigPath, newContent);
+    console.log(`\n📝 Updated billing.config.ts`);
   }
 
   console.log(`\n✅ Done!`);
   console.log(
-    `   Products: ${productsCreated} created, ${skippedProducts} skipped`
+    `   Pulled from Stripe: ${productsPulled} product(s), ${pricesPulled} price(s)`
   );
-  console.log(`   Prices: ${pricesCreated} created, ${skippedPrices} skipped`);
+  console.log(
+    `   Pushed to Stripe: ${productsCreated} product(s), ${pricesCreated} price(s)`
+  );
 }
 
 async function main() {
