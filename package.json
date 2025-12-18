@@ -1,6 +1,7 @@
 {
   "name": "stripe-no-webhooks",
   "version": "0.0.1",
+  "author": "Ramon Garate",
   "description": "Stripe integration without dealing with webhooks",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
