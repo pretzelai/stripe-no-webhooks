@@ -540,7 +540,7 @@ function parsePriceObject(priceContent) {
   return price;
 }
 
-async function push() {
+async function sync() {
   const billingConfigPath = path.join(process.cwd(), "billing.config.ts");
 
   if (!fs.existsSync(billingConfigPath)) {
@@ -702,8 +702,8 @@ async function main() {
       await config();
       break;
 
-    case "push":
-      await push();
+    case "sync":
+      await sync();
       break;
 
     default:
