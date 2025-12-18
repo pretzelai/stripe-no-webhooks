@@ -220,6 +220,14 @@ async function config() {
     process.exit(1);
   }
 
+  // Get DATABASE_URL (optional)
+  const defaultDatabaseUrl = process.env.DATABASE_URL || "";
+  const databaseUrlInput = await question(
+    rl,
+    "Enter your DATABASE_URL (optional, press Enter to skip)",
+    defaultDatabaseUrl
+  );
+
   rl.close();
 
   // Create the API route
@@ -246,7 +254,7 @@ async function config() {
 
     console.log("✅ Webhook created successfully!\n");
 
-    // Try to add webhook secret to env files
+    // Try to add secrets to env files
     const envFiles = [
       ".env",
       ".env.local",
@@ -256,19 +264,33 @@ async function config() {
     const cwd = process.cwd();
     const updatedFiles = [];
 
+    // Build list of env vars to update
+    const envVars = [
+      { key: "STRIPE_SECRET_KEY", value: stripeSecretKey },
+      { key: "STRIPE_WEBHOOK_SECRET", value: webhook.secret },
+      { key: "NEXT_PUBLIC_SITE_URL", value: siteUrl },
+    ];
+    if (databaseUrlInput) {
+      envVars.push({ key: "DATABASE_URL", value: databaseUrlInput });
+    }
+
     for (const envFile of envFiles) {
       const envPath = path.join(cwd, envFile);
       if (fs.existsSync(envPath)) {
         let content = fs.readFileSync(envPath, "utf8");
-        const secretLine = `STRIPE_WEBHOOK_SECRET=${webhook.secret}`;
 
-        if (content.includes("STRIPE_WEBHOOK_SECRET=")) {
-          // Replace existing value
-          content = content.replace(/STRIPE_WEBHOOK_SECRET=.*/, secretLine);
-        } else {
-          // Append to file
-          const newline = content.endsWith("\n") ? "" : "\n";
-          content = content + newline + secretLine + "\n";
+        for (const { key, value } of envVars) {
+          const line = `${key}=${value}`;
+          const regex = new RegExp(`^${key}=.*`, "m");
+
+          if (regex.test(content)) {
+            // Replace existing value
+            content = content.replace(regex, line);
+          } else {
+            // Append to file
+            const newline = content.endsWith("\n") ? "" : "\n";
+            content = content + newline + line + "\n";
+          }
         }
 
         fs.writeFileSync(envPath, content);
@@ -276,17 +298,20 @@ async function config() {
       }
     }
 
+    const envVarNames = envVars.map((v) => v.key).join(", ");
     if (updatedFiles.length > 0) {
+      console.log(`📝 Updated ${updatedFiles.join(", ")} with ${envVarNames}`);
       console.log(
-        `📝 Updated ${updatedFiles.join(
-          ", "
-        )} with STRIPE_WEBHOOK_SECRET\nREMEMBER: Update the enviroment variable in Vercel too\nSTRIPE_WEBHOOK_SECRET=${
-          webhook.secret
-        }`
+        "\nREMEMBER: Update the environment variables in Vercel too:"
       );
+      for (const { key, value } of envVars) {
+        console.log(`${key}=${value}`);
+      }
     } else {
-      console.log("Add this to your environment variables:\n");
-      console.log(`STRIPE_WEBHOOK_SECRET=${webhook.secret}\n`);
+      console.log("Add these to your environment variables:\n");
+      for (const { key, value } of envVars) {
+        console.log(`${key}=${value}`);
+      }
     }
 
     console.log("─".repeat(50));
