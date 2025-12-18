@@ -87,6 +87,86 @@ async function migrate(databaseUrl) {
   }
 }
 
+function getTemplatesDir() {
+  return path.join(__dirname, "..", "src", "templates");
+}
+
+function getAppRouterTemplate() {
+  const templatePath = path.join(getTemplatesDir(), "app-router-webhook.ts");
+  return fs.readFileSync(templatePath, "utf8");
+}
+
+function getPagesRouterTemplate() {
+  const templatePath = path.join(getTemplatesDir(), "pages-router-webhook.ts");
+  return fs.readFileSync(templatePath, "utf8");
+}
+
+function detectRouterType() {
+  const cwd = process.cwd();
+  const hasAppDir = fs.existsSync(path.join(cwd, "app"));
+  const hasPagesDir = fs.existsSync(path.join(cwd, "pages"));
+
+  // Also check for src/app and src/pages (common Next.js structure)
+  const hasSrcAppDir = fs.existsSync(path.join(cwd, "src", "app"));
+  const hasSrcPagesDir = fs.existsSync(path.join(cwd, "src", "pages"));
+
+  // Prefer App Router if app directory exists
+  if (hasAppDir || hasSrcAppDir) {
+    return { type: "app", useSrc: hasSrcAppDir && !hasAppDir };
+  }
+
+  if (hasPagesDir || hasSrcPagesDir) {
+    return { type: "pages", useSrc: hasSrcPagesDir && !hasPagesDir };
+  }
+
+  // Default to App Router if no directories found
+  return { type: "app", useSrc: false };
+}
+
+function createApiRoute(routerType, useSrc) {
+  const cwd = process.cwd();
+  const baseDir = useSrc ? path.join(cwd, "src") : cwd;
+
+  if (routerType === "app") {
+    // App Router: app/api/stripe/webhook/route.ts
+    const routeDir = path.join(baseDir, "app", "api", "stripe", "webhook");
+    const routeFile = path.join(routeDir, "route.ts");
+
+    // Create directories if they don't exist
+    fs.mkdirSync(routeDir, { recursive: true });
+
+    // Get template content (remove the comment with file path)
+    let template = getAppRouterTemplate();
+    template = template.replace(
+      /^\/\/ app\/api\/stripe\/webhook\/route\.ts\n/,
+      ""
+    );
+
+    // Write the file
+    fs.writeFileSync(routeFile, template);
+
+    const prefix = useSrc ? "src/" : "";
+    return `${prefix}app/api/stripe/webhook/route.ts`;
+  } else {
+    // Pages Router: pages/api/stripe/webhook.ts
+    const routeDir = path.join(baseDir, "pages", "api", "stripe");
+    const routeFile = path.join(routeDir, "webhook.ts");
+
+    // Create directories if they don't exist
+    fs.mkdirSync(routeDir, { recursive: true });
+
+    // Get template content (remove the comment with file path)
+    let template = getPagesRouterTemplate();
+    template = template.replace(/^\/\/ pages\/api\/stripe\/webhook\.ts\n/, "");
+
+    // Write the file
+    fs.writeFileSync(routeFile, template);
+
+    const prefix = useSrc ? "src/" : "";
+    return `${prefix}pages/api/stripe/webhook.ts`;
+  }
+}
+
 async function config() {
   let Stripe;
   try {
@@ -97,12 +177,15 @@ async function config() {
     process.exit(1);
   }
 
-  const rl = createPrompt();
-
   console.log("\n🔧 Stripe Webhook Configuration\n");
 
+  // Detect router type from folder structure
+  const { type: routerType, useSrc } = detectRouterType();
+  const routerLabel = routerType === "app" ? "App Router" : "Pages Router";
+  const srcLabel = useSrc ? " (src/)" : "";
+  console.log(`📂 Detected: ${routerLabel}${srcLabel}\n`);
+
   // Get Stripe API key (hidden input)
-  rl.close(); // Close readline for hidden input
   const stripeSecretKey = await questionHidden(
     null,
     "Enter your Stripe Secret Key (sk_...)"
@@ -113,16 +196,16 @@ async function config() {
     process.exit(1);
   }
 
-  // Reopen readline for remaining questions
-  const rl2 = createPrompt();
+  // Create readline for site URL question
+  const rl = createPrompt();
 
   // Get site URL with default from env
   const defaultSiteUrl = process.env.NEXT_PUBLIC_SITE_URL || "";
-  const siteUrl = await question(rl2, "Enter your site URL", defaultSiteUrl);
+  const siteUrl = await question(rl, "Enter your site URL", defaultSiteUrl);
 
   if (!siteUrl) {
     console.error("❌ Site URL is required");
-    rl2.close();
+    rl.close();
     process.exit(1);
   }
 
@@ -133,13 +216,23 @@ async function config() {
     webhookUrl = `${url.origin}/api/stripe/webhook`;
   } catch (e) {
     console.error("❌ Invalid URL format");
-    rl2.close();
+    rl.close();
     process.exit(1);
   }
 
-  rl2.close();
+  rl.close();
 
-  console.log(`\n📡 Creating webhook endpoint: ${webhookUrl}\n`);
+  // Create the API route
+  console.log(`📁 Creating API route...`);
+  try {
+    const createdFile = createApiRoute(routerType, useSrc);
+    console.log(`✅ Created ${createdFile}\n`);
+  } catch (error) {
+    console.error("❌ Failed to create API route:", error.message);
+    process.exit(1);
+  }
+
+  console.log(`📡 Creating webhook endpoint: ${webhookUrl}\n`);
 
   const stripe = new Stripe(stripeSecretKey);
 
