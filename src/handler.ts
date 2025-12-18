@@ -53,14 +53,16 @@ export function createStripeWebhookHandler(config: StripeWebhookConfig) {
     callbacks,
   } = config;
 
-  const sync = new StripeSync({
-    poolConfig: {
-      connectionString: databaseUrl,
-    },
-    schema,
-    stripeSecretKey,
-    stripeWebhookSecret,
-  });
+  const sync = databaseUrl
+    ? new StripeSync({
+        poolConfig: {
+          connectionString: databaseUrl,
+        },
+        schema,
+        stripeSecretKey,
+        stripeWebhookSecret,
+      })
+    : null;
 
   const stripe = new Stripe(stripeSecretKey);
 
@@ -90,7 +92,9 @@ export function createStripeWebhookHandler(config: StripeWebhookConfig) {
       }
 
       // Process the webhook with stripe-sync-engine to sync to database
-      await sync.processWebhook(body, signature);
+      if (sync) {
+        await sync.processWebhook(body, signature);
+      }
 
       // Handle subscription callbacks
       if (callbacks) {
