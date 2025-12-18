@@ -1,6 +1,6 @@
 {
   "name": "stripe-no-webhooks",
-  "version": "0.0.2",
+  "version": "0.0.0",
   "description": "Stripe integration without dealing with webhooks",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -22,7 +22,8 @@
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "publish": "npm version patch && npm publish"
   },
   "dependencies": {
     "@supabase/stripe-sync-engine": "^0.47.0"
