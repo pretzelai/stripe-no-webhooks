@@ -6,9 +6,18 @@ const billingConfig: BillingConfig = {
       {
         name: "Premium",
         description: "Access to all features",
-        price: 3000, // in cents 3000 = $30.00
-        interval: "month",
-        currency: "USD",
+        price: [
+          {
+            amount: 1000, // in cents, 1000 = $10.00
+            currency: "usd",
+            interval: "month",
+          },
+          {
+            amount: 10000, // in cents, 10000 = $100.00
+            currency: "usd",
+            interval: "year",
+          },
+        ],
       },
     ],
   */

@@ -2,9 +2,12 @@ type Plan = {
   id?: string;
   name: string;
   description?: string;
-  interval: "month" | "year" | "week";
-  price: number;
-  currency: string;
+  price: {
+    id?: string;
+    amount: number;
+    currency: string;
+    interval: "month" | "year" | "week";
+  }[];
 };
 
 export type BillingConfig = {
