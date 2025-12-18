@@ -5,6 +5,10 @@ const readline = require("readline");
 const fs = require("fs");
 const path = require("path");
 
+// Load environment variables from .env files in the user's project directory
+require("dotenv").config({ path: path.join(process.cwd(), ".env.local") });
+require("dotenv").config({ path: path.join(process.cwd(), ".env") });
+
 const args = process.argv.slice(2);
 const command = args[0];
 const databaseUrl = args[1];
@@ -593,7 +597,7 @@ async function push() {
         // Add product id to plan
         updatedPlanRaw = updatedPlanRaw.replace(
           /\{/,
-          `{\n        id: "${productId}",`
+          `{\n      id: "${productId}",`
         );
         productsCreated++;
       } catch (error) {
@@ -640,7 +644,7 @@ async function push() {
           // Add price id to price object
           const updatedPriceRaw = priceRaw.replace(
             /\{/,
-            `{\n            id: "${stripePrice.id}",`
+            `{\n          id: "${stripePrice.id}",`
           );
           updatedPlanRaw = updatedPlanRaw.replace(priceRaw, updatedPriceRaw);
           pricesCreated++;
