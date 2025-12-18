@@ -24,7 +24,7 @@
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "prepublishOnly": "npm run build",
-    "publish": "npm version patch && npm publish"
+    "release": "npm version patch && npm publish"
   },
   "dependencies": {
     "@supabase/stripe-sync-engine": "^0.47.0"
