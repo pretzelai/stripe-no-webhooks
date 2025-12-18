@@ -1,6 +1,6 @@
 // app/api/stripe/[...all]/route.ts
 import { createStripeHandler } from "stripe-no-webhooks";
-import billingConfig from "../../../../../billing.config";
+import billingConfig from "../../../../billing.config";
 
 export const POST = createStripeHandler({
   billingConfig,
