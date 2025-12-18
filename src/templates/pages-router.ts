@@ -1,17 +1,18 @@
 // pages/api/stripe/[...all].ts
 import { createStripeHandler } from "stripe-no-webhooks";
 import type { NextApiRequest, NextApiResponse } from "next";
+import type { Stripe } from "stripe";
 import billingConfig from "../../../billing.config";
 
 const handler = createStripeHandler({
   billingConfig,
   callbacks: {
-    onSubscriptionCreated: async (subscription) => {
+    onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
       // Called when a new subscription is created
       console.log("New subscription:", subscription.id);
       // e.g., send welcome email, provision resources, etc.
     },
-    onSubscriptionCancelled: async (subscription) => {
+    onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
       // Called when a subscription is cancelled
       console.log("Subscription cancelled:", subscription.id);
       // e.g., send cancellation email, revoke access, etc.
