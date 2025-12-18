@@ -29,12 +29,21 @@ function question(rl, query, defaultValue = "") {
   });
 }
 
-function questionHidden(rl, query) {
+function maskSecretKey(key) {
+  if (!key || key.length < 8) return "*****";
+  return key.slice(0, 3) + "*****" + key.slice(-4);
+}
+
+function questionHidden(rl, query, defaultValue = "") {
   return new Promise((resolve) => {
     const stdin = process.stdin;
     const stdout = process.stdout;
 
-    stdout.write(`${query}: `);
+    const maskedDefault = defaultValue ? maskSecretKey(defaultValue) : "";
+    const prompt = maskedDefault
+      ? `${query} (${maskedDefault}): `
+      : `${query}: `;
+    stdout.write(prompt);
 
     stdin.setRawMode(true);
     stdin.resume();
@@ -47,7 +56,7 @@ function questionHidden(rl, query) {
         stdin.pause();
         stdin.removeListener("data", onData);
         stdout.write("\n");
-        resolve(input);
+        resolve(input || defaultValue);
       } else if (char === "\u0003") {
         // Ctrl+C
         process.exit();
@@ -59,7 +68,7 @@ function questionHidden(rl, query) {
         }
       } else {
         input += char;
-        stdout.write("**************"); // Show asterisk for each character
+        stdout.write("*"); // Show asterisk for each character
       }
     };
 
@@ -237,9 +246,11 @@ async function config() {
   console.log(`📂 Detected: ${routerLabel}${srcLabel}\n`);
 
   // Get Stripe API key (hidden input)
+  const existingStripeKey = process.env.STRIPE_SECRET_KEY || "";
   const stripeSecretKey = await questionHidden(
     null,
-    "Enter your Stripe Secret Key (sk_...)"
+    "Enter your Stripe Secret Key (sk_...)",
+    existingStripeKey
   );
 
   if (!stripeSecretKey || !stripeSecretKey.startsWith("sk_")) {
