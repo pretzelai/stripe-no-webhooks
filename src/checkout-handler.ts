@@ -203,6 +203,16 @@ export function createCheckoutHandler(config: CheckoutConfig) {
         );
       }
 
+      // Return JSON with URL if client accepts JSON (for fetch calls)
+      // Otherwise redirect (for form submissions)
+      const acceptHeader = request.headers.get("accept") || "";
+      if (acceptHeader.includes("application/json")) {
+        return new Response(JSON.stringify({ url: session.url }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       return Response.redirect(session.url, 303);
     } catch (err) {
       console.error("Checkout error:", err);
