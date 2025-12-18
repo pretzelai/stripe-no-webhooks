@@ -487,9 +487,77 @@ function parseBillingConfig(content, mode) {
   return { config, plans, extracted };
 }
 
+function reorderWithIdFirst(obj) {
+  // Reorder object so 'id' is the first property if it exists
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    return obj;
+  }
+
+  const { id, ...rest } = obj;
+  if (id !== undefined) {
+    return { id, ...rest };
+  }
+  return obj;
+}
+
+function toTsObjectLiteral(value, indent = 0) {
+  const spaces = "  ".repeat(indent);
+  const childSpaces = "  ".repeat(indent + 1);
+
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+
+  if (typeof value === "string") {
+    return `"${value}"`;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return "[]";
+    }
+    const items = value.map((item) => toTsObjectLiteral(item, indent + 1));
+    return `[\n${childSpaces}${items.join(`,\n${childSpaces}`)},\n${spaces}]`;
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0) {
+      return "{}";
+    }
+    const props = entries.map(
+      ([key, val]) => `${key}: ${toTsObjectLiteral(val, indent + 1)}`
+    );
+    return `{\n${childSpaces}${props.join(`,\n${childSpaces}`)},\n${spaces}}`;
+  }
+
+  return String(value);
+}
+
 function formatConfigToTs(config) {
-  // Pretty print with 2-space indent
-  return JSON.stringify(config, null, 2);
+  // Reorder plans and prices so 'id' is always first
+  const reorderedConfig = {};
+
+  for (const mode of ["test", "production"]) {
+    if (config[mode]) {
+      reorderedConfig[mode] = {
+        plans: (config[mode].plans || []).map((plan) => {
+          const reorderedPlan = reorderWithIdFirst(plan);
+          if (reorderedPlan.price) {
+            reorderedPlan.price = reorderedPlan.price.map(reorderWithIdFirst);
+          }
+          return reorderedPlan;
+        }),
+      };
+    }
+  }
+
+  // Convert to TypeScript object literal format (unquoted keys)
+  return toTsObjectLiteral(reorderedConfig, 0);
 }
 
 async function sync() {
@@ -769,6 +837,10 @@ async function sync() {
         }
       }
     }
+  }
+
+  if (productsCreated === 0 && pricesCreated === 0) {
+    console.log("   No new products or prices to push to Stripe.\n");
   }
 
   // Write updated config back to file
