@@ -1,7 +1,7 @@
 // pages/api/stripe/[...all].ts
 import { createStripeHandler } from "stripe-no-webhooks";
 import type { NextApiRequest, NextApiResponse } from "next";
-import billingConfig from "../../../billing.config";
+import billingConfig from "../../../../billing.config";
 
 const handler = createStripeHandler({
   billingConfig,

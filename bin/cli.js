@@ -140,12 +140,12 @@ function getTemplatesDir() {
 }
 
 function getAppRouterTemplate() {
-  const templatePath = path.join(getTemplatesDir(), "app-router-webhook.ts");
+  const templatePath = path.join(getTemplatesDir(), "app-router.ts");
   return fs.readFileSync(templatePath, "utf8");
 }
 
 function getPagesRouterTemplate() {
-  const templatePath = path.join(getTemplatesDir(), "pages-router-webhook.ts");
+  const templatePath = path.join(getTemplatesDir(), "pages-router.ts");
   return fs.readFileSync(templatePath, "utf8");
 }
 
@@ -176,8 +176,8 @@ function createApiRoute(routerType, useSrc) {
   const baseDir = useSrc ? path.join(cwd, "src") : cwd;
 
   if (routerType === "app") {
-    // App Router: app/api/stripe/webhook/route.ts
-    const routeDir = path.join(baseDir, "app", "api", "stripe", "webhook");
+    // App Router: app/api/stripe/[...all]/route.ts
+    const routeDir = path.join(baseDir, "app", "api", "stripe", "[...all]");
     const routeFile = path.join(routeDir, "route.ts");
 
     // Create directories if they don't exist
@@ -186,7 +186,7 @@ function createApiRoute(routerType, useSrc) {
     // Get template content (remove the comment with file path)
     let template = getAppRouterTemplate();
     template = template.replace(
-      /^\/\/ app\/api\/stripe\/webhook\/route\.ts\n/,
+      /^\/\/ app\/api\/stripe\/\[\.\.\.all\]\/route\.ts\n/,
       ""
     );
 
@@ -194,24 +194,27 @@ function createApiRoute(routerType, useSrc) {
     fs.writeFileSync(routeFile, template);
 
     const prefix = useSrc ? "src/" : "";
-    return `${prefix}app/api/stripe/webhook/route.ts`;
+    return `${prefix}app/api/stripe/[...all]/route.ts`;
   } else {
-    // Pages Router: pages/api/stripe/webhook.ts
+    // Pages Router: pages/api/stripe/[...all].ts
     const routeDir = path.join(baseDir, "pages", "api", "stripe");
-    const routeFile = path.join(routeDir, "webhook.ts");
+    const routeFile = path.join(routeDir, "[...all].ts");
 
     // Create directories if they don't exist
     fs.mkdirSync(routeDir, { recursive: true });
 
     // Get template content (remove the comment with file path)
     let template = getPagesRouterTemplate();
-    template = template.replace(/^\/\/ pages\/api\/stripe\/webhook\.ts\n/, "");
+    template = template.replace(
+      /^\/\/ pages\/api\/stripe\/\[\.\.\.all\]\.ts\n/,
+      ""
+    );
 
     // Write the file
     fs.writeFileSync(routeFile, template);
 
     const prefix = useSrc ? "src/" : "";
-    return `${prefix}pages/api/stripe/webhook.ts`;
+    return `${prefix}pages/api/stripe/[...all].ts`;
   }
 }
 
