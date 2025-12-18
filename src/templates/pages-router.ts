@@ -1,11 +1,10 @@
-// pages/api/stripe/webhook.ts
-import { createStripeWebhookHandler } from "stripe-no-webhooks";
+// pages/api/stripe/[...all].ts
+import { createStripeHandler } from "stripe-no-webhooks";
 import type { NextApiRequest, NextApiResponse } from "next";
+import billingConfig from "../../../billing.config";
 
-const handler = createStripeWebhookHandler({
-  databaseUrl: process.env.DATABASE_URL!,
-  stripeSecretKey: process.env.STRIPE_SECRET_KEY!,
-  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
+const handler = createStripeHandler({
+  billingConfig,
   callbacks: {
     onSubscriptionCreated: async (subscription) => {
       // Called when a new subscription is created
@@ -27,14 +26,10 @@ export const config = {
   },
 };
 
-export default async function webhookHandler(
+export default async function stripeHandler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
   // Convert NextApiRequest to Request for the handler
   const body = await new Promise<string>((resolve) => {
     let data = "";
@@ -43,7 +38,7 @@ export default async function webhookHandler(
   });
 
   const request = new Request(`https://${req.headers.host}${req.url}`, {
-    method: "POST",
+    method: req.method || "POST",
     headers: new Headers(req.headers as Record<string, string>),
     body,
   });

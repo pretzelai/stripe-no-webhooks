@@ -1,10 +1,9 @@
-// app/api/stripe/webhook/route.ts
-import { createStripeWebhookHandler } from "stripe-no-webhooks";
+// app/api/stripe/[...all]/route.ts
+import { createStripeHandler } from "stripe-no-webhooks";
+import billingConfig from "../../../../../billing.config";
 
-export const POST = createStripeWebhookHandler({
-  databaseUrl: process.env.DATABASE_URL!,
-  stripeSecretKey: process.env.STRIPE_SECRET_KEY!,
-  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
+export const POST = createStripeHandler({
+  billingConfig,
   callbacks: {
     onSubscriptionCreated: async (subscription) => {
       // Called when a new subscription is created
