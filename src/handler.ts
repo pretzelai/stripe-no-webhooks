@@ -1,6 +1,7 @@
 import { StripeSync } from "@supabase/stripe-sync-engine";
 import Stripe from "stripe";
 import type { BillingConfig, PriceInterval } from "./BillingConfig";
+import { getMode } from "./utils";
 
 // ============================================================================
 // Types
@@ -158,7 +159,10 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
   // Checkout Logic
   // ============================================================================
 
-  function resolvePriceId(body: CheckoutRequestBody): string {
+  function resolvePriceId(
+    body: CheckoutRequestBody,
+    mode: "test" | "production"
+  ): string {
     if (body.priceId) {
       return body.priceId;
     }
@@ -167,16 +171,16 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
       throw new Error("interval is required when using planName or planId");
     }
 
-    if (!billingConfig?.plans) {
+    if (!billingConfig?.[mode]?.plans) {
       throw new Error(
         "billingConfig with plans is required when using planName or planId"
       );
     }
 
     const plan = body.planName
-      ? billingConfig.plans.find((p) => p.name === body.planName)
+      ? billingConfig[mode]?.plans?.find((p) => p.name === body.planName)
       : body.planId
-      ? billingConfig.plans.find((p) => p.id === body.planId)
+      ? billingConfig[mode]?.plans?.find((p) => p.id === body.planId)
       : null;
 
     if (!plan) {
@@ -228,7 +232,7 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         `${origin}/success?session_id={CHECKOUT_SESSION_ID}`;
       const cancelUrl = body.cancelUrl || defaultCancelUrl || `${origin}/`;
 
-      const priceId = resolvePriceId(body);
+      const priceId = resolvePriceId(body, getMode(stripeSecretKey));
       const mode = await getPriceMode(priceId);
 
       const sessionParams: Stripe.Checkout.SessionCreateParams = {

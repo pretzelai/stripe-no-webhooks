@@ -15,5 +15,10 @@ export type Plan = {
 };
 
 export type BillingConfig = {
-  plans?: Plan[];
+  test?: {
+    plans?: Plan[];
+  };
+  production?: {
+    plans?: Plan[];
+  };
 };
