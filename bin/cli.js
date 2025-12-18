@@ -245,13 +245,25 @@ async function config() {
   const stripe = new Stripe(stripeSecretKey);
 
   try {
-    // Get all available event types
+    // Check if a webhook with the same URL already exists
+    const existingWebhooks = await stripe.webhookEndpoints.list({ limit: 100 });
+    const existingWebhook = existingWebhooks.data.find(
+      (wh) => wh.url === webhookUrl
+    );
+
+    if (existingWebhook) {
+      console.log(`🔄 Found existing webhook with same URL, deleting it...`);
+      await stripe.webhookEndpoints.del(existingWebhook.id);
+      console.log(`✅ Deleted existing webhook (${existingWebhook.id})\n`);
+    }
+
+    // Create webhook endpoint
+    console.log(`🔄 Creating new webhook endpoint...`);
     const webhook = await stripe.webhookEndpoints.create({
       url: webhookUrl,
       enabled_events: ["*"], // Listen to all events
       description: "Created by stripe-no-webhooks CLI",
     });
-
     console.log("✅ Webhook created successfully!\n");
 
     // Try to add secrets to env files
