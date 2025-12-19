@@ -1,64 +1,90 @@
 # stripe-no-webhooks
 
-Stripe integration without dealing with webhooks. Automatically syncs Stripe data to your PostgreSQL database and provides simple callbacks for subscription events.
+Opinionated & Open Source library that automatically syncs Stripe to your database and gives you useful helpers to implement subscriptions.
 
-## Installation
+## Why this library?
+
+Stripe documentation lacks the ability to clearly point you to an easy way to implement Stripe. Depending on what you google you might end up in a weird place and shoot yourself in the foot.
+
+## Setup
+
+### 1. Install
 
 ```bash
 npm install stripe-no-webhooks stripe
 ```
 
-## Setup
+Note: make sure you also have `.env` or `.env.local` in your project so it can save the generated secrets there.
 
-### 1. Create `.env` or `.env.local` file
-
-If any of these files exist it will automatically save all the necessary secrets during the setup process.
-
-### 2. Create Stripe schema and tables
-
-This step is optional but highly recommended. This will allow `stripe-no-webhooks` to automatically sync all your Stripe data to your database (one of the main reasons we made this library!)
-
-**Option 1:** Run the migration command
+### 2. Create tables where all Stripe data will be automatically synced
 
 ```bash
 npx stripe-no-webhooks migrate postgresql://postgres.[USER]:[PASSWORD]@[DB_URL]/postgres
 ```
 
-**Option 2:** Copy `stripe_schema.sql` and run the query manually
-
-### 3. Run the stripe-no-webhooks config
+### 3. Run `config` to generate files & webhook
 
 ```bash
 npx stripe-no-webhooks config
 ```
 
-The config setup will ask you for `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_SITE_URL`
+### 4. Create your plans
 
-What does `config` do?
+```javascript
+// billing.config.ts (automatically created during config)
+import type { BillingConfig } from "stripe-no-webhooks";
+const billingConfig: BillingConfig = {
+  test: {
+    plans: [
+      {
+        name: "Premium",
+        description: "Access to all features",
+        price: [
+          {
+            amount: 1000, // $10
+            currency: "usd",
+            interval: "month",
+          },
+          {
+            amount: 10000, // $100
+            currency: "usd",
+            interval: "year",
+          },
+        ],
+      },
+    ],
+  },
+};
+export default billingConfig;
+```
 
-- Creates a Stripe webhook pointing at `NEXT_PUBLIC_SITE_URL` and saves `STRIPE_WEBHOOK_SECRET` to your `.env` file
-- Creates `billing.config.ts` at the root of your app
-- Creates a catch all Stripe handler at `api/stripe/[...all]` (takes care of webhooks, creating checkout sessions and creating customer portal sessions)
+Run sync:
 
-##
+```bash
+npx stripe-no-webhooks sync
+```
 
-All Stripe webhook events are automatically synced to your PostgreSQL database in the `stripe` schema. This includes:
+### 5. Implement a checkout button in your frontend:
 
-- Customers
-- Subscriptions
-- Products
-- Prices
-- Invoices
-- Payment methods
-- And more...
+```javascript
+"use client";
+import { checkout } from "stripe-no-webhooks/client";
 
-You can query this data directly from your database without making API calls to Stripe.
-
-## Callbacks
-
-| Callback                  | Event                                                           | Description                               |
-| ------------------------- | --------------------------------------------------------------- | ----------------------------------------- |
-| `onSubscriptionCreated`   | `customer.subscription.created`                                 | Called when a new subscription is created |
-| `onSubscriptionCancelled` | `customer.subscription.deleted` or status changes to `canceled` | Called when a subscription is cancelled   |
-
-Both callbacks receive the full Stripe `Subscription` object.
+export default function Home() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <button
+        className="bg-blue-500 text-white px-4 py-2 rounded-md cursor-pointer"
+        onClick={() =>
+          checkout({
+            planName: "Premium",
+            interval: "month",
+          })
+        }
+      >
+        Checkout
+      </button>
+    </div>
+  );
+}
+```
