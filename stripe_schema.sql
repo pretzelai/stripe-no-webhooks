@@ -1477,3 +1477,11 @@ ALTER TABLE ONLY stripe.checkout_session_line_items
 ALTER TABLE ONLY stripe.checkout_session_line_items
     ADD CONSTRAINT checkout_session_line_items_price_fkey FOREIGN KEY (price) REFERENCES stripe.prices(id) ON DELETE CASCADE;
 
+
+-- user_id to stripe_customer_id map necessary for stripe-no-webhooks to work
+CREATE TABLE stripe.user_stripe_customer_map (
+    user_id text PRIMARY KEY,
+    stripe_customer_id text UNIQUE NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now()
+);

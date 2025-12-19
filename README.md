@@ -10,7 +10,13 @@ npm install stripe-no-webhooks stripe
 
 ## Setup
 
-### 1. Create Stripe schema and tables
+### 1. Create `.env` or `.env.local` file
+
+If any of these files exist it will automatically save all the necessary secrets during the setup process.
+
+### 2. Create Stripe schema and tables
+
+This step is optional but highly recommended. This will allow `stripe-no-webhooks` to automatically sync all your Stripe data to your database (one of the main reasons we made this library!)
 
 **Option 1:** Run the migration command
 
@@ -20,115 +26,21 @@ npx stripe-no-webhooks migrate postgresql://postgres.[USER]:[PASSWORD]@[DB_URL]/
 
 **Option 2:** Copy `stripe_schema.sql` and run the query manually
 
-### 2. Set up the webhook handler
-
-Create a webhook endpoint in your Next.js app:
-
-#### App Router (recommended)
-
-```ts
-// app/api/stripe/webhook/route.ts
-import { createStripeWebhookHandler } from "stripe-no-webhooks";
-
-const handler = createStripeWebhookHandler({
-  databaseUrl: process.env.DATABASE_URL!,
-  stripeSecretKey: process.env.STRIPE_SECRET_KEY!,
-  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
-  callbacks: {
-    onSubscriptionCreated: async (subscription) => {
-      // Called when a new subscription is created
-      console.log("New subscription:", subscription.id);
-      // e.g., send welcome email, provision resources, etc.
-    },
-    onSubscriptionCancelled: async (subscription) => {
-      // Called when a subscription is cancelled
-      console.log("Subscription cancelled:", subscription.id);
-      // e.g., send cancellation email, revoke access, etc.
-    },
-  },
-});
-
-export const POST = handler;
-```
-
-#### Pages Router
-
-```ts
-// pages/api/stripe/webhook.ts
-import { createStripeWebhookHandler } from "stripe-no-webhooks";
-import type { NextApiRequest, NextApiResponse } from "next";
-
-const handler = createStripeWebhookHandler({
-  databaseUrl: process.env.DATABASE_URL!,
-  stripeSecretKey: process.env.STRIPE_SECRET_KEY!,
-  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
-  callbacks: {
-    onSubscriptionCreated: async (subscription) => {
-      console.log("New subscription:", subscription.id);
-    },
-    onSubscriptionCancelled: async (subscription) => {
-      console.log("Subscription cancelled:", subscription.id);
-    },
-  },
-});
-
-// Disable body parsing, we need the raw body for webhook verification
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-export default async function webhookHandler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  // Convert NextApiRequest to Request for the handler
-  const body = await new Promise<string>((resolve) => {
-    let data = "";
-    req.on("data", (chunk) => (data += chunk));
-    req.on("end", () => resolve(data));
-  });
-
-  const request = new Request(`https://${req.headers.host}${req.url}`, {
-    method: "POST",
-    headers: new Headers(req.headers as Record<string, string>),
-    body,
-  });
-
-  const response = await handler(request);
-  res.status(response.status).send(await response.text());
-}
-```
-
-### 3. Configure Stripe webhook
-
-Run the config command to automatically create a webhook in your Stripe account:
+### 3. Run the stripe-no-webhooks config
 
 ```bash
 npx stripe-no-webhooks config
 ```
 
-This will:
+The config setup will ask you for `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_SITE_URL`
 
-1. Ask for your Stripe Secret Key
-2. Ask for your site URL (defaults to `NEXT_PUBLIC_SITE_URL` if set)
-3. Create a webhook endpoint at `https://yoursite.com/api/stripe/webhook` listening to all events
-4. Automatically add `STRIPE_WEBHOOK_SECRET` to your `.env` files (if they exist)
+What does `config` do?
 
-## Environment Variables
+- Creates a Stripe webhook pointing at `NEXT_PUBLIC_SITE_URL` and saves `STRIPE_WEBHOOK_SECRET` to your `.env` file
+- Creates `billing.config.ts` at the root of your app
+- Creates a catch all Stripe handler at `api/stripe/[...all]` (takes care of webhooks, creating checkout sessions and creating customer portal sessions)
 
-```env
-DATABASE_URL=postgresql://user:pass@host:port/db
-STRIPE_SECRET_KEY=sk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...  # Output from `npx stripe-no-webhooks config`
-```
-
-## What gets synced?
+##
 
 All Stripe webhook events are automatically synced to your PostgreSQL database in the `stripe` schema. This includes:
 
