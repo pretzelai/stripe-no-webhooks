@@ -299,29 +299,40 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
   async function handleWebhook(request: Request): Promise<Response> {
     try {
       const body = await request.text();
+      const url = new URL(request.url);
+      const isLocalhost =
+        url.hostname === "localhost" || url.hostname === "127.0.0.1";
       const signature = request.headers.get("stripe-signature");
 
-      if (!signature) {
-        return new Response("Missing stripe-signature header", { status: 400 });
-      }
-
       let event: Stripe.Event;
-      try {
-        event = stripe.webhooks.constructEvent(
-          body,
-          signature,
-          stripeWebhookSecret
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
-        return new Response(
-          `Webhook signature verification failed: ${message}`,
-          { status: 400 }
-        );
+
+      if (isLocalhost) {
+        // Skip signature verification on localhost for easier local development
+        event = JSON.parse(body) as Stripe.Event;
+      } else {
+        if (!signature) {
+          return new Response("Missing stripe-signature header", {
+            status: 400,
+          });
+        }
+
+        try {
+          event = stripe.webhooks.constructEvent(
+            body,
+            signature,
+            stripeWebhookSecret
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          return new Response(
+            `Webhook signature verification failed: ${message}`,
+            { status: 400 }
+          );
+        }
       }
 
       if (sync) {
-        await sync.processWebhook(body, signature);
+        await sync.processEvent(event);
       }
 
       if (callbacks) {
