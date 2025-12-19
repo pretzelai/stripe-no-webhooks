@@ -110,7 +110,6 @@ async function migrate(dbUrl) {
     await client.end();
     console.log("✅ Stripe schema migrations completed!");
 
-    // Save DATABASE_URL to env files
     if (!process.env.DATABASE_URL) {
       const envVars = [{ key: "DATABASE_URL", value: databaseUrl }];
       const updatedFiles = saveToEnvFiles(envVars);
@@ -145,10 +144,8 @@ function saveToEnvFiles(envVars) {
         const regex = new RegExp(`^${key}=.*`, "m");
 
         if (regex.test(content)) {
-          // Replace existing value
           content = content.replace(regex, line);
         } else {
-          // Append to file
           const newline = content.endsWith("\n") ? "" : "\n";
           content = content + newline + line + "\n";
         }
@@ -206,8 +203,6 @@ function createApiRoute(routerType, useSrc) {
     // App Router: app/api/stripe/[...all]/route.ts
     const routeDir = path.join(baseDir, "app", "api", "stripe", "[...all]");
     const routeFile = path.join(routeDir, "route.ts");
-
-    // Create directories if they don't exist
     fs.mkdirSync(routeDir, { recursive: true });
 
     // Get template content (remove the comment with file path)
@@ -217,7 +212,6 @@ function createApiRoute(routerType, useSrc) {
       ""
     );
 
-    // Write the file
     fs.writeFileSync(routeFile, template);
 
     const prefix = useSrc ? "src/" : "";
@@ -227,7 +221,6 @@ function createApiRoute(routerType, useSrc) {
     const routeDir = path.join(baseDir, "pages", "api", "stripe");
     const routeFile = path.join(routeDir, "[...all].ts");
 
-    // Create directories if they don't exist
     fs.mkdirSync(routeDir, { recursive: true });
 
     // Get template content (remove the comment with file path)
@@ -236,8 +229,6 @@ function createApiRoute(routerType, useSrc) {
       /^\/\/ pages\/api\/stripe\/\[\.\.\.all\]\.ts\n/,
       ""
     );
-
-    // Write the file
     fs.writeFileSync(routeFile, template);
 
     const prefix = useSrc ? "src/" : "";
@@ -263,7 +254,6 @@ async function config() {
   const srcLabel = useSrc ? " (src/)" : "";
   console.log(`📂 Detected: ${routerLabel}${srcLabel}\n`);
 
-  // Get Stripe API key (hidden input)
   const existingStripeKey = process.env.STRIPE_SECRET_KEY || "";
   const stripeSecretKey = await questionHidden(
     null,
@@ -276,10 +266,8 @@ async function config() {
     process.exit(1);
   }
 
-  // Create readline for site URL question
   const rl = createPrompt();
 
-  // Get site URL with default from env
   const defaultSiteUrl = process.env.NEXT_PUBLIC_SITE_URL || "";
   const siteUrl = await question(rl, "Enter your site URL", defaultSiteUrl);
 
@@ -289,7 +277,6 @@ async function config() {
     process.exit(1);
   }
 
-  // Validate URL
   let webhookUrl;
   try {
     const url = new URL(siteUrl);
@@ -300,7 +287,6 @@ async function config() {
     process.exit(1);
   }
 
-  // Get DATABASE_URL (optional) - skip if already set in env
   let databaseUrlInput = "";
   if (process.env.DATABASE_URL) {
     console.log("✓ DATABASE_URL already set in environment");
@@ -315,7 +301,6 @@ async function config() {
 
   rl.close();
 
-  // Create the API route
   console.log(`📁 Creating API route...`);
   try {
     const createdFile = createApiRoute(routerType, useSrc);
@@ -325,7 +310,6 @@ async function config() {
     process.exit(1);
   }
 
-  // Copy billing.config.ts to root
   console.log(`📁 Creating billing.config.ts...`);
   try {
     const billingConfigPath = path.join(process.cwd(), "billing.config.ts");
@@ -347,7 +331,6 @@ async function config() {
   const stripe = new Stripe(stripeSecretKey);
 
   try {
-    // Check if a webhook with the same URL already exists
     const existingWebhooks = await stripe.webhookEndpoints.list({ limit: 100 });
     const existingWebhook = existingWebhooks.data.find(
       (wh) => wh.url === webhookUrl
@@ -359,7 +342,6 @@ async function config() {
       console.log(`✅ Deleted existing webhook (${existingWebhook.id})\n`);
     }
 
-    // Create webhook endpoint
     console.log(`🔄 Creating new webhook endpoint...`);
     const webhook = await stripe.webhookEndpoints.create({
       url: webhookUrl,
@@ -368,7 +350,6 @@ async function config() {
     });
     console.log("✅ Webhook created successfully!\n");
 
-    // Build list of env vars to update
     const envVars = [
       { key: "STRIPE_SECRET_KEY", value: stripeSecretKey },
       { key: "STRIPE_WEBHOOK_SECRET", value: webhook.secret },
@@ -378,7 +359,6 @@ async function config() {
       envVars.push({ key: "DATABASE_URL", value: databaseUrlInput });
     }
 
-    // Save to env files
     const updatedFiles = saveToEnvFiles(envVars);
 
     const envVarNames = envVars.map((v) => v.key).join(", ");
@@ -419,7 +399,6 @@ async function config() {
 }
 
 function findMatchingBrace(content, startIndex) {
-  // Find the matching closing brace for an opening brace
   let depth = 0;
   for (let i = startIndex; i < content.length; i++) {
     if (content[i] === "{" || content[i] === "[") depth++;
@@ -480,7 +459,6 @@ function parseBillingConfig(content, mode) {
     return { config: null, plans: [] };
   }
 
-  // Convert to JSON and parse
   const jsonString = tsObjectToJson(extracted.raw);
   let config;
   try {
@@ -490,13 +468,11 @@ function parseBillingConfig(content, mode) {
     return { config: null, plans: [] };
   }
 
-  // Get plans for the specified mode
   const modeConfig = config[mode];
   if (!modeConfig || !modeConfig.plans || modeConfig.plans.length === 0) {
     return { config, plans: [], extracted };
   }
 
-  // Return parsed plans with their indices for updating
   const plans = modeConfig.plans.map((plan, index) => ({
     plan,
     index,
@@ -506,7 +482,6 @@ function parseBillingConfig(content, mode) {
 }
 
 function reorderWithIdFirst(obj) {
-  // Reorder object so 'id' is the first property if it exists
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
     return obj;
   }
@@ -574,7 +549,6 @@ function formatConfigToTs(config) {
     }
   }
 
-  // Convert to TypeScript object literal format (unquoted keys)
   return toTsObjectLiteral(reorderedConfig, 0);
 }
 
@@ -596,7 +570,6 @@ async function sync() {
     process.exit(1);
   }
 
-  // Get Stripe API key from env or prompt
   let stripeSecretKey = process.env.STRIPE_SECRET_KEY;
   if (!stripeSecretKey) {
     stripeSecretKey = await questionHidden(
@@ -610,7 +583,6 @@ async function sync() {
     process.exit(1);
   }
 
-  // Determine mode based on Stripe key
   let mode;
   try {
     mode = getMode(stripeSecretKey);
@@ -631,7 +603,6 @@ async function sync() {
     process.exit(1);
   }
 
-  // Ensure the mode config exists with plans array
   if (!config[mode]) {
     config[mode] = { plans: [] };
   }
@@ -647,20 +618,16 @@ async function sync() {
   let skippedProducts = 0;
   let skippedPrices = 0;
 
-  // === PULL: Fetch products and prices from Stripe and add missing ones ===
   console.log("📥 Pulling products from Stripe...\n");
 
   try {
-    // Fetch all active products from Stripe
     const stripeProducts = await stripe.products.list({
       active: true,
       limit: 100,
     });
 
-    // Fetch all active prices from Stripe
     const stripePrices = await stripe.prices.list({ active: true, limit: 100 });
 
-    // Build a map of price by product
     const pricesByProduct = {};
     for (const price of stripePrices.data) {
       const productId =
@@ -671,12 +638,10 @@ async function sync() {
       pricesByProduct[productId].push(price);
     }
 
-    // Get existing product IDs in config
     const existingProductIds = new Set(
       config[mode].plans.filter((p) => p.id).map((p) => p.id)
     );
 
-    // Get existing price IDs in config
     const existingPriceIds = new Set();
     for (const plan of config[mode].plans) {
       if (plan.price) {
@@ -767,10 +732,8 @@ async function sync() {
     console.error("❌ Failed to fetch products from Stripe:", error.message);
   }
 
-  // === PUSH: Create products and prices in Stripe from config ===
   console.log("📤 Pushing new plans to Stripe...\n");
 
-  // Re-get plans after potential modifications
   const currentPlans = config[mode].plans || [];
 
   if (currentPlans.length === 0) {
@@ -861,7 +824,6 @@ async function sync() {
     console.log("   No new products or prices to push to Stripe.\n");
   }
 
-  // Write updated config back to file
   if (configModified) {
     const newConfigJson = formatConfigToTs(config);
     const newContent =
