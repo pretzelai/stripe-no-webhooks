@@ -4,6 +4,7 @@ const { runMigrations } = require("@supabase/stripe-sync-engine");
 const readline = require("readline");
 const fs = require("fs");
 const path = require("path");
+const { Client } = require("pg");
 
 // Load environment variables from .env files in the user's project directory
 require("dotenv").config({ path: path.join(process.cwd(), ".env.local") });
@@ -94,7 +95,6 @@ async function migrate(dbUrl) {
       schema: SCHEMA,
       logger: console,
     });
-    const { Client } = require("pg");
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
 
