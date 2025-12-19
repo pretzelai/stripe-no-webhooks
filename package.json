@@ -34,7 +34,8 @@
   },
   "dependencies": {
     "@supabase/stripe-sync-engine": "^0.47.0",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "pg": "^8.13.1"
   },
   "peerDependencies": {
     "stripe": ">=14.0.0"

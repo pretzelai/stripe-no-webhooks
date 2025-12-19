@@ -76,7 +76,9 @@ function questionHidden(rl, query, defaultValue = "") {
   });
 }
 
-async function migrate(databaseUrl) {
+async function migrate(dbUrl) {
+  const SCHEMA = "stripe";
+  const databaseUrl = dbUrl || process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error("❌ Missing database URL.\n");
     console.log(
@@ -89,16 +91,32 @@ async function migrate(databaseUrl) {
   try {
     await runMigrations({
       databaseUrl,
-      schema: "stripe",
+      schema: SCHEMA,
       logger: console,
     });
-    console.log("✅ Migrations completed successfully!");
+    const { Client } = require("pg");
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${SCHEMA}.user_stripe_customer_map (
+        user_id text PRIMARY KEY,
+        stripe_customer_id text UNIQUE NOT NULL,
+        created_at timestamptz DEFAULT now(),
+        updated_at timestamptz DEFAULT now()
+      );
+    `);
+
+    await client.end();
+    console.log("✅ Stripe schema migrations completed!");
 
     // Save DATABASE_URL to env files
-    const envVars = [{ key: "DATABASE_URL", value: databaseUrl }];
-    const updatedFiles = saveToEnvFiles(envVars);
-    if (updatedFiles.length > 0) {
-      console.log(`📝 Updated ${updatedFiles.join(", ")} with DATABASE_URL`);
+    if (!process.env.DATABASE_URL) {
+      const envVars = [{ key: "DATABASE_URL", value: databaseUrl }];
+      const updatedFiles = saveToEnvFiles(envVars);
+      if (updatedFiles.length > 0) {
+        console.log(`📝 Updated ${updatedFiles.join(", ")} with DATABASE_URL`);
+      }
     }
   } catch (error) {
     console.error("❌ Migration failed:");
