@@ -71,6 +71,14 @@ export interface StripeHandlerConfig {
    * Callbacks for subscription events
    */
   callbacks?: StripeWebhookCallbacks;
+
+  /**
+   * Function to map a user ID to a Stripe customer ID.
+   * Required when using user_id parameter with customer_portal endpoint.
+   */
+  mapUserIdToStripeCustomerId?: (
+    userId: string
+  ) => string | Promise<string> | null | Promise<string | null>;
 }
 
 export interface CheckoutRequestBody {
@@ -125,6 +133,23 @@ export interface CheckoutRequestBody {
   metadata?: Record<string, string>;
 }
 
+export interface CustomerPortalRequestBody {
+  /**
+   * Stripe customer ID (cus_...)
+   */
+  stripe_customer_id?: string;
+
+  /**
+   * User ID to map to a Stripe customer ID using mapUserIdToStripeCustomerId
+   */
+  user_id?: string;
+
+  /**
+   * URL to redirect to after the customer portal session ends
+   */
+  returnUrl?: string;
+}
+
 // ============================================================================
 // Handler Factory
 // ============================================================================
@@ -140,6 +165,7 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     cancelUrl: defaultCancelUrl,
     automaticTax = true,
     callbacks,
+    mapUserIdToStripeCustomerId,
   } = config;
 
   const stripe = new Stripe(stripeSecretKey);
@@ -352,6 +378,72 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
   }
 
   // ============================================================================
+  // Customer Portal Logic
+  // ============================================================================
+
+  async function handleCustomerPortal(request: Request): Promise<Response> {
+    try {
+      const body: CustomerPortalRequestBody = await request.json();
+
+      let customerId: string | null = null;
+
+      if (body.stripe_customer_id) {
+        customerId = body.stripe_customer_id;
+      } else if (body.user_id) {
+        if (!mapUserIdToStripeCustomerId) {
+          return new Response(
+            JSON.stringify({
+              error:
+                "mapUserIdToStripeCustomerId must be configured to use user_id parameter",
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        customerId = await mapUserIdToStripeCustomerId(body.user_id);
+      }
+
+      if (!customerId) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Provide either stripe_customer_id or user_id. If using user_id, ensure mapUserIdToStripeCustomerId returns a valid customer ID.",
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      const origin = request.headers.get("origin") || "";
+      const returnUrl = body.returnUrl || `${origin}/`;
+
+      const session = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: returnUrl,
+      });
+
+      const acceptHeader = request.headers.get("accept") || "";
+      if (acceptHeader.includes("application/json")) {
+        return new Response(JSON.stringify({ url: session.url }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return Response.redirect(session.url, 303);
+    } catch (err) {
+      console.error("Customer portal error:", err);
+      const message = err instanceof Error ? err.message : "Unknown error";
+      const status =
+        err && typeof err === "object" && "statusCode" in err
+          ? (err.statusCode as number)
+          : 500;
+      return new Response(JSON.stringify({ error: message }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // ============================================================================
   // Main Handler
   // ============================================================================
 
@@ -374,10 +466,12 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         return handleCheckout(request);
       case "webhook":
         return handleWebhook(request);
+      case "customer_portal":
+        return handleCustomerPortal(request);
       default:
         return new Response(
           JSON.stringify({
-            error: `Unknown action: ${action}. Supported: checkout, webhook`,
+            error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal`,
           }),
           { status: 404, headers: { "Content-Type": "application/json" } }
         );
