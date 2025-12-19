@@ -1,11 +1,18 @@
 import { StripeSync } from "@supabase/stripe-sync-engine";
 import Stripe from "stripe";
+import { Pool } from "pg";
 import type { BillingConfig, PriceInterval } from "./BillingConfig";
 import { getMode } from "./utils";
 
 // ============================================================================
 // Types
 // ============================================================================
+
+export interface User {
+  id: string;
+  name?: string;
+  email?: string;
+}
 
 export interface StripeWebhookCallbacks {
   /**
@@ -74,11 +81,19 @@ export interface StripeHandlerConfig {
 
   /**
    * Function to map a user ID to a Stripe customer ID.
-   * Required when using user_id parameter with customer_portal endpoint.
+   * Used as fallback when user is not found in user_stripe_customer_map table.
    */
   mapUserIdToStripeCustomerId?: (
     userId: string
   ) => string | Promise<string> | null | Promise<string | null>;
+
+  /**
+   * Function to extract user from the request.
+   * Useful for extracting user from authentication middleware/session.
+   */
+  getUser?: (
+    request: Request
+  ) => User | Promise<User> | null | Promise<User | null>;
 }
 
 export interface CheckoutRequestBody {
@@ -128,6 +143,12 @@ export interface CheckoutRequestBody {
   customerId?: string;
 
   /**
+   * User object to associate with this checkout.
+   * Will be used to look up or create a Stripe customer.
+   */
+  user?: User;
+
+  /**
    * Additional metadata to attach to the session
    */
   metadata?: Record<string, string>;
@@ -140,9 +161,9 @@ export interface CustomerPortalRequestBody {
   stripe_customer_id?: string;
 
   /**
-   * User ID to map to a Stripe customer ID using mapUserIdToStripeCustomerId
+   * User object to look up Stripe customer ID
    */
-  user_id?: string;
+  user?: User;
 
   /**
    * URL to redirect to after the customer portal session ends
@@ -166,9 +187,12 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     automaticTax = true,
     callbacks,
     mapUserIdToStripeCustomerId,
+    getUser,
   } = config;
 
   const stripe = new Stripe(stripeSecretKey);
+
+  const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
 
   const sync = databaseUrl
     ? new StripeSync({
@@ -180,6 +204,74 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         stripeWebhookSecret,
       })
     : null;
+
+  // ============================================================================
+  // Customer Resolution Logic
+  // ============================================================================
+
+  /**
+   * Resolves a Stripe customer ID from a user.
+   * 1. Looks up in user_stripe_customer_map table
+   * 2. Falls back to mapUserIdToStripeCustomerId if configured
+   * 3. (optionally) Creates a new Stripe customer if not found
+   */
+  async function resolveStripeCustomerId(options: {
+    user: User;
+    createIfNotFound?: boolean;
+  }): Promise<string | null> {
+    const { user, createIfNotFound } = options;
+    const { id: userId, name, email } = user;
+
+    // Step 1: Check user_stripe_customer_map table
+    if (pool) {
+      const result = await pool.query(
+        `SELECT stripe_customer_id FROM ${schema}.user_stripe_customer_map WHERE user_id = $1`,
+        [userId]
+      );
+      if (result.rows.length > 0) {
+        return result.rows[0].stripe_customer_id;
+      }
+    }
+
+    // Step 2: Try mapUserIdToStripeCustomerId fallback
+    if (mapUserIdToStripeCustomerId) {
+      const customerId = await mapUserIdToStripeCustomerId(userId);
+      if (customerId) {
+        return customerId;
+      }
+    }
+
+    // Step 3: Create a new Stripe customer
+    if (createIfNotFound) {
+      const customerParams: Stripe.CustomerCreateParams = {
+        metadata: { user_id: userId },
+      };
+
+      if (name) {
+        customerParams.name = name;
+      }
+
+      if (email) {
+        customerParams.email = email;
+      }
+
+      const customer = await stripe.customers.create(customerParams);
+
+      // Step 4: Save the mapping to user_stripe_customer_map table
+      if (pool) {
+        await pool.query(
+          `INSERT INTO ${schema}.user_stripe_customer_map (user_id, stripe_customer_id) 
+         VALUES ($1, $2) 
+         ON CONFLICT (user_id) DO UPDATE SET stripe_customer_id = $2, updated_at = now()`,
+          [userId, customer.id]
+        );
+      }
+
+      return customer.id;
+    }
+
+    return null;
+  }
 
   // ============================================================================
   // Checkout Logic
@@ -274,12 +366,32 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         automatic_tax: { enabled: automaticTax },
       };
 
-      if (body.customerEmail) {
-        sessionParams.customer_email = body.customerEmail;
-      }
+      // Resolve customer ID from user or direct customerId
+      let customerId: string | null = null;
 
       if (body.customerId) {
-        sessionParams.customer = body.customerId;
+        // Direct customerId takes precedence
+        customerId = body.customerId;
+      } else {
+        // Try to get user from body or from getUser function
+        let user = body.user;
+        if (!user && getUser) {
+          user = (await getUser(request)) ?? undefined;
+        }
+
+        if (user) {
+          customerId = await resolveStripeCustomerId({
+            user,
+            createIfNotFound: true,
+          });
+        }
+      }
+
+      if (customerId) {
+        sessionParams.customer = customerId;
+      } else if (body.customerEmail) {
+        // Fall back to customer_email if no customer ID
+        sessionParams.customer_email = body.customerEmail;
       }
 
       if (body.metadata) {
@@ -388,25 +500,28 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
       let customerId: string | null = null;
 
       if (body.stripe_customer_id) {
+        // Direct stripe_customer_id takes precedence
         customerId = body.stripe_customer_id;
-      } else if (body.user_id) {
-        if (!mapUserIdToStripeCustomerId) {
-          return new Response(
-            JSON.stringify({
-              error:
-                "mapUserIdToStripeCustomerId must be configured to use user_id parameter",
-            }),
-            { status: 400, headers: { "Content-Type": "application/json" } }
-          );
+      } else {
+        // Try to get user from body or from getUser function
+        let user = body.user;
+        if (!user && getUser) {
+          user = (await getUser(request)) ?? undefined;
         }
-        customerId = await mapUserIdToStripeCustomerId(body.user_id);
+
+        if (user) {
+          customerId = await resolveStripeCustomerId({
+            user,
+            createIfNotFound: false,
+          });
+        }
       }
 
       if (!customerId) {
         return new Response(
           JSON.stringify({
             error:
-              "Provide either stripe_customer_id or user_id. If using user_id, ensure mapUserIdToStripeCustomerId returns a valid customer ID.",
+              "Provide either stripe_customer_id or user. Alternatively, configure getUser to extract user from the request.",
           }),
           { status: 400, headers: { "Content-Type": "application/json" } }
         );
