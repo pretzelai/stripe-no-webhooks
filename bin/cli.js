@@ -740,45 +740,117 @@ async function sync() {
     console.log(`   No plans in billing.config.ts for ${mode} mode.\n`);
   }
 
+  // Build lookup maps for existing Stripe products and prices
+  let stripeProductsByName = {};
+  let stripePricesByKey = {};
+
+  try {
+    const stripeProducts = await stripe.products.list({
+      active: true,
+      limit: 100,
+    });
+    const stripePrices = await stripe.prices.list({ active: true, limit: 100 });
+
+    // Map products by name (lowercase for case-insensitive matching)
+    for (const product of stripeProducts.data) {
+      const key = product.name.toLowerCase().trim();
+      if (!stripeProductsByName[key]) {
+        stripeProductsByName[key] = product;
+      }
+    }
+
+    // Map prices by product+amount+currency+interval
+    for (const price of stripePrices.data) {
+      const productId =
+        typeof price.product === "string" ? price.product : price.product.id;
+      const interval = price.recurring?.interval || "one_time";
+      const key = `${productId}:${price.unit_amount}:${price.currency}:${interval}`;
+      if (!stripePricesByKey[key]) {
+        stripePricesByKey[key] = price;
+      }
+    }
+  } catch (error) {
+    console.error(
+      "⚠️  Could not fetch existing Stripe data for matching:",
+      error.message
+    );
+  }
+
+  let productsSynced = 0;
+  let pricesSynced = 0;
+
   for (let index = 0; index < currentPlans.length; index++) {
     const plan = currentPlans[index];
     let productId = plan.id;
 
-    // Create product if needed
+    // Create or match product if needed
     if (!productId) {
-      try {
-        console.log(`🔄 Creating product "${plan.name}" in Stripe...`);
+      // First, check if a product with the same name already exists in Stripe
+      const nameKey = plan.name.toLowerCase().trim();
+      const existingProduct = stripeProductsByName[nameKey];
 
-        const product = await stripe.products.create({
-          name: plan.name,
-          description: plan.description || undefined,
-        });
-
-        productId = product.id;
-        console.log(`✅ Created product "${plan.name}" (${productId})`);
-
-        // Update the config object with the new product id
-        config[mode].plans[index].id = productId;
-        productsCreated++;
-        configModified = true;
-      } catch (error) {
-        console.error(
-          `❌ Failed to create product "${plan.name}":`,
-          error.message
+      if (existingProduct) {
+        productId = existingProduct.id;
+        console.log(
+          `🔗 Matched existing product "${plan.name}" (${productId})`
         );
-        continue;
+        config[mode].plans[index].id = productId;
+        productsSynced++;
+        configModified = true;
+      } else {
+        try {
+          console.log(`🔄 Creating product "${plan.name}" in Stripe...`);
+
+          const product = await stripe.products.create({
+            name: plan.name,
+            description: plan.description || undefined,
+          });
+
+          productId = product.id;
+          console.log(`✅ Created product "${plan.name}" (${productId})`);
+
+          // Add to lookup map for price matching
+          stripeProductsByName[nameKey] = product;
+
+          config[mode].plans[index].id = productId;
+          productsCreated++;
+          configModified = true;
+        } catch (error) {
+          console.error(
+            `❌ Failed to create product "${plan.name}":`,
+            error.message
+          );
+          continue;
+        }
       }
     } else {
       skippedProducts++;
     }
 
-    // Create prices if needed
+    // Create or match prices if needed
     if (plan.price && plan.price.length > 0) {
       for (let priceIndex = 0; priceIndex < plan.price.length; priceIndex++) {
         const price = plan.price[priceIndex];
 
         if (price.id) {
           skippedPrices++;
+          continue;
+        }
+
+        // Check if a matching price already exists in Stripe
+        const interval = price.interval || "one_time";
+        const priceKey = `${productId}:${price.amount}:${price.currency.toLowerCase()}:${interval}`;
+        const existingPrice = stripePricesByKey[priceKey];
+
+        if (existingPrice) {
+          console.log(
+            `   🔗 Matched existing price ${price.amount / 100} ${
+              price.currency
+            }/${interval} (${existingPrice.id})`
+          );
+          config[mode].plans[index].price[priceIndex].id = existingPrice.id;
+          pricesSynced++;
+          configModified = true;
           continue;
         }
 
@@ -806,7 +878,9 @@ async function sync() {
 
           console.log(`   ✅ Created price (${stripePrice.id})`);
 
-          // Update the config object with the new price id
+          // Add to lookup map
+          stripePricesByKey[priceKey] = stripePrice;
+
           config[mode].plans[index].price[priceIndex].id = stripePrice.id;
           pricesCreated++;
           configModified = true;
@@ -820,7 +894,7 @@ async function sync() {
     }
   }
 
-  if (productsCreated === 0 && pricesCreated === 0) {
+  if (productsCreated === 0 && pricesCreated === 0 && productsSynced === 0 && pricesSynced === 0) {
     console.log("   No new products or prices to push to Stripe.\n");
   }
 
@@ -839,8 +913,99 @@ async function sync() {
     `   Pulled from Stripe: ${productsPulled} product(s), ${pricesPulled} price(s)`
   );
   console.log(
-    `   Pushed to Stripe: ${productsCreated} product(s), ${pricesCreated} price(s)`
+    `   Matched existing: ${productsSynced} product(s), ${pricesSynced} price(s)`
   );
+  console.log(
+    `   Created new: ${productsCreated} product(s), ${pricesCreated} price(s)`
+  );
+}
+
+function checkStripeCLI() {
+  const { execSync } = require("child_process");
+  try {
+    execSync("stripe --version", { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getNextDevPort() {
+  // Check package.json for custom port in dev script
+  const cwd = process.cwd();
+  const pkgPath = path.join(cwd, "package.json");
+
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      const devScript = pkg.scripts?.dev || "";
+      const portMatch = devScript.match(/-p\s*(\d+)|--port\s*(\d+)/);
+      if (portMatch) {
+        return portMatch[1] || portMatch[2];
+      }
+    } catch {}
+  }
+
+  return "3000";
+}
+
+async function setupDev() {
+  const cwd = process.cwd();
+  const pkgPath = path.join(cwd, "package.json");
+
+  if (!fs.existsSync(pkgPath)) {
+    console.error("❌ package.json not found in current directory.");
+    process.exit(1);
+  }
+
+  const hasStripeCLI = checkStripeCLI();
+  if (!hasStripeCLI) {
+    console.log("⚠️  Stripe CLI not found. Webhook forwarding will be skipped.");
+    console.log("   Install it from: https://stripe.com/docs/stripe-cli\n");
+  }
+
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+
+  if (!pkg.scripts) {
+    pkg.scripts = {};
+  }
+
+  const currentDevScript = pkg.scripts.dev || "next dev";
+  const port = getNextDevPort();
+  const webhookUrl = `localhost:${port}/api/stripe/webhook`;
+
+  // Check if already configured
+  if (pkg.scripts["dev:webhooks"] || currentDevScript.includes("stripe listen")) {
+    console.log("✓ Webhook forwarding already configured in package.json");
+    return;
+  }
+
+  // Store the original next dev command
+  const nextDevCommand = currentDevScript.includes("next dev")
+    ? currentDevScript
+    : "next dev";
+
+  // Create the stripe listen script (with graceful fallback)
+  const stripeListenScript = `stripe listen --forward-to ${webhookUrl} 2>/dev/null || echo "⚠️  Stripe CLI not available, skipping webhook forwarding"`;
+
+  // Update scripts
+  pkg.scripts["dev:next"] = nextDevCommand;
+  pkg.scripts["dev:stripe"] = stripeListenScript;
+  pkg.scripts.dev = `${nextDevCommand} & (sleep 2 && (${stripeListenScript})) & wait`;
+
+  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+
+  console.log("✅ Updated package.json with webhook forwarding\n");
+  console.log("Scripts added:");
+  console.log(`  dev:next   - ${nextDevCommand}`);
+  console.log(`  dev:stripe - stripe listen --forward-to ${webhookUrl}`);
+  console.log(`  dev        - Runs both Next.js and Stripe webhook listener\n`);
+  console.log(`Webhook endpoint: ${webhookUrl}`);
+
+  if (!hasStripeCLI) {
+    console.log("\n⚠️  Note: Install the Stripe CLI to enable webhook forwarding:");
+    console.log("   https://stripe.com/docs/stripe-cli");
+  }
 }
 
 async function main() {
@@ -857,11 +1022,16 @@ async function main() {
       await sync();
       break;
 
+    case "dev":
+      await setupDev();
+      break;
+
     default:
       console.log("Usage:");
       console.log("  npx stripe-no-webhooks migrate <connection_string>");
       console.log("  npx stripe-no-webhooks config");
-      console.log("  npx stripe-no-webhooks push");
+      console.log("  npx stripe-no-webhooks sync");
+      console.log("  npx stripe-no-webhooks dev");
       process.exit(1);
   }
 }
