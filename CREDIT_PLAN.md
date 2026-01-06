@@ -603,33 +603,8 @@ If payment succeeds:
 ### Types
 
 ```typescript
-// Success/failure result type
-type CreditResult<T> =
-  | { success: true } & T
-  | { success: false; error: CreditError };
-
-type CreditError = {
-  code:
-    | 'INSUFFICIENT_CREDITS'
-    | 'NO_PAYMENT_METHOD'
-    | 'PAYMENT_FAILED'
-    | 'MONTHLY_LIMIT_REACHED'
-    | 'TOPUP_NOT_CONFIGURED'
-    | 'AMOUNT_BELOW_MINIMUM'
-    | 'AMOUNT_ABOVE_MAXIMUM'
-    | 'INVALID_CREDIT_TYPE'
-    | 'USER_NOT_FOUND'
-    | 'IDEMPOTENCY_CONFLICT'
-    // Seat-related errors
-    | 'SEAT_MODE_REQUIRED'           // addSeat/removeSeat called in 'subscriber' mode
-    | 'USER_ALREADY_SEAT'            // User is already a seat of different subscription
-    | 'NO_ACTIVE_SUBSCRIPTION'       // orgId has no active subscription
-    | 'NO_CREDITS_CONFIGURED'        // Plan has no credits defined
-    | 'ORG_REQUIRED_FOR_SEAT_MODE';  // seat-users mode requires orgId
-  message: string;
-  details?: Record<string, any>;
-  recoveryUrl?: string;  // Checkout URL to fix the issue (for payment errors)
-};
+type TransactionType = 'grant' | 'consume' | 'revoke' | 'adjust';
+type TransactionSource = 'subscription' | 'renewal' | 'manual' | 'usage';
 
 type CreditTransaction = {
   id: string;
@@ -637,13 +612,24 @@ type CreditTransaction = {
   creditType: string;
   amount: number;
   balanceAfter: number;
-  transactionType: 'grant' | 'consume' | 'revoke' | 'reset' | 'adjust';
-  source: string;
+  transactionType: TransactionType;
+  source: TransactionSource;
   sourceId?: string;
   description?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   createdAt: Date;
 };
+
+// Only consume has an expected failure (insufficient credits)
+type ConsumeResult =
+  | { success: true; balance: number }
+  | { success: false; balance: number };
+
+// Thrown for exceptional cases (idempotency conflict, invalid input, DB errors)
+class CreditError extends Error {
+  code: string;
+  details?: Record<string, unknown>;
+}
 ```
 
 ### Read Operations
@@ -679,48 +665,47 @@ const canTopUp = await credits.hasPaymentMethod(userId);
 ### Write Operations
 
 ```typescript
-// Consume credits
+// Consume credits (only operation with expected failure)
 const result = await credits.consume({
   userId: "user_123",
   creditType: "email_credits",
   amount: 1,
   description: "Sent email to john@example.com",  // optional
   metadata: { emailId: "email_456" },             // optional
-  idempotencyKey: "consume_email_456",            // recommended for critical operations
+  idempotencyKey: "consume_email_456",            // recommended
 });
 // Success: { success: true, balance: 46 }
-// Failure: { success: false, error: { code: 'INSUFFICIENT_CREDITS', balance: 0, required: 1 } }
+// Insufficient: { success: false, balance: 0 }
+// Throws CreditError on idempotency conflict or invalid input
 
-// Grant credits
-const result = await credits.grant({
+// Grant credits (returns new balance, throws on error)
+const balance = await credits.grant({
   userId: "user_123",
   creditType: "email_credits",
   amount: 50,
-  source: "manual",                    // optional, default: 'manual'
-  sourceId: "bonus_campaign_123",      // optional
-  description: "Referral bonus",       // optional
+  source: "manual",               // optional, default: 'manual'
+  sourceId: "bonus_campaign_123", // optional
+  description: "Referral bonus",  // optional
 });
-// → { success: true, balance: 96 }
+// → 96
 
-// Revoke credits
-const result = await credits.revoke({
+// Revoke credits (revokes up to amount available)
+const { balance, amountRevoked } = await credits.revoke({
   userId: "user_123",
   creditType: "email_credits",
   amount: 50,
-  source: "manual",
   description: "Abuse detected",
 });
-// → { success: true, balance: 46, amountRevoked: 50 }
-// Note: amountRevoked may be less than requested if balance was lower
+// → { balance: 46, amountRevoked: 50 }
 
 // Set exact balance (for corrections)
-const result = await credits.setBalance({
+const { balance, previousBalance } = await credits.setBalance({
   userId: "user_123",
   creditType: "email_credits",
   balance: 100,
   reason: "Manual correction by support",
 });
-// → { success: true, balance: 100, previousBalance: 46, adjustment: 54 }
+// → { balance: 100, previousBalance: 46 }
 ```
 
 ### Top-Up Operations
@@ -800,12 +785,7 @@ async function sendEmail(userId: string, emailData: EmailData) {
   });
 
   if (!result.success) {
-    if (result.error.code === 'INSUFFICIENT_CREDITS') {
-      throw new InsufficientCreditsError(
-        `Need 1 credit, have ${result.error.details.balance}`
-      );
-    }
-    throw new Error(result.error.message);
+    throw new InsufficientCreditsError(`Need 1 credit, have ${result.balance}`);
   }
 
   // Credit consumed, now send the email

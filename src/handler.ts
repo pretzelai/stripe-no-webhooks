@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { Pool } from "pg";
 import type { BillingConfig, PriceInterval } from "./BillingConfig";
 import { getMode } from "./utils";
+import { initCredits } from "./credits";
 
 // ============================================================================
 // Types
@@ -193,6 +194,9 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
   const stripe = new Stripe(stripeSecretKey);
 
   const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
+
+  // Initialize credits module with the same pool
+  initCredits(pool, schema);
 
   const sync = databaseUrl
     ? new StripeSync({
