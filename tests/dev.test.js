@@ -99,19 +99,17 @@ describe("setupDev", () => {
 
     expect(result.success).toBe(true);
     expect(result.scripts).toBeDefined();
-    expect(result.scripts["dev:next"]).toBe("next dev");
     expect(result.scripts["dev:stripe"]).toContain("stripe listen");
-    expect(result.scripts.dev).toContain("next dev");
-    expect(result.scripts.dev).toContain("stripe listen");
 
     // Verify package.json was updated
     const pkg = JSON.parse(
       fs.readFileSync(path.join(tempDir, "package.json"), "utf8")
     );
-    expect(pkg.scripts["dev:next"]).toBe("next dev");
     expect(pkg.scripts["dev:stripe"]).toContain(
       "localhost:3000/api/stripe/webhook"
     );
+    // dev script should be unchanged
+    expect(pkg.scripts.dev).toBe("next dev");
   });
 
   test("uses custom port from existing dev script", async () => {
@@ -191,6 +189,6 @@ describe("setupDev", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.scripts["dev:next"]).toBe("next dev");
+    expect(result.scripts["dev:stripe"]).toContain("stripe listen");
   });
 });

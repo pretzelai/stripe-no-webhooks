@@ -29,11 +29,7 @@ function getNextDevPort(cwd = process.cwd()) {
 }
 
 async function setupDev(options = {}) {
-  const {
-    cwd = process.cwd(),
-    logger = console,
-    exitOnError = true,
-  } = options;
+  const { cwd = process.cwd(), logger = console, exitOnError = true } = options;
 
   const pkgPath = path.join(cwd, "package.json");
 
@@ -59,41 +55,37 @@ async function setupDev(options = {}) {
   const port = getNextDevPort(cwd);
   const webhookUrl = `localhost:${port}/api/stripe/webhook`;
 
-  if (pkg.scripts["dev:webhooks"] || currentDevScript.includes("stripe listen")) {
+  if (
+    pkg.scripts["dev:webhooks"] ||
+    currentDevScript.includes("stripe listen")
+  ) {
     logger.log("✓ Webhook forwarding already configured in package.json");
     return { success: true, alreadyConfigured: true };
   }
 
-  const nextDevCommand = currentDevScript.includes("next dev")
-    ? currentDevScript
-    : "next dev";
+  const stripeListenScript = `if command -v stripe >/dev/null 2>&1; then stripe listen --forward-to ${webhookUrl}; else echo "⚠️  Stripe CLI not available, skipping webhook forwarding"; fi`;
 
-  const stripeListenScript = `stripe listen --forward-to ${webhookUrl} 2>/dev/null || echo "⚠️  Stripe CLI not available, skipping webhook forwarding"`;
-
-  pkg.scripts["dev:next"] = nextDevCommand;
   pkg.scripts["dev:stripe"] = stripeListenScript;
-  pkg.scripts.dev = `${nextDevCommand} & (sleep 2 && (${stripeListenScript})) & wait`;
 
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 
-  logger.log("✅ Updated package.json with webhook forwarding\n");
-  logger.log("Scripts added:");
-  logger.log(`  dev:next   - ${nextDevCommand}`);
-  logger.log(`  dev:stripe - stripe listen --forward-to ${webhookUrl}`);
-  logger.log(`  dev        - Runs both Next.js and Stripe webhook listener\n`);
+  logger.log("✅ Added dev:stripe script to package.json\n");
+  logger.log(
+    `  npm run dev:stripe - stripe listen --forward-to ${webhookUrl}\n`
+  );
   logger.log(`Webhook endpoint: ${webhookUrl}`);
 
   if (!hasStripeCLI) {
-    logger.log("\n⚠️  Note: Install the Stripe CLI to enable webhook forwarding:");
+    logger.log(
+      "\n⚠️  Note: Install the Stripe CLI to enable webhook forwarding:"
+    );
     logger.log("   https://stripe.com/docs/stripe-cli");
   }
 
   return {
     success: true,
     scripts: {
-      "dev:next": nextDevCommand,
       "dev:stripe": stripeListenScript,
-      dev: pkg.scripts.dev,
     },
   };
 }
