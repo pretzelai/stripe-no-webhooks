@@ -132,10 +132,17 @@ function detectRouterType(cwd = process.cwd()) {
 
 function createApiRoute(routerType, useSrc, cwd = process.cwd()) {
   const baseDir = useSrc ? path.join(cwd, "src") : cwd;
+  const prefix = useSrc ? "src/" : "";
 
   if (routerType === "app") {
     const routeDir = path.join(baseDir, "app", "api", "stripe", "[...all]");
     const routeFile = path.join(routeDir, "route.ts");
+    const relativePath = `${prefix}app/api/stripe/[...all]/route.ts`;
+
+    if (fs.existsSync(routeFile)) {
+      return { path: relativePath, created: false };
+    }
+
     fs.mkdirSync(routeDir, { recursive: true });
 
     let template = getAppRouterTemplate();
@@ -145,12 +152,15 @@ function createApiRoute(routerType, useSrc, cwd = process.cwd()) {
     );
 
     fs.writeFileSync(routeFile, template);
-
-    const prefix = useSrc ? "src/" : "";
-    return `${prefix}app/api/stripe/[...all]/route.ts`;
+    return { path: relativePath, created: true };
   } else {
     const routeDir = path.join(baseDir, "pages", "api", "stripe");
     const routeFile = path.join(routeDir, "[...all].ts");
+    const relativePath = `${prefix}pages/api/stripe/[...all].ts`;
+
+    if (fs.existsSync(routeFile)) {
+      return { path: relativePath, created: false };
+    }
 
     fs.mkdirSync(routeDir, { recursive: true });
 
@@ -160,9 +170,7 @@ function createApiRoute(routerType, useSrc, cwd = process.cwd()) {
       ""
     );
     fs.writeFileSync(routeFile, template);
-
-    const prefix = useSrc ? "src/" : "";
-    return `${prefix}pages/api/stripe/[...all].ts`;
+    return { path: relativePath, created: true };
   }
 }
 

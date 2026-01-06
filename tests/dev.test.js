@@ -1,5 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { setupDev, getNextDevPort } from "../bin/commands/dev.js";
+import {
+  setupDev,
+  getNextDevPort,
+} from "../bin/commands/helpers/dev-webhook-listener.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -102,9 +105,13 @@ describe("setupDev", () => {
     expect(result.scripts.dev).toContain("stripe listen");
 
     // Verify package.json was updated
-    const pkg = JSON.parse(fs.readFileSync(path.join(tempDir, "package.json"), "utf8"));
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(tempDir, "package.json"), "utf8")
+    );
     expect(pkg.scripts["dev:next"]).toBe("next dev");
-    expect(pkg.scripts["dev:stripe"]).toContain("localhost:3000/api/stripe/webhook");
+    expect(pkg.scripts["dev:stripe"]).toContain(
+      "localhost:3000/api/stripe/webhook"
+    );
   });
 
   test("uses custom port from existing dev script", async () => {
@@ -123,7 +130,9 @@ describe("setupDev", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.scripts["dev:stripe"]).toContain("localhost:4000/api/stripe/webhook");
+    expect(result.scripts["dev:stripe"]).toContain(
+      "localhost:4000/api/stripe/webhook"
+    );
   });
 
   test("returns alreadyConfigured when dev:webhooks exists", async () => {

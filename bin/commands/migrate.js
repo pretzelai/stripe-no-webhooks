@@ -1,13 +1,9 @@
 const { runMigrations } = require("@supabase/stripe-sync-engine");
 const { Client } = require("pg");
-const { saveToEnvFiles } = require("./utils");
+const { saveToEnvFiles } = require("./helpers/utils");
 
 async function migrate(dbUrl, options = {}) {
-  const {
-    env = process.env,
-    logger = console,
-    exitOnError = true,
-  } = options;
+  const { env = process.env, logger = console, exitOnError = true } = options;
 
   const SCHEMA = "stripe";
   const databaseUrl = dbUrl || env.DATABASE_URL;
