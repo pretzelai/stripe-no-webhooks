@@ -3,7 +3,12 @@ import Stripe from "stripe";
 import { Pool } from "pg";
 import type { BillingConfig, PriceInterval } from "./BillingConfig";
 import { getMode } from "./utils";
-import { initCredits } from "./credits";
+import { initCredits, type TransactionSource } from "./credits";
+import {
+  createCreditLifecycle,
+  type CreditsGrantTo,
+} from "./credits/lifecycle";
+export type { CreditsGrantTo };
 
 // ============================================================================
 // Types
@@ -29,6 +34,46 @@ export interface StripeWebhookCallbacks {
   onSubscriptionCancelled?: (
     subscription: Stripe.Subscription
   ) => void | Promise<void>;
+
+  /**
+   * Called on each billing cycle renewal
+   */
+  onSubscriptionRenewed?: (
+    subscription: Stripe.Subscription
+  ) => void | Promise<void>;
+
+  /**
+   * Called after credits are granted
+   */
+  onCreditsGranted?: (params: {
+    userId: string;
+    creditType: string;
+    amount: number;
+    newBalance: number;
+    source: TransactionSource;
+    sourceId?: string;
+  }) => void | Promise<void>;
+
+  /**
+   * Called after credits are revoked
+   */
+  onCreditsRevoked?: (params: {
+    userId: string;
+    creditType: string;
+    amount: number;
+    previousBalance: number;
+    newBalance: number;
+    source: "cancellation" | "manual";
+  }) => void | Promise<void>;
+}
+
+export interface CreditsConfig {
+  /**
+   * Who receives credits automatically on subscription events.
+   * - 'subscriber': Credits go to the subscriber (default)
+   * - 'manual': No automatic granting, use callbacks to handle manually
+   */
+  grantTo?: CreditsGrantTo;
 }
 
 export interface StripeHandlerConfig {
@@ -79,6 +124,11 @@ export interface StripeHandlerConfig {
    * Callbacks for subscription events
    */
   callbacks?: StripeWebhookCallbacks;
+
+  /**
+   * Credits system configuration
+   */
+  credits?: CreditsConfig;
 
   /**
    * Function to map a user ID to a Stripe customer ID.
@@ -187,6 +237,7 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     cancelUrl: defaultCancelUrl,
     automaticTax = true,
     callbacks,
+    credits: creditsConfig,
     mapUserIdToStripeCustomerId,
     getUser,
   } = config;
@@ -208,6 +259,17 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         stripeWebhookSecret,
       })
     : null;
+
+  const mode = getMode(stripeSecretKey);
+
+  const creditLifecycle = createCreditLifecycle({
+    pool,
+    schema,
+    billingConfig,
+    mode,
+    grantTo: creditsConfig?.grantTo ?? "subscriber",
+    callbacks,
+  });
 
   // ============================================================================
   // Customer Resolution Logic
@@ -264,8 +326,8 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
       // Step 4: Save the mapping to user_stripe_customer_map table
       if (pool) {
         await pool.query(
-          `INSERT INTO ${schema}.user_stripe_customer_map (user_id, stripe_customer_id) 
-         VALUES ($1, $2) 
+          `INSERT INTO ${schema}.user_stripe_customer_map (user_id, stripe_customer_id)
+         VALUES ($1, $2)
          ON CONFLICT (user_id) DO UPDATE SET stripe_customer_id = $2, updated_at = now()`,
           [userId, customer.id]
         );
@@ -354,8 +416,8 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         `${origin}/success?session_id={CHECKOUT_SESSION_ID}`;
       const cancelUrl = body.cancelUrl || defaultCancelUrl || `${origin}/`;
 
-      const priceId = resolvePriceId(body, getMode(stripeSecretKey));
-      const mode = await getPriceMode(priceId);
+      const priceId = resolvePriceId(body, mode);
+      const priceMode = await getPriceMode(priceId);
 
       const sessionParams: Stripe.Checkout.SessionCreateParams = {
         line_items: [
@@ -364,7 +426,7 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
             quantity: body.quantity ?? 1,
           },
         ],
-        mode,
+        mode: priceMode,
         success_url: successUrl,
         cancel_url: cancelUrl,
         automatic_tax: { enabled: automaticTax },
@@ -477,8 +539,56 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         await sync.processEvent(event);
       }
 
-      if (callbacks) {
-        await handleCallbacks(event, callbacks);
+      switch (event.type) {
+        case "customer.subscription.created": {
+          const subscription = event.data.object as Stripe.Subscription;
+          await creditLifecycle.onSubscriptionCreated(subscription);
+          await callbacks?.onSubscriptionCreated?.(subscription);
+          break;
+        }
+
+        case "customer.subscription.deleted": {
+          const subscription = event.data.object as Stripe.Subscription;
+          await creditLifecycle.onSubscriptionCancelled(subscription);
+          await callbacks?.onSubscriptionCancelled?.(subscription);
+          break;
+        }
+
+        case "customer.subscription.updated": {
+          const subscription = event.data.object as Stripe.Subscription;
+          const prev = event.data.previous_attributes as
+            | Partial<Stripe.Subscription>
+            | undefined;
+          if (
+            subscription.status === "canceled" &&
+            prev?.status &&
+            prev.status !== "canceled"
+          ) {
+            await creditLifecycle.onSubscriptionCancelled(subscription);
+            await callbacks?.onSubscriptionCancelled?.(subscription);
+          }
+          break;
+        }
+
+        case "invoice.paid": {
+          const invoice = event.data.object as Stripe.Invoice;
+          if (
+            invoice.billing_reason === "subscription_cycle" &&
+            invoice.subscription
+          ) {
+            const subId =
+              typeof invoice.subscription === "string"
+                ? invoice.subscription
+                : invoice.subscription.id;
+            const subscription = await stripe.subscriptions.retrieve(subId);
+            await creditLifecycle.onSubscriptionRenewed(
+              subscription,
+              invoice.id
+            );
+            await callbacks?.onSubscriptionRenewed?.(subscription);
+          }
+          break;
+        }
       }
 
       return new Response(JSON.stringify({ received: true }), {
@@ -596,45 +706,4 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         );
     }
   };
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-async function handleCallbacks(
-  event: Stripe.Event,
-  callbacks: StripeWebhookCallbacks
-): Promise<void> {
-  const { onSubscriptionCreated, onSubscriptionCancelled } = callbacks;
-
-  switch (event.type) {
-    case "customer.subscription.created":
-      if (onSubscriptionCreated) {
-        await onSubscriptionCreated(event.data.object as Stripe.Subscription);
-      }
-      break;
-
-    case "customer.subscription.deleted":
-      if (onSubscriptionCancelled) {
-        await onSubscriptionCancelled(event.data.object as Stripe.Subscription);
-      }
-      break;
-
-    case "customer.subscription.updated":
-      const subscription = event.data.object as Stripe.Subscription;
-      const previousAttributes = event.data.previous_attributes as
-        | Partial<Stripe.Subscription>
-        | undefined;
-
-      if (
-        onSubscriptionCancelled &&
-        subscription.status === "canceled" &&
-        previousAttributes?.status &&
-        previousAttributes.status !== "canceled"
-      ) {
-        await onSubscriptionCancelled(subscription);
-      }
-      break;
-  }
 }

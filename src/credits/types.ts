@@ -3,6 +3,7 @@ export type TransactionType = "grant" | "consume" | "revoke" | "adjust";
 export type TransactionSource =
   | "subscription"
   | "renewal"
+  | "cancellation"
   | "manual"
   | "usage";
 

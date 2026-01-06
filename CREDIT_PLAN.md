@@ -1347,10 +1347,8 @@ CREATE INDEX IF NOT EXISTS idx_credit_ledger_source_id
 - [ ] Handle customer.subscription.created → grant credits
 - [ ] Handle invoice.paid (subscription_cycle) → renewal logic
 - [ ] Handle customer.subscription.deleted → revoke credits
-- [ ] Add grantTo config option ('subscriber' | 'seat-users' | 'none')
-- [ ] Fire credit callbacks (onCreditsGranted, etc.)
-- [ ] Add checkout support for orgId parameter
-- [ ] Implement first seat auto-grant when user + orgId provided
+- [ ] Add grantTo config option ('subscriber' | 'manual')
+- [ ] Fire credit callbacks (onCreditsGranted, onCreditsRevoked, onSubscriptionRenewed)
 
 ### Phase 3: Top-Up
 - [ ] Implement credits.topUp (direct charge)
@@ -1365,6 +1363,9 @@ CREATE INDEX IF NOT EXISTS idx_credit_ledger_source_id
 - [ ] Fire onCreditsLow callback
 
 ### Phase 5: Seat-Based Credits
+- [ ] Add grantTo: 'seat-users' mode
+- [ ] Add checkout support for orgId parameter
+- [ ] Implement first seat auto-grant when user + orgId provided
 - [ ] Implement credits.addSeat({ userId, orgId })
 - [ ] Implement credits.removeSeat({ userId })
 - [ ] Add seat_grant/seat_revoke source values to ledger
