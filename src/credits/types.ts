@@ -4,6 +4,7 @@ export type TransactionSource =
   | "subscription"
   | "renewal"
   | "cancellation"
+  | "topup"
   | "manual"
   | "usage";
 

@@ -8,7 +8,14 @@ import {
   createCreditLifecycle,
   type CreditsGrantTo,
 } from "./credits/lifecycle";
+import {
+  createTopUpHandler,
+  type TopUpParams,
+  type TopUpResult,
+  type TopUpPending,
+} from "./credits/topup";
 export type { CreditsGrantTo };
+export type { TopUpParams, TopUpResult, TopUpPending };
 
 // ============================================================================
 // Types
@@ -64,6 +71,19 @@ export interface StripeWebhookCallbacks {
     previousBalance: number;
     newBalance: number;
     source: "cancellation" | "manual";
+  }) => void | Promise<void>;
+
+  /**
+   * Called when a credit top-up completes successfully
+   */
+  onTopUpCompleted?: (params: {
+    userId: string;
+    creditType: string;
+    creditsAdded: number;
+    amountCharged: number;
+    currency: string;
+    newBalance: number;
+    paymentIntentId: string;
   }) => void | Promise<void>;
 }
 
@@ -269,6 +289,18 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     mode,
     grantTo: creditsConfig?.grantTo ?? "subscriber",
     callbacks,
+  });
+
+  const topUpHandler = createTopUpHandler({
+    stripe,
+    pool,
+    schema,
+    billingConfig,
+    mode,
+    successUrl: defaultSuccessUrl || "",
+    cancelUrl: defaultCancelUrl || "",
+    onCreditsGranted: callbacks?.onCreditsGranted,
+    onTopUpCompleted: callbacks?.onTopUpCompleted,
   });
 
   // ============================================================================
@@ -589,6 +621,24 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
           }
           break;
         }
+
+        case "checkout.session.completed": {
+          const session = event.data.object as Stripe.Checkout.Session;
+          // We attempted to pull money from user's stored payment method but it failed
+          // that lead to the "recovery" checkout flow. Here we handle it.
+          if (session.metadata?.top_up_credit_type) {
+            await topUpHandler.handleTopUpCheckoutCompleted(session);
+          }
+          break;
+        }
+
+        case "payment_intent.succeeded": {
+          const paymentIntent = event.data.object as Stripe.PaymentIntent;
+          // We attempted to charge the user's stored payment method for topup, it succeeded
+          // It's idempotent so if the topup was already granted, we do nothing
+          await topUpHandler.handlePaymentIntentSucceeded(paymentIntent);
+          break;
+        }
       }
 
       return new Response(JSON.stringify({ received: true }), {
@@ -676,7 +726,7 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
   // Main Handler
   // ============================================================================
 
-  return async function handler(request: Request): Promise<Response> {
+  async function handler(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const pathSegments = url.pathname.split("/").filter(Boolean);
 
@@ -705,5 +755,19 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
           { status: 404, headers: { "Content-Type": "application/json" } }
         );
     }
-  };
+  }
+
+  // Return handler function with additional methods attached
+  return Object.assign(handler, {
+    /**
+     * Purchase additional credits using the user's saved payment method.
+     * Returns a recoveryUrl if payment fails or no payment method is on file.
+     */
+    topUpCredits: topUpHandler.topUp,
+
+    /**
+     * Check if a user has a saved payment method for top-ups.
+     */
+    hasPaymentMethod: topUpHandler.hasPaymentMethod,
+  });
 }
