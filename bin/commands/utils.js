@@ -166,6 +166,16 @@ function createApiRoute(routerType, useSrc, cwd = process.cwd()) {
   }
 }
 
+function isValidStripeKey(key) {
+  return (
+    key &&
+    (key.startsWith("sk_live_") ||
+      key.startsWith("sk_test_") ||
+      key.startsWith("rk_live_") ||
+      key.startsWith("rk_test_"))
+  );
+}
+
 function getMode(stripeKey) {
   if (stripeKey.includes("_test_")) {
     return "test";
@@ -195,6 +205,7 @@ module.exports = {
   getPagesRouterTemplate,
   detectRouterType,
   createApiRoute,
+  isValidStripeKey,
   getMode,
   loadStripe,
 };

@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   questionHidden,
+  isValidStripeKey,
   getMode,
   loadStripe,
 } = require("./utils");
@@ -189,8 +190,8 @@ async function sync(options = {}) {
     );
   }
 
-  if (!stripeSecretKey || !stripeSecretKey.startsWith("sk_")) {
-    logger.error("❌ Invalid Stripe Secret Key. It should start with 'sk_'");
+  if (!isValidStripeKey(stripeSecretKey)) {
+    logger.error("❌ Invalid Stripe Secret Key. It should start with 'sk_' or 'rk_'");
     if (exitOnError) process.exit(1);
     return { success: false, error: "Invalid Stripe Secret Key" };
   }

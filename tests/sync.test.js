@@ -8,6 +8,8 @@ import os from "os";
 // to avoid stripe TS warnings
 const STRIPE_VALID_LIVE_KEY = "321_evil_ks".split("").reverse().join("");
 const STRIPE_VALID_TEST_KEY = "321_tset_ks".split("").reverse().join("");
+const STRIPE_RESTRICTED_LIVE_KEY = "321_evil_kr".split("").reverse().join("");
+const STRIPE_RESTRICTED_TEST_KEY = "321_tset_kr".split("").reverse().join("");
 
 const BILLING_CONFIG_TEMPLATE = `
 import { BillingConfig } from "stripe-no-webhooks";
@@ -526,6 +528,57 @@ describe("sync command e2e", () => {
     const result = await sync({
       cwd: tempDir,
       env: { STRIPE_SECRET_KEY: STRIPE_VALID_LIVE_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stats.productsCreated).toBe(1);
+    expect(logs.some((log) => log.includes("production mode"))).toBe(true);
+  });
+
+  test("handles test mode with rk_test_ restricted key", async () => {
+    const config = createBillingConfig([
+      {
+        name: "Test Plan",
+        price: [{ amount: 1900, currency: "usd", interval: "month" }],
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_RESTRICTED_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stats.productsCreated).toBe(1);
+    expect(logs.some((log) => log.includes("test mode"))).toBe(true);
+  });
+
+  test("handles production mode with rk_live_ restricted key", async () => {
+    const config = createBillingConfig(
+      [],
+      [
+        {
+          name: "Production Restricted Plan",
+          price: [{ amount: 4900, currency: "usd", interval: "month" }],
+        },
+      ]
+    );
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_RESTRICTED_LIVE_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
