@@ -29,6 +29,7 @@
   "scripts": {
     "build": "tsup src/index.ts src/client.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts src/client.ts --format cjs,esm --dts --watch",
+    "test": "bun test",
     "prepublishOnly": "npm run build",
     "release": "npm version patch && npm publish"
   },
