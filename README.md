@@ -88,3 +88,11 @@ export default function Home() {
   );
 }
 ```
+
+### 6. (optional) Backfill data
+
+If you had data in Stripe before deploying `stripe-no-webhooks`, you can backfill your database by running:
+
+```bash
+npx stripe-no-webhooks backfill
+```
