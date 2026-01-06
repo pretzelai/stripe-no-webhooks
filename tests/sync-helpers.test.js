@@ -8,6 +8,7 @@ import {
   syncPlan,
 } from "../bin/commands/helpers/sync-helpers.js";
 import StripeMock from "./stripe-mock.js";
+import { STRIPE_VALID_TEST_KEY } from "./test-utils.js";
 
 describe("buildProductsByNameMap", () => {
   test("builds map from Stripe products", () => {
@@ -608,12 +609,12 @@ describe("StripeMock", () => {
     // This simulates: Stripe = require("stripe").default || require("stripe")
     const Stripe =
       require("./stripe-mock.js").default || require("./stripe-mock.js");
-    const stripe = new Stripe("sk_test_123");
-    expect(stripe.apiKey).toBe("sk_test_123");
+    const stripe = new Stripe(STRIPE_VALID_TEST_KEY);
+    expect(stripe.apiKey).toBe(STRIPE_VALID_TEST_KEY);
   });
 
   test("products.list returns seeded products", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
     stripe._seedProducts([
       { id: "prod_1", name: "Product 1", active: true },
       { id: "prod_2", name: "Product 2", active: false },
@@ -625,7 +626,7 @@ describe("StripeMock", () => {
   });
 
   test("products.create generates unique IDs", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
 
     const p1 = await stripe.products.create({ name: "Product 1" });
     const p2 = await stripe.products.create({ name: "Product 2" });
@@ -635,7 +636,7 @@ describe("StripeMock", () => {
   });
 
   test("prices.list returns seeded prices", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
     stripe._seedPrices([
       {
         id: "price_1",
@@ -658,7 +659,7 @@ describe("StripeMock", () => {
   });
 
   test("prices.create generates unique IDs", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
 
     const p1 = await stripe.prices.create({
       product: "prod_1",
@@ -680,7 +681,7 @@ describe("syncPlan with StripeMock", () => {
   let stripe;
 
   beforeEach(() => {
-    stripe = new StripeMock("sk_test_123");
+    stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
   });
 
   test("full sync flow: new product with new prices", async () => {

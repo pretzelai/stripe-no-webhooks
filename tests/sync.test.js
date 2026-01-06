@@ -4,12 +4,12 @@ import StripeMock from "./stripe-mock.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
-
-// to avoid stripe TS warnings
-const STRIPE_VALID_LIVE_KEY = "321_evil_ks".split("").reverse().join("");
-const STRIPE_VALID_TEST_KEY = "321_tset_ks".split("").reverse().join("");
-const STRIPE_RESTRICTED_LIVE_KEY = "321_evil_kr".split("").reverse().join("");
-const STRIPE_RESTRICTED_TEST_KEY = "321_tset_kr".split("").reverse().join("");
+import {
+  STRIPE_VALID_LIVE_KEY,
+  STRIPE_VALID_TEST_KEY,
+  STRIPE_RESTRICTED_LIVE_KEY,
+  STRIPE_RESTRICTED_TEST_KEY,
+} from "./test-utils.js";
 
 const BILLING_CONFIG_TEMPLATE = `
 import { BillingConfig } from "stripe-no-webhooks";
@@ -61,7 +61,7 @@ describe("sync command e2e", () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-test-"));
     logs = [];
     errors = [];
-    stripe = new StripeMock("sk_test_123");
+    stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
   });
 
   afterEach(() => {
@@ -71,7 +71,7 @@ describe("sync command e2e", () => {
   test("returns error when billing.config.ts not found", async () => {
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: StripeMock,
@@ -144,7 +144,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -186,7 +186,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -245,7 +245,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -302,7 +302,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -364,7 +364,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -421,7 +421,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -452,7 +452,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -494,7 +494,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -629,7 +629,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -672,7 +672,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -729,7 +729,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
@@ -783,7 +783,7 @@ describe("sync command e2e", () => {
 
     const result = await sync({
       cwd: tempDir,
-      env: { STRIPE_SECRET_KEY: "sk_test_123" },
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
       logger: mockLogger,
       exitOnError: false,
       StripeClass: function () {
