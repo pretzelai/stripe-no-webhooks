@@ -10,7 +10,8 @@ const {
   createApiRoute,
   isValidStripeKey,
   loadStripe,
-} = require("./utils");
+} = require("./helpers/utils");
+const { setupDev } = require("./helpers/dev-webhook-listener");
 
 async function config(options = {}) {
   const {
@@ -40,27 +41,52 @@ async function config(options = {}) {
   const srcLabel = useSrc ? " (src/)" : "";
   logger.log(`📂 Detected: ${routerLabel}${srcLabel}\n`);
 
+  // Check for existing valid Stripe key
   const existingStripeKey = env.STRIPE_SECRET_KEY || "";
-  const stripeSecretKey = await questionHidden(
-    null,
-    "Enter your Stripe Secret Key (sk_...)",
-    existingStripeKey
-  );
+  let stripeSecretKey;
 
-  if (!isValidStripeKey(stripeSecretKey)) {
-    logger.error("❌ Invalid Stripe Secret Key. It should start with 'sk_' or 'rk_'");
-    if (exitOnError) process.exit(1);
-    return { success: false, error: "Invalid Stripe Secret Key" };
+  if (isValidStripeKey(existingStripeKey)) {
+    logger.log("✓ STRIPE_SECRET_KEY already set in environment");
+    stripeSecretKey = existingStripeKey;
+  } else {
+    stripeSecretKey = await questionHidden(
+      null,
+      "Enter your Stripe Secret Key (sk_...)",
+      existingStripeKey
+    );
+
+    if (!isValidStripeKey(stripeSecretKey)) {
+      logger.error(
+        "❌ Invalid Stripe Secret Key. It should start with 'sk_' or 'rk_'"
+      );
+      if (exitOnError) process.exit(1);
+      return { success: false, error: "Invalid Stripe Secret Key" };
+    }
   }
 
-  const rl = createPrompt();
+  // Check for existing site URL
+  const existingSiteUrl = env.NEXT_PUBLIC_SITE_URL || "";
+  let siteUrl;
 
-  const defaultSiteUrl = env.NEXT_PUBLIC_SITE_URL || "";
-  const siteUrl = await question(rl, "Enter your site URL", defaultSiteUrl);
+  if (existingSiteUrl) {
+    try {
+      new URL(existingSiteUrl);
+      logger.log("✓ NEXT_PUBLIC_SITE_URL already set in environment");
+      siteUrl = existingSiteUrl;
+    } catch {
+      // Invalid URL, prompt for new one
+      const rl = createPrompt();
+      siteUrl = await question(rl, "Enter your site URL", "");
+      rl.close();
+    }
+  } else {
+    const rl = createPrompt();
+    siteUrl = await question(rl, "Enter your site URL", "");
+    rl.close();
+  }
 
   if (!siteUrl) {
     logger.error("❌ Site URL is required");
-    rl.close();
     if (exitOnError) process.exit(1);
     return { success: false, error: "Site URL is required" };
   }
@@ -71,45 +97,51 @@ async function config(options = {}) {
     webhookUrl = `${url.origin}/api/stripe/webhook`;
   } catch (e) {
     logger.error("❌ Invalid URL format");
-    rl.close();
     if (exitOnError) process.exit(1);
     return { success: false, error: "Invalid URL format" };
   }
 
+  // Check for existing DATABASE_URL
   let databaseUrlInput = "";
   if (env.DATABASE_URL) {
     logger.log("✓ DATABASE_URL already set in environment");
     databaseUrlInput = env.DATABASE_URL;
   } else {
+    const rl = createPrompt();
     databaseUrlInput = await question(
       rl,
       "Enter your DATABASE_URL (optional, press Enter to skip)",
       ""
     );
+    rl.close();
   }
 
-  rl.close();
-
-  logger.log(`📁 Creating API route...`);
+  // Create API route (idempotent)
+  logger.log(`\n📁 Setting up API route...`);
   try {
-    const createdFile = createApiRoute(routerType, useSrc, cwd);
-    logger.log(`✅ Created ${createdFile}`);
+    const result = createApiRoute(routerType, useSrc, cwd);
+    if (result.created) {
+      logger.log(`✅ Created ${result.path}`);
+    } else {
+      logger.log(`✓ ${result.path} already exists`);
+    }
   } catch (error) {
     logger.error("❌ Failed to create API route:", error.message);
     if (exitOnError) process.exit(1);
     return { success: false, error: error.message };
   }
 
-  logger.log(`📁 Creating billing.config.ts...`);
+  // Create billing.config.ts (idempotent)
+  logger.log(`📁 Setting up billing.config.ts...`);
   try {
     const billingConfigPath = path.join(cwd, "billing.config.ts");
     if (!fs.existsSync(billingConfigPath)) {
       const templatePath = path.join(getTemplatesDir(), "billing.config.ts");
       const template = fs.readFileSync(templatePath, "utf8");
       fs.writeFileSync(billingConfigPath, template);
-      logger.log(`✅ Created billing.config.ts\n`);
+      logger.log(`✅ Created billing.config.ts`);
     } else {
-      logger.log(`✓ billing.config.ts already exists\n`);
+      logger.log(`✓ billing.config.ts already exists`);
     }
   } catch (error) {
     logger.error("❌ Failed to create billing.config.ts:", error.message);
@@ -117,9 +149,12 @@ async function config(options = {}) {
     return { success: false, error: error.message };
   }
 
-  logger.log(`📡 Creating webhook endpoint: ${webhookUrl}\n`);
+  // Check for existing webhook endpoint
+  logger.log(`\n📡 Setting up webhook endpoint: ${webhookUrl}`);
 
   const stripe = new Stripe(stripeSecretKey);
+  let webhook;
+  let webhookSecret = env.STRIPE_WEBHOOK_SECRET || "";
 
   try {
     const existingWebhooks = await stripe.webhookEndpoints.list({ limit: 100 });
@@ -127,53 +162,78 @@ async function config(options = {}) {
       (wh) => wh.url === webhookUrl
     );
 
-    if (existingWebhook) {
-      logger.log(`🔄 Found existing webhook with same URL, deleting it...`);
+    if (existingWebhook && webhookSecret) {
+      logger.log(`✓ Webhook endpoint already exists (${existingWebhook.id})`);
+      webhook = existingWebhook;
+    } else if (existingWebhook && !webhookSecret) {
+      // Webhook exists but we don't have the secret - need to recreate
+      logger.log(`🔄 Webhook exists but secret not found, recreating...`);
       await stripe.webhookEndpoints.del(existingWebhook.id);
-      logger.log(`✅ Deleted existing webhook (${existingWebhook.id})\n`);
+      webhook = await stripe.webhookEndpoints.create({
+        url: webhookUrl,
+        enabled_events: ["*"],
+        description: "Created by stripe-no-webhooks CLI",
+      });
+      webhookSecret = webhook.secret;
+      logger.log("✅ Webhook recreated successfully!");
+    } else {
+      logger.log(`🔄 Creating new webhook endpoint...`);
+      webhook = await stripe.webhookEndpoints.create({
+        url: webhookUrl,
+        enabled_events: ["*"],
+        description: "Created by stripe-no-webhooks CLI",
+      });
+      webhookSecret = webhook.secret;
+      logger.log("✅ Webhook created successfully!");
     }
 
-    logger.log(`🔄 Creating new webhook endpoint...`);
-    const webhook = await stripe.webhookEndpoints.create({
-      url: webhookUrl,
-      enabled_events: ["*"],
-      description: "Created by stripe-no-webhooks CLI",
-    });
-    logger.log("✅ Webhook created successfully!\n");
-
-    const envVars = [
-      { key: "STRIPE_SECRET_KEY", value: stripeSecretKey },
-      { key: "STRIPE_WEBHOOK_SECRET", value: webhook.secret },
-      { key: "NEXT_PUBLIC_SITE_URL", value: siteUrl },
-    ];
-    if (databaseUrlInput) {
+    // Build env vars to save (only if values changed)
+    const envVars = [];
+    if (env.STRIPE_SECRET_KEY !== stripeSecretKey) {
+      envVars.push({ key: "STRIPE_SECRET_KEY", value: stripeSecretKey });
+    }
+    if (env.STRIPE_WEBHOOK_SECRET !== webhookSecret) {
+      envVars.push({ key: "STRIPE_WEBHOOK_SECRET", value: webhookSecret });
+    }
+    if (env.NEXT_PUBLIC_SITE_URL !== siteUrl) {
+      envVars.push({ key: "NEXT_PUBLIC_SITE_URL", value: siteUrl });
+    }
+    if (databaseUrlInput && env.DATABASE_URL !== databaseUrlInput) {
       envVars.push({ key: "DATABASE_URL", value: databaseUrlInput });
     }
 
-    const updatedFiles = saveToEnvFiles(envVars, cwd);
-
-    const envVarNames = envVars.map((v) => v.key).join(", ");
-    if (updatedFiles.length > 0) {
-      logger.log(`📝 Updated ${updatedFiles.join(", ")} with ${envVarNames}`);
-      logger.log("\nREMEMBER: Update the environment variables in Vercel too:");
-      for (const { key, value } of envVars) {
-        logger.log(`${key}=${value}`);
+    if (envVars.length > 0) {
+      const updatedFiles = saveToEnvFiles(envVars, cwd);
+      const envVarNames = envVars.map((v) => v.key).join(", ");
+      if (updatedFiles.length > 0) {
+        logger.log(
+          `\n📝 Updated ${updatedFiles.join(", ")} with ${envVarNames}`
+        );
+        logger.log(
+          "\nREMEMBER: Update the environment variables in Vercel too:"
+        );
+        for (const { key, value } of envVars) {
+          logger.log(`${key}=${value}`);
+        }
+      } else {
+        logger.log("\nAdd these to your environment variables:\n");
+        for (const { key, value } of envVars) {
+          logger.log(`${key}=${value}`);
+        }
       }
     } else {
-      logger.log("Add these to your environment variables:\n");
-      for (const { key, value } of envVars) {
-        logger.log(`${key}=${value}`);
-      }
+      logger.log("\n✓ All environment variables already configured");
     }
 
-    logger.log("─".repeat(50));
+    logger.log("\n" + "─".repeat(50));
     logger.log("Webhook ID:", webhook.id);
-    logger.log("Webhook URL:", webhook.url);
+    logger.log("Webhook URL:", webhook.url || webhookUrl);
     logger.log("Events: All events (*)");
-    if (updatedFiles.length === 0) {
-      logger.log("Secret:", webhook.secret);
-    }
     logger.log("─".repeat(50));
+
+    // Setup dev scripts
+    logger.log("\n📦 Setting up development scripts...");
+    await setupDev({ cwd, logger, exitOnError: false });
 
     return { success: true, webhook };
   } catch (error) {

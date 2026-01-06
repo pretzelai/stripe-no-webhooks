@@ -6,8 +6,9 @@ import {
   findMatchingPrice,
   generatePriceKey,
   syncPlan,
-} from "../bin/sync-helpers.js";
+} from "../bin/commands/helpers/sync-helpers.js";
 import StripeMock from "./stripe-mock.js";
+import { STRIPE_VALID_TEST_KEY } from "./test-utils.js";
 
 describe("buildProductsByNameMap", () => {
   test("builds map from Stripe products", () => {
@@ -18,7 +19,10 @@ describe("buildProductsByNameMap", () => {
 
     const map = buildProductsByNameMap(products);
 
-    expect(map["premium plan"]).toEqual({ id: "prod_123", name: "Premium Plan" });
+    expect(map["premium plan"]).toEqual({
+      id: "prod_123",
+      name: "Premium Plan",
+    });
     expect(map["basic plan"]).toEqual({ id: "prod_456", name: "Basic Plan" });
   });
 
@@ -280,7 +284,12 @@ describe("syncPlan", () => {
       prices: { create: mock(() => {}) },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.productMatched).toBe(true);
     expect(result.productCreated).toBe(false);
@@ -300,12 +309,19 @@ describe("syncPlan", () => {
 
     const mockStripe = {
       products: {
-        create: mock(() => Promise.resolve({ id: "prod_new", name: "New Plan" })),
+        create: mock(() =>
+          Promise.resolve({ id: "prod_new", name: "New Plan" })
+        ),
       },
       prices: { create: mock(() => {}) },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.productMatched).toBe(false);
     expect(result.productCreated).toBe(true);
@@ -333,7 +349,12 @@ describe("syncPlan", () => {
       prices: { create: mock(() => {}) },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.pricesMatched).toBe(1);
     expect(result.pricesCreated).toBe(0);
@@ -358,7 +379,12 @@ describe("syncPlan", () => {
       },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.pricesMatched).toBe(0);
     expect(result.pricesCreated).toBe(1);
@@ -388,7 +414,12 @@ describe("syncPlan", () => {
       },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(mockStripe.prices.create).toHaveBeenCalledWith({
       product: "prod_123",
@@ -402,7 +433,14 @@ describe("syncPlan", () => {
     const plan = {
       id: "prod_123",
       name: "Premium Plan",
-      price: [{ id: "price_existing", amount: 1000, currency: "usd", interval: "month" }],
+      price: [
+        {
+          id: "price_existing",
+          amount: 1000,
+          currency: "usd",
+          interval: "month",
+        },
+      ],
     };
 
     const productsByName = {};
@@ -413,7 +451,12 @@ describe("syncPlan", () => {
       prices: { create: mock(() => {}) },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.pricesMatched).toBe(0);
     expect(result.pricesCreated).toBe(0);
@@ -436,7 +479,12 @@ describe("syncPlan", () => {
       prices: { create: mock(() => {}) },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]).toContain("Failed to create product");
@@ -461,7 +509,12 @@ describe("syncPlan", () => {
       },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]).toContain("Failed to create price");
@@ -494,7 +547,12 @@ describe("syncPlan", () => {
       },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.productCreated).toBe(true);
     expect(result.pricesCreated).toBe(2);
@@ -527,7 +585,12 @@ describe("syncPlan", () => {
       },
     };
 
-    const result = await syncPlan(plan, productsByName, pricesByKey, mockStripe);
+    const result = await syncPlan(
+      plan,
+      productsByName,
+      pricesByKey,
+      mockStripe
+    );
 
     expect(result.productMatched).toBe(true);
     expect(result.productCreated).toBe(false);
@@ -544,13 +607,14 @@ describe("syncPlan", () => {
 describe("StripeMock", () => {
   test("works with require pattern: default || named", () => {
     // This simulates: Stripe = require("stripe").default || require("stripe")
-    const Stripe = require("./stripe-mock.js").default || require("./stripe-mock.js");
-    const stripe = new Stripe("sk_test_123");
-    expect(stripe.apiKey).toBe("sk_test_123");
+    const Stripe =
+      require("./stripe-mock.js").default || require("./stripe-mock.js");
+    const stripe = new Stripe(STRIPE_VALID_TEST_KEY);
+    expect(stripe.apiKey).toBe(STRIPE_VALID_TEST_KEY);
   });
 
   test("products.list returns seeded products", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
     stripe._seedProducts([
       { id: "prod_1", name: "Product 1", active: true },
       { id: "prod_2", name: "Product 2", active: false },
@@ -562,7 +626,7 @@ describe("StripeMock", () => {
   });
 
   test("products.create generates unique IDs", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
 
     const p1 = await stripe.products.create({ name: "Product 1" });
     const p2 = await stripe.products.create({ name: "Product 2" });
@@ -572,10 +636,22 @@ describe("StripeMock", () => {
   });
 
   test("prices.list returns seeded prices", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
     stripe._seedPrices([
-      { id: "price_1", product: "prod_1", unit_amount: 1000, currency: "usd", active: true },
-      { id: "price_2", product: "prod_1", unit_amount: 2000, currency: "usd", active: true },
+      {
+        id: "price_1",
+        product: "prod_1",
+        unit_amount: 1000,
+        currency: "usd",
+        active: true,
+      },
+      {
+        id: "price_2",
+        product: "prod_1",
+        unit_amount: 2000,
+        currency: "usd",
+        active: true,
+      },
     ]);
 
     const { data } = await stripe.prices.list({ product: "prod_1" });
@@ -583,7 +659,7 @@ describe("StripeMock", () => {
   });
 
   test("prices.create generates unique IDs", async () => {
-    const stripe = new StripeMock("sk_test_123");
+    const stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
 
     const p1 = await stripe.prices.create({
       product: "prod_1",
@@ -605,7 +681,7 @@ describe("syncPlan with StripeMock", () => {
   let stripe;
 
   beforeEach(() => {
-    stripe = new StripeMock("sk_test_123");
+    stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
   });
 
   test("full sync flow: new product with new prices", async () => {
@@ -727,9 +803,7 @@ describe("syncPlan with StripeMock", () => {
   });
 
   test("full sync flow: multiple plans", async () => {
-    stripe._seedProducts([
-      { id: "prod_basic", name: "Basic", active: true },
-    ]);
+    stripe._seedProducts([{ id: "prod_basic", name: "Basic", active: true }]);
     stripe._seedPrices([
       {
         id: "price_basic",
@@ -747,9 +821,18 @@ describe("syncPlan with StripeMock", () => {
     const pricesByKey = buildPricesByKeyMap(prices);
 
     const plans = [
-      { name: "Basic", price: [{ amount: 500, currency: "usd", interval: "month" }] },
-      { name: "Pro", price: [{ amount: 1500, currency: "usd", interval: "month" }] },
-      { name: "Enterprise", price: [{ amount: 5000, currency: "usd", interval: "month" }] },
+      {
+        name: "Basic",
+        price: [{ amount: 500, currency: "usd", interval: "month" }],
+      },
+      {
+        name: "Pro",
+        price: [{ amount: 1500, currency: "usd", interval: "month" }],
+      },
+      {
+        name: "Enterprise",
+        price: [{ amount: 5000, currency: "usd", interval: "month" }],
+      },
     ];
 
     const results = [];

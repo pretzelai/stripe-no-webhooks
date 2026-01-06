@@ -5,7 +5,7 @@ const {
   isValidStripeKey,
   getMode,
   loadStripe,
-} = require("./utils");
+} = require("./helpers/utils");
 const {
   buildProductsByNameMap,
   buildPricesByKeyMap,
@@ -13,7 +13,7 @@ const {
   findMatchingPrice,
   generatePriceKey,
   syncPlan,
-} = require("../sync-helpers");
+} = require("./helpers/sync-helpers");
 
 function findMatchingBrace(content, startIndex) {
   let depth = 0;
@@ -191,7 +191,9 @@ async function sync(options = {}) {
   }
 
   if (!isValidStripeKey(stripeSecretKey)) {
-    logger.error("❌ Invalid Stripe Secret Key. It should start with 'sk_' or 'rk_'");
+    logger.error(
+      "❌ Invalid Stripe Secret Key. It should start with 'sk_' or 'rk_'"
+    );
     if (exitOnError) process.exit(1);
     return { success: false, error: "Invalid Stripe Secret Key" };
   }
@@ -210,7 +212,11 @@ async function sync(options = {}) {
   logger.log(`\n🔄 Syncing billing plans with Stripe (${mode} mode)...\n`);
 
   let content = fs.readFileSync(billingConfigPath, "utf8");
-  const { config, plans, extracted } = parseBillingConfig(content, mode, logger);
+  const { config, plans, extracted } = parseBillingConfig(
+    content,
+    mode,
+    logger
+  );
 
   if (!config) {
     logger.error("❌ Failed to parse billing.config.ts");
@@ -377,13 +383,14 @@ async function sync(options = {}) {
     let productId = plan.id;
 
     if (!productId) {
-      const existingProduct = findMatchingProduct(stripeProductsByName, plan.name);
+      const existingProduct = findMatchingProduct(
+        stripeProductsByName,
+        plan.name
+      );
 
       if (existingProduct) {
         productId = existingProduct.id;
-        logger.log(
-          `🔗 Matched existing product "${plan.name}" (${productId})`
-        );
+        logger.log(`🔗 Matched existing product "${plan.name}" (${productId})`);
         config[mode].plans[index].id = productId;
         productsSynced++;
         configModified = true;
@@ -426,7 +433,11 @@ async function sync(options = {}) {
           continue;
         }
 
-        const existingPrice = findMatchingPrice(stripePricesByKey, productId, price);
+        const existingPrice = findMatchingPrice(
+          stripePricesByKey,
+          productId,
+          price
+        );
         const interval = price.interval || "one_time";
 
         if (existingPrice) {
@@ -464,7 +475,12 @@ async function sync(options = {}) {
 
           logger.log(`   ✅ Created price (${stripePrice.id})`);
 
-          const priceKey = generatePriceKey(productId, price.amount, price.currency, price.interval);
+          const priceKey = generatePriceKey(
+            productId,
+            price.amount,
+            price.currency,
+            price.interval
+          );
           stripePricesByKey[priceKey] = stripePrice;
 
           config[mode].plans[index].price[priceIndex].id = stripePrice.id;
@@ -480,7 +496,12 @@ async function sync(options = {}) {
     }
   }
 
-  if (productsCreated === 0 && pricesCreated === 0 && productsSynced === 0 && pricesSynced === 0) {
+  if (
+    productsCreated === 0 &&
+    pricesCreated === 0 &&
+    productsSynced === 0 &&
+    pricesSynced === 0
+  ) {
     logger.log("   No new products or prices to push to Stripe.\n");
   }
 
