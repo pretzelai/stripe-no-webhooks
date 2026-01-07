@@ -171,12 +171,12 @@ async function runBenchmark() {
   // Benchmark: prices.list()
   {
     const dbResult = await measure("FasterStripe", () =>
-      fasterStripe.prices.list({ limit: 10 })
+      fasterStripe.prices.list({ limit: LIMIT })
     );
     const apiResult = await measure("Raw Stripe", () =>
-      rawStripe.prices.list({ limit: 10 })
+      rawStripe.prices.list({ limit: LIMIT })
     );
-    speedups.push(printResults("prices.list({ limit: 10 })", dbResult, apiResult));
+    speedups.push(printResults(`prices.list({ limit: ${LIMIT} })`, dbResult, apiResult));
   }
 
   // Benchmark: prices.retrieve()
@@ -195,10 +195,10 @@ async function runBenchmark() {
   // Benchmark: prices.list() with filter
   if (testProductId) {
     const dbResult = await measure("FasterStripe", () =>
-      fasterStripe.prices.list({ product: testProductId!, limit: 10 })
+      fasterStripe.prices.list({ product: testProductId!, limit: LIMIT })
     );
     const apiResult = await measure("Raw Stripe", () =>
-      rawStripe.prices.list({ product: testProductId!, limit: 10 })
+      rawStripe.prices.list({ product: testProductId!, limit: LIMIT })
     );
     speedups.push(
       printResults(
@@ -212,34 +212,34 @@ async function runBenchmark() {
   // Benchmark: subscriptions.list()
   {
     const dbResult = await measure("FasterStripe", () =>
-      fasterStripe.subscriptions.list({ limit: 10 })
+      fasterStripe.subscriptions.list({ limit: LIMIT })
     );
     const apiResult = await measure("Raw Stripe", () =>
-      rawStripe.subscriptions.list({ limit: 10 })
+      rawStripe.subscriptions.list({ limit: LIMIT })
     );
-    speedups.push(printResults("subscriptions.list({ limit: 10 })", dbResult, apiResult));
+    speedups.push(printResults(`subscriptions.list({ limit: ${LIMIT} })`, dbResult, apiResult));
   }
 
   // Benchmark: invoices.list()
   {
     const dbResult = await measure("FasterStripe", () =>
-      fasterStripe.invoices.list({ limit: 10 })
+      fasterStripe.invoices.list({ limit: LIMIT })
     );
     const apiResult = await measure("Raw Stripe", () =>
-      rawStripe.invoices.list({ limit: 10 })
+      rawStripe.invoices.list({ limit: LIMIT })
     );
-    speedups.push(printResults("invoices.list({ limit: 10 })", dbResult, apiResult));
+    speedups.push(printResults(`invoices.list({ limit: ${LIMIT} })`, dbResult, apiResult));
   }
 
   // Benchmark: charges.list()
   {
     const dbResult = await measure("FasterStripe", () =>
-      fasterStripe.charges.list({ limit: 10 })
+      fasterStripe.charges.list({ limit: LIMIT })
     );
     const apiResult = await measure("Raw Stripe", () =>
-      rawStripe.charges.list({ limit: 10 })
+      rawStripe.charges.list({ limit: LIMIT })
     );
-    speedups.push(printResults("charges.list({ limit: 10 })", dbResult, apiResult));
+    speedups.push(printResults(`charges.list({ limit: ${LIMIT} })`, dbResult, apiResult));
   }
 
   // Summary: Multiple sequential calls
@@ -251,16 +251,16 @@ async function runBenchmark() {
     const dbResult = await measure(
       "FasterStripe",
       async () => {
-        await fasterStripe.products.list({ limit: 5 });
-        await fasterStripe.prices.list({ limit: 5 });
-        await fasterStripe.customers.list({ limit: 5 });
-        await fasterStripe.subscriptions.list({ limit: 5 });
-        await fasterStripe.invoices.list({ limit: 5 });
-        await fasterStripe.charges.list({ limit: 5 });
-        await fasterStripe.paymentIntents.list({ limit: 5 });
-        await fasterStripe.paymentMethods.list({ limit: 5 });
-        await fasterStripe.refunds.list({ limit: 5 });
-        await fasterStripe.disputes.list({ limit: 5 });
+        await fasterStripe.products.list({ limit: LIMIT });
+        await fasterStripe.prices.list({ limit: LIMIT });
+        await fasterStripe.customers.list({ limit: LIMIT });
+        await fasterStripe.subscriptions.list({ limit: LIMIT });
+        await fasterStripe.invoices.list({ limit: LIMIT });
+        await fasterStripe.charges.list({ limit: LIMIT });
+        await fasterStripe.paymentIntents.list({ limit: LIMIT });
+        await fasterStripe.paymentMethods.list({ limit: LIMIT });
+        await fasterStripe.refunds.list({ limit: LIMIT });
+        await fasterStripe.disputes.list({ limit: LIMIT });
       },
       3
     );
@@ -268,16 +268,16 @@ async function runBenchmark() {
     const apiResult = await measure(
       "Raw Stripe",
       async () => {
-        await rawStripe.products.list({ limit: 5 });
-        await rawStripe.prices.list({ limit: 5 });
-        await rawStripe.customers.list({ limit: 5 });
-        await rawStripe.subscriptions.list({ limit: 5 });
-        await rawStripe.invoices.list({ limit: 5 });
-        await rawStripe.charges.list({ limit: 5 });
-        await rawStripe.paymentIntents.list({ limit: 5 });
-        await rawStripe.paymentMethods.list({ limit: 5 });
-        await rawStripe.refunds.list({ limit: 5 });
-        await rawStripe.disputes.list({ limit: 5 });
+        await rawStripe.products.list({ limit: LIMIT });
+        await rawStripe.prices.list({ limit: LIMIT });
+        await rawStripe.customers.list({ limit: LIMIT });
+        await rawStripe.subscriptions.list({ limit: LIMIT });
+        await rawStripe.invoices.list({ limit: LIMIT });
+        await rawStripe.charges.list({ limit: LIMIT });
+        await rawStripe.paymentIntents.list({ limit: LIMIT });
+        await rawStripe.paymentMethods.list({ limit: LIMIT });
+        await rawStripe.refunds.list({ limit: LIMIT });
+        await rawStripe.disputes.list({ limit: LIMIT });
       },
       3
     );
