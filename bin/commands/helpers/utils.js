@@ -100,7 +100,7 @@ function saveToEnvFiles(envVars, cwd = process.cwd()) {
 }
 
 function getTemplatesDir() {
-  return path.join(__dirname, "..", "..", "src", "templates");
+  return path.join(__dirname, "../../..", "src", "templates");
 }
 
 function getAppRouterTemplate() {
