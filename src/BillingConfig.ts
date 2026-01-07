@@ -40,6 +40,12 @@ export type Plan = {
   description?: string;
   price: Price[];
   credits?: Record<string, CreditConfig>;
+  /**
+   * Enable per-seat billing for this plan.
+   * When true, addSeat/removeSeat will update Stripe subscription quantity.
+   * Stripe automatically prorates charges when quantity changes.
+   */
+  perSeat?: boolean;
 };
 
 export type BillingConfig = {

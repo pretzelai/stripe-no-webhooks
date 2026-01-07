@@ -100,6 +100,7 @@ export async function revokeAll(params: {
   userId: string;
   creditType: string;
   source?: TransactionSource;
+  sourceId?: string;
   description?: string;
   metadata?: Record<string, unknown>;
 }): Promise<{ previousBalance: number; amountRevoked: number }> {

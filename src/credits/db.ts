@@ -386,3 +386,74 @@ export async function getHistory(
     createdAt: new Date(row.created_at),
   }));
 }
+
+/**
+ * Find all active seat users for a subscription.
+ * A user is "active" if their most recent seat action is 'seat_grant' (not 'seat_revoke').
+ */
+export async function getActiveSeatUsers(
+  subscriptionId: string
+): Promise<string[]> {
+  const p = ensurePool();
+  const result = await p.query(
+    `SELECT user_id FROM (
+      SELECT DISTINCT ON (user_id) user_id, source
+      FROM ${schema}.credit_ledger
+      WHERE source_id = $1
+        AND source IN ('seat_grant', 'seat_revoke')
+      ORDER BY user_id, created_at DESC
+    ) active
+    WHERE source = 'seat_grant'`,
+    [subscriptionId]
+  );
+  return result.rows.map((row) => row.user_id);
+}
+
+/**
+ * Find which subscription a user is a seat of (if any).
+ * Returns null if the user is not an active seat of any subscription.
+ */
+export async function getUserSeatSubscription(
+  userId: string
+): Promise<string | null> {
+  const p = ensurePool();
+  const result = await p.query(
+    `SELECT source_id as subscription_id FROM (
+      SELECT DISTINCT ON (user_id) user_id, source, source_id
+      FROM ${schema}.credit_ledger
+      WHERE user_id = $1
+        AND source IN ('seat_grant', 'seat_revoke')
+      ORDER BY user_id, created_at DESC
+    ) latest
+    WHERE source = 'seat_grant'`,
+    [userId]
+  );
+  return result.rows[0]?.subscription_id ?? null;
+}
+
+/**
+ * Get the total credits granted to a user from a specific source (e.g., subscription).
+ * Returns a map of credit_type -> total amount granted.
+ * Used by removeSeat to only revoke credits that came from the subscription.
+ */
+export async function getCreditsGrantedBySource(
+  userId: string,
+  sourceId: string
+): Promise<Record<string, number>> {
+  const p = ensurePool();
+  const result = await p.query(
+    `SELECT credit_type_id, SUM(amount) as total_granted
+     FROM ${schema}.credit_ledger
+     WHERE user_id = $1
+       AND source_id = $2
+       AND source = 'seat_grant'
+       AND amount > 0
+     GROUP BY credit_type_id`,
+    [userId, sourceId]
+  );
+  const grants: Record<string, number> = {};
+  for (const row of result.rows) {
+    grants[row.credit_type_id] = Number(row.total_granted);
+  }
+  return grants;
+}

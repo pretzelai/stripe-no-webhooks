@@ -1,10 +1,15 @@
 # stripe-no-webhooks
 
-Opinionated & Open Source library that automatically syncs Stripe to your database and gives you useful helpers to implement subscriptions.
+Opinionated library to help you implement payments with Stripe. It syncs Stripe data to your database and gives you useful helpers to implement subscriptions and credits.
 
 ## Why this library?
 
-Stripe documentation lacks the ability to clearly point you to an easy way to implement Stripe. Depending on what you google you might end up in a weird place and shoot yourself in the foot.
+This library is a wrapper on Stripe SDK (with some bells and whistles). It gives you an opinionated and clear path to implement payments:
+
+1. Define plans in code which sync to Stripe
+2. No need for webhook listerners - the library syncs all Stripe data locally in you DB
+3. Use simple APIs to create subscriptions and manages credits
+4. Use a handful of callbacks (for eg, `onSubscriptionCreated`) for custom logic as needed
 
 ## Setup
 
@@ -40,17 +45,13 @@ const billingConfig: BillingConfig = {
         name: "Premium",
         description: "Access to all features",
         price: [
-          {
-            amount: 1000, // $10
-            currency: "usd",
-            interval: "month",
-          },
-          {
-            amount: 10000, // $100
-            currency: "usd",
-            interval: "year",
-          },
+          { amount: 1000, currency: "usd", interval: "month" },
+          { amount: 10000, currency: "usd", interval: "year" },
         ],
+        // Optional: give subscribers credits each billing cycle
+        credits: {
+          api_calls: { allocation: 1000 },
+        },
       },
     ],
   },
@@ -88,3 +89,29 @@ export default function Home() {
   );
 }
 ```
+
+### 6. Use credits in your app (if configured):
+
+```typescript
+import { createStripeHandler } from "stripe-no-webhooks";
+
+const stripe = createStripeHandler({ billingConfig });
+
+// Consume credits
+const result = await stripe.credits.consume({
+  userId: "user_123",
+  creditType: "api_calls",
+  amount: 1,
+});
+
+if (!result.success) {
+  throw new Error("Insufficient credits");
+}
+```
+
+## Documentation
+
+- [Getting Started](docs/getting-started.md) - Full setup walkthrough
+- [Credits](docs/credits.md) - Allocate, consume, and top-up credits
+- [Team Billing](docs/team-billing.md) - Org subscriptions & per-seat credits
+- [API Reference](docs/reference.md) - Quick lookup

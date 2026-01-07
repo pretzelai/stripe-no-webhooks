@@ -16,6 +16,13 @@ import {
   type AutoTopUpResult,
   type AutoTopUpFailedReason,
 } from "./credits/topup";
+import {
+  createSeatHandler,
+  type AddSeatParams,
+  type AddSeatResult,
+  type RemoveSeatParams,
+  type RemoveSeatResult,
+} from "./credits/seats";
 import { credits, type ConsumeResult } from "./credits";
 export type { CreditsGrantTo };
 export type {
@@ -24,6 +31,10 @@ export type {
   TopUpPending,
   AutoTopUpResult,
   ConsumeResult,
+  AddSeatParams,
+  AddSeatResult,
+  RemoveSeatParams,
+  RemoveSeatResult,
 };
 
 // ============================================================================
@@ -79,7 +90,7 @@ export interface StripeWebhookCallbacks {
     amount: number;
     previousBalance: number;
     newBalance: number;
-    source: "cancellation" | "manual";
+    source: "cancellation" | "manual" | "seat_revoke";
   }) => void | Promise<void>;
 
   /**
@@ -121,6 +132,7 @@ export interface CreditsConfig {
   /**
    * Who receives credits automatically on subscription events.
    * - 'subscriber': Credits go to the subscriber (default)
+   * - 'seat-users': Credits go to individual seat users (use addSeat/removeSeat)
    * - 'manual': No automatic granting, use callbacks to handle manually
    */
   grantTo?: CreditsGrantTo;
@@ -253,6 +265,13 @@ export interface CheckoutRequestBody {
    * Additional metadata to attach to the session
    */
   metadata?: Record<string, string>;
+
+  /**
+   * Organization ID for team/org checkouts.
+   * When provided, the org is the billing entity.
+   * In 'seat-users' mode, the user automatically becomes the first seat.
+   */
+  orgId?: string;
 }
 
 export interface CustomerPortalRequestBody {
@@ -311,13 +330,14 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     : null;
 
   const mode = getMode(stripeSecretKey);
+  const grantTo = creditsConfig?.grantTo ?? "subscriber";
 
   const creditLifecycle = createCreditLifecycle({
     pool,
     schema,
     billingConfig,
     mode,
-    grantTo: creditsConfig?.grantTo ?? "subscriber",
+    grantTo,
     callbacks,
   });
 
@@ -333,6 +353,16 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     onTopUpCompleted: callbacks?.onTopUpCompleted,
     onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,
     onCreditsLow: callbacks?.onCreditsLow,
+  });
+
+  const seatHandler = createSeatHandler({
+    stripe,
+    pool,
+    schema,
+    billingConfig,
+    mode,
+    grantTo,
+    callbacks,
   });
 
   // ============================================================================
@@ -496,25 +526,28 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         automatic_tax: { enabled: automaticTax },
       };
 
-      // Resolve customer ID from user or direct customerId
+      // Resolve customer ID - orgId takes precedence as billing entity
       let customerId: string | null = null;
+      let user = body.user;
+      if (!user && getUser) {
+        user = (await getUser(request)) ?? undefined;
+      }
 
       if (body.customerId) {
         // Direct customerId takes precedence
         customerId = body.customerId;
-      } else {
-        // Try to get user from body or from getUser function
-        let user = body.user;
-        if (!user && getUser) {
-          user = (await getUser(request)) ?? undefined;
-        }
-
-        if (user) {
-          customerId = await resolveStripeCustomerId({
-            user,
-            createIfNotFound: true,
-          });
-        }
+      } else if (body.orgId) {
+        // Org is the billing entity
+        customerId = await resolveStripeCustomerId({
+          user: { id: body.orgId },
+          createIfNotFound: true,
+        });
+      } else if (user) {
+        // User is the billing entity
+        customerId = await resolveStripeCustomerId({
+          user,
+          createIfNotFound: true,
+        });
       }
 
       if (customerId) {
@@ -524,8 +557,25 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
         sessionParams.customer_email = body.customerEmail;
       }
 
-      if (body.metadata) {
-        sessionParams.metadata = body.metadata;
+      // Build metadata
+      const sessionMetadata: Record<string, string> = { ...body.metadata };
+      if (body.orgId) {
+        sessionMetadata.org_id = body.orgId;
+      }
+
+      // In seat-users mode, store first seat user for auto-granting
+      if (grantTo === "seat-users" && body.orgId && user) {
+        sessionMetadata.first_seat_user_id = user.id;
+      }
+
+      if (Object.keys(sessionMetadata).length > 0) {
+        sessionParams.metadata = sessionMetadata;
+        // Copy to subscription metadata for access in webhooks
+        if (priceMode === "subscription") {
+          sessionParams.subscription_data = {
+            metadata: sessionMetadata,
+          };
+        }
       }
 
       const session = await stripe.checkout.sessions.create(sessionParams);
@@ -829,20 +879,47 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
   // Return handler function with additional methods attached
   return Object.assign(handler, {
     /**
-     * Purchase additional credits using the user's saved payment method.
-     * Returns a recoveryUrl if payment fails or no payment method is on file.
+     * Unified credits API for all credit operations.
      */
-    topUpCredits: topUpHandler.topUp,
+    credits: {
+      /** Consume credits. Triggers auto top-up if configured and balance drops below threshold. */
+      consume: consumeCredits,
+      /** Grant credits to a user. */
+      grant: credits.grant,
+      /** Revoke a specific amount of credits. */
+      revoke: credits.revoke,
+      /** Revoke all credits of a type from a user. */
+      revokeAll: credits.revokeAll,
+      /** Set balance to a specific value. */
+      setBalance: credits.setBalance,
+      /** Get balance for a specific credit type. */
+      getBalance: credits.getBalance,
+      /** Get all credit balances for a user. */
+      getAllBalances: credits.getAllBalances,
+      /** Check if user has at least N credits. */
+      hasCredits: credits.hasCredits,
+      /** Get transaction history. */
+      getHistory: credits.getHistory,
+      /** Purchase additional credits. Returns recoveryUrl if payment fails. */
+      topUp: topUpHandler.topUp,
+      /** Check if user has a saved payment method for top-ups. */
+      hasPaymentMethod: topUpHandler.hasPaymentMethod,
+    },
 
     /**
-     * Check if a user has a saved payment method for top-ups.
+     * Add a user as a seat of an org's subscription.
+     * - "seat-users" mode: grants credits to the individual user
+     * - "subscriber"/"organization" mode: grants credits to the org (shared pool)
+     * - Also increments Stripe subscription quantity if plan.perSeat is true
      */
-    hasPaymentMethod: topUpHandler.hasPaymentMethod,
+    addSeat: seatHandler.addSeat,
 
     /**
-     * Consume credits with automatic top-up when balance drops below threshold.
-     * Use this instead of `credits.consume()` to enable auto top-up functionality.
+     * Remove a user as a seat of an org's subscription.
+     * - "seat-users" mode: revokes credits from the user
+     * - "subscriber"/"organization" mode: revokes credits from the org
+     * - Also decrements Stripe subscription quantity if plan.perSeat is true
      */
-    consumeCredits,
+    removeSeat: seatHandler.removeSeat,
   });
 }

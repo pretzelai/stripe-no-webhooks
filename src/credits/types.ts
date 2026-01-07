@@ -7,7 +7,9 @@ export type TransactionSource =
   | "topup"
   | "auto_topup"
   | "manual"
-  | "usage";
+  | "usage"
+  | "seat_grant"
+  | "seat_revoke";
 
 export type CreditTransaction = {
   id: string;
