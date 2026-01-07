@@ -1417,3 +1417,79 @@ CREATE INDEX IF NOT EXISTS idx_credit_ledger_source_id
 2. **Race condition on consume**: If two requests try to consume the last credit simultaneously, one should fail. Need to ensure atomic balance updates (use transactions or row-level locking).
 
 3. **Display names**: Should we auto-format credit type IDs ("email_credits" → "Email Credits") or require explicit displayName? Leaning toward auto-format with optional override.
+
+---
+
+## Design Decisions (Implementation Notes)
+
+These decisions were made during implementation and differ from or clarify the original plan:
+
+### 1. Auto Top-Up Lives in `handler.consumeCredits()`, Not `credits.consume()`
+
+**Decision:** The `credits` module remains a pure ledger without Stripe dependencies. Auto top-up is triggered via `handler.consumeCredits()` wrapper, not inside `credits.consume()`.
+
+**Rationale:**
+- Separation of concerns: `credits` module handles ledger operations only
+- No Stripe dependency in the credits module
+- Users who want auto top-up explicitly opt-in by using `handler.consumeCredits()`
+- Users who want pure ledger operations use `credits.consume()` directly
+
+**Usage:**
+```typescript
+// With auto top-up (recommended for most use cases)
+const result = await handler.consumeCredits({ userId, creditType, amount });
+
+// Pure ledger operation (no auto top-up)
+const result = await credits.consume({ userId, creditType, amount });
+```
+
+### 2. Single `onTopUpCompleted` Callback for Both Manual and Auto Top-Ups
+
+**Decision:** We use one callback `onTopUpCompleted` for all top-ups instead of separate `onAutoTopUpTriggered` and manual top-up callbacks.
+
+**Rationale:**
+- Reduces callback proliferation
+- The source (`"topup"` vs `"auto_topup"`) is tracked in the ledger
+- `onTopUpCompleted` provides all relevant info (amount, charge, balance, paymentIntentId)
+- Users can distinguish auto vs manual by checking the ledger if needed
+
+**The callback fires for:**
+- Manual top-ups via `handler.topUpCredits()`
+- Auto top-ups triggered by `handler.consumeCredits()`
+
+### 3. `onCreditsLow` Fires Before Auto Top-Up Attempt
+
+**Decision:** The `onCreditsLow` callback fires when balance drops below threshold, before we attempt auto top-up (regardless of whether auto top-up succeeds or fails).
+
+**Rationale:**
+- Useful for sending notifications to users
+- Fires even if auto top-up is skipped (no payment method, max reached, etc.)
+- Allows apps to implement custom logic alongside auto top-up
+
+### 4. Invalid Auto Top-Up Config Returns `"not_configured"`
+
+**Decision:** If auto top-up config has invalid values (purchaseAmount ≤ 0, balanceThreshold ≤ 0, pricePerCreditCents ≤ 0), we log an error and return `{ triggered: false, reason: "not_configured" }`.
+
+**Rationale:**
+- Fail fast with clear console error
+- Don't attempt Stripe API call with invalid values
+- Same return shape as "not configured" for consistency
+
+### 5. Unexpected Errors Fire `onAutoTopUpFailed` with `"unexpected_error"`
+
+**Decision:** If auto top-up throws an unexpected error (DB failure, network issue, etc.), we fire `onAutoTopUpFailed` with `reason: "unexpected_error"` in addition to logging.
+
+**Rationale:**
+- Gives visibility into failures that would otherwise be swallowed
+- Allows apps to alert on unexpected issues
+- Consistent with other failure reasons
+
+### 6. Idempotency Key for Auto Top-Up Based on Monthly Count
+
+**Decision:** Auto top-up PaymentIntent uses idempotency key: `auto_topup_${userId}_${creditType}_${yearMonth}_${count+1}`
+
+**Rationale:**
+- Prevents duplicate charges from concurrent consume() calls
+- Two concurrent triggers see same count, use same key, Stripe dedupes one
+- If payment fails, same key for 24h prevents spam retries (feature, not bug)
+- After 24h Stripe key expires, fresh retry possible

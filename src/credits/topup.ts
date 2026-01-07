@@ -1,7 +1,8 @@
 import type Stripe from "stripe";
 import type { Pool } from "pg";
-import type { BillingConfig, OnDemandTopUp } from "../BillingConfig";
+import type { BillingConfig, OnDemandTopUp, AutoTopUp } from "../BillingConfig";
 import { credits } from "./index";
+import * as db from "./db";
 import { CreditError } from "./types";
 
 export type TopUpSuccess = {
@@ -44,6 +45,41 @@ export type TopUpParams = {
   idempotencyKey?: string;
 };
 
+export type AutoTopUpTriggered = {
+  triggered: true;
+  status: "succeeded" | "pending";
+  paymentIntentId: string;
+};
+
+export type AutoTopUpSkipped = {
+  triggered: false;
+  reason:
+    | "balance_above_threshold"
+    | "not_configured"
+    | "max_per_month_reached"
+    | "no_payment_method"
+    | "no_subscription"
+    | "user_not_found";
+};
+
+export type AutoTopUpFailed = {
+  triggered: false;
+  reason: "payment_failed" | "payment_requires_action";
+  error: string;
+};
+
+export type AutoTopUpResult =
+  | AutoTopUpTriggered
+  | AutoTopUpSkipped
+  | AutoTopUpFailed;
+
+export type AutoTopUpFailedReason =
+  | "max_per_month_reached"
+  | "no_payment_method"
+  | "payment_failed"
+  | "payment_requires_action"
+  | "unexpected_error";
+
 export function createTopUpHandler(deps: {
   stripe: Stripe;
   pool: Pool | null;
@@ -57,7 +93,7 @@ export function createTopUpHandler(deps: {
     creditType: string;
     amount: number;
     newBalance: number;
-    source: "topup";
+    source: "topup" | "auto_topup";
     sourceId: string;
   }) => void | Promise<void>;
   onTopUpCompleted?: (params: {
@@ -68,6 +104,18 @@ export function createTopUpHandler(deps: {
     currency: string;
     newBalance: number;
     paymentIntentId: string;
+  }) => void | Promise<void>;
+  onAutoTopUpFailed?: (params: {
+    userId: string;
+    creditType: string;
+    reason: AutoTopUpFailedReason;
+    error?: string;
+  }) => void | Promise<void>;
+  onCreditsLow?: (params: {
+    userId: string;
+    creditType: string;
+    balance: number;
+    threshold: number;
   }) => void | Promise<void>;
 }) {
   const {
@@ -80,6 +128,8 @@ export function createTopUpHandler(deps: {
     cancelUrl,
     onCreditsGranted,
     onTopUpCompleted,
+    onAutoTopUpFailed,
+    onCreditsLow,
   } = deps;
 
   async function getCustomerByUserId(userId: string): Promise<{
@@ -358,6 +408,7 @@ export function createTopUpHandler(deps: {
     const creditType = paymentIntent.metadata?.top_up_credit_type;
     const amountStr = paymentIntent.metadata?.top_up_amount;
     const userId = paymentIntent.metadata?.user_id;
+    const isAuto = paymentIntent.metadata?.top_up_auto === "true";
 
     if (!creditType || !amountStr || !userId) {
       throw new CreditError(
@@ -374,6 +425,7 @@ export function createTopUpHandler(deps: {
       );
     }
 
+    const source = isAuto ? "auto_topup" : "topup";
     let newBalance: number;
     let alreadyGranted = false;
     try {
@@ -381,7 +433,7 @@ export function createTopUpHandler(deps: {
         userId,
         creditType,
         amount,
-        source: "topup",
+        source,
         sourceId: paymentIntent.id,
         idempotencyKey: `topup_${paymentIntent.id}`,
       });
@@ -405,7 +457,7 @@ export function createTopUpHandler(deps: {
         creditType,
         amount,
         newBalance,
-        source: "topup",
+        source,
         sourceId: paymentIntent.id,
       });
       await onTopUpCompleted?.({
@@ -534,9 +586,176 @@ export function createTopUpHandler(deps: {
     return !!customer?.defaultPaymentMethod;
   }
 
+  /**
+   * Check if auto top-up should be triggered and execute it if needed.
+   * Called after credits are consumed to replenish when balance drops below threshold.
+   */
+  async function triggerAutoTopUpIfNeeded(params: {
+    userId: string;
+    creditType: string;
+    currentBalance: number;
+  }): Promise<AutoTopUpResult> {
+    const { userId, creditType, currentBalance } = params;
+
+    const customer = await getCustomerByUserId(userId);
+    if (!customer || customer.deleted) {
+      return { triggered: false, reason: "user_not_found" };
+    }
+
+    const subscription = await getActiveSubscription(customer.id);
+    if (!subscription) {
+      return { triggered: false, reason: "no_subscription" };
+    }
+
+    const plan = billingConfig?.[mode]?.plans?.find((p) =>
+      p.price.some((pr) => pr.id === subscription.priceId)
+    );
+    if (!plan) {
+      return { triggered: false, reason: "not_configured" };
+    }
+
+    const topUpConfig = plan.credits?.[creditType]?.topUp;
+    if (!topUpConfig || topUpConfig.mode !== "auto") {
+      return { triggered: false, reason: "not_configured" };
+    }
+
+    const {
+      pricePerCreditCents,
+      balanceThreshold,
+      purchaseAmount,
+      maxPerMonth = 10,
+    } = topUpConfig as AutoTopUp;
+
+    // Validate config to fail fast with clear errors
+    if (
+      purchaseAmount <= 0 ||
+      balanceThreshold <= 0 ||
+      pricePerCreditCents <= 0
+    ) {
+      console.error(
+        `Invalid auto top-up config for ${creditType}: purchaseAmount=${purchaseAmount}, balanceThreshold=${balanceThreshold}, pricePerCreditCents=${pricePerCreditCents}`
+      );
+      return { triggered: false, reason: "not_configured" };
+    }
+
+    if (currentBalance >= balanceThreshold) {
+      return { triggered: false, reason: "balance_above_threshold" };
+    }
+
+    // Fire onCreditsLow before attempting auto top-up
+    await onCreditsLow?.({
+      userId,
+      creditType,
+      balance: currentBalance,
+      threshold: balanceThreshold,
+    });
+
+    if (!customer.defaultPaymentMethod) {
+      await onAutoTopUpFailed?.({
+        userId,
+        creditType,
+        reason: "no_payment_method",
+      });
+      return { triggered: false, reason: "no_payment_method" };
+    }
+
+    const autoTopUpsThisMonth = await db.countAutoTopUpsThisMonth(
+      userId,
+      creditType
+    );
+    if (autoTopUpsThisMonth >= maxPerMonth) {
+      await onAutoTopUpFailed?.({
+        userId,
+        creditType,
+        reason: "max_per_month_reached",
+      });
+      return { triggered: false, reason: "max_per_month_reached" };
+    }
+
+    const totalCents = purchaseAmount * pricePerCreditCents;
+    const currency = subscription.currency;
+
+    // Idempotency key prevents duplicate charges from concurrent triggers.
+    // Two concurrent consume() calls that both trigger auto top-up will use
+    // the same key (based on current count), and Stripe will dedupe one.
+    const now = new Date();
+    const yearMonth = `${now.getUTCFullYear()}-${String(
+      now.getUTCMonth() + 1
+    ).padStart(2, "0")}`;
+    const idempotencyKey = `auto_topup_${userId}_${creditType}_${yearMonth}_${
+      autoTopUpsThisMonth + 1
+    }`;
+
+    try {
+      const paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: totalCents,
+          currency,
+          customer: customer.id,
+          payment_method: customer.defaultPaymentMethod,
+          confirm: true,
+          off_session: true,
+          metadata: {
+            top_up_credit_type: creditType,
+            top_up_amount: String(purchaseAmount),
+            user_id: userId,
+            top_up_auto: "true",
+          },
+        },
+        { idempotencyKey }
+      );
+
+      if (paymentIntent.status === "succeeded") {
+        await grantCreditsFromPayment(paymentIntent); // this call is also idempotent
+        return {
+          triggered: true,
+          status: "succeeded",
+          paymentIntentId: paymentIntent.id,
+        };
+      }
+
+      if (paymentIntent.status === "processing") {
+        // Webhook will handle granting credits when payment completes
+        return {
+          triggered: true,
+          status: "pending",
+          paymentIntentId: paymentIntent.id,
+        };
+      }
+
+      // requires_action, requires_payment_method, etc. - user not present to handle
+      const message = `Payment requires action: ${paymentIntent.status}`;
+      await onAutoTopUpFailed?.({
+        userId,
+        creditType,
+        reason: "payment_requires_action",
+        error: message,
+      });
+      return {
+        triggered: false,
+        reason: "payment_requires_action",
+        error: message,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Payment failed";
+      await onAutoTopUpFailed?.({
+        userId,
+        creditType,
+        reason: "payment_failed",
+        error: message,
+      });
+      return {
+        triggered: false,
+        reason: "payment_failed",
+        error: message,
+      };
+    }
+  }
+
   return {
     topUp,
     hasPaymentMethod,
+    triggerAutoTopUpIfNeeded,
     handlePaymentIntentSucceeded,
     handleTopUpCheckoutCompleted,
   };

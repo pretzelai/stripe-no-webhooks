@@ -5,6 +5,7 @@ export type TransactionSource =
   | "renewal"
   | "cancellation"
   | "topup"
+  | "auto_topup"
   | "manual"
   | "usage";
 

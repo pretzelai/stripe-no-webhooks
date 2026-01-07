@@ -57,6 +57,22 @@ export async function checkIdempotencyKey(key: string): Promise<boolean> {
   return result.rows.length > 0;
 }
 
+export async function countAutoTopUpsThisMonth(
+  userId: string,
+  creditType: string
+): Promise<number> {
+  const p = ensurePool();
+  const result = await p.query(
+    `SELECT COUNT(*) FROM ${schema}.credit_ledger
+     WHERE user_id = $1
+       AND credit_type_id = $2
+       AND source = 'auto_topup'
+       AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC')`,
+    [userId, creditType]
+  );
+  return parseInt(result.rows[0].count, 10);
+}
+
 type LedgerEntryParams = {
   transactionType: TransactionType;
   source: TransactionSource;

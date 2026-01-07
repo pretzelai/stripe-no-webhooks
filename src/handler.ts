@@ -13,9 +13,18 @@ import {
   type TopUpParams,
   type TopUpResult,
   type TopUpPending,
+  type AutoTopUpResult,
+  type AutoTopUpFailedReason,
 } from "./credits/topup";
+import { credits, type ConsumeResult } from "./credits";
 export type { CreditsGrantTo };
-export type { TopUpParams, TopUpResult, TopUpPending };
+export type {
+  TopUpParams,
+  TopUpResult,
+  TopUpPending,
+  AutoTopUpResult,
+  ConsumeResult,
+};
 
 // ============================================================================
 // Types
@@ -84,6 +93,27 @@ export interface StripeWebhookCallbacks {
     currency: string;
     newBalance: number;
     paymentIntentId: string;
+  }) => void | Promise<void>;
+
+  /**
+   * Called when an auto top-up fails or is skipped due to payment issues
+   */
+  onAutoTopUpFailed?: (params: {
+    userId: string;
+    creditType: string;
+    reason: AutoTopUpFailedReason;
+    error?: string;
+  }) => void | Promise<void>;
+
+  /**
+   * Called when credit balance drops below the auto top-up threshold.
+   * Fires before auto top-up is attempted. Use for notifications.
+   */
+  onCreditsLow?: (params: {
+    userId: string;
+    creditType: string;
+    balance: number;
+    threshold: number;
   }) => void | Promise<void>;
 }
 
@@ -301,6 +331,8 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     cancelUrl: defaultCancelUrl || "",
     onCreditsGranted: callbacks?.onCreditsGranted,
     onTopUpCompleted: callbacks?.onTopUpCompleted,
+    onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,
+    onCreditsLow: callbacks?.onCreditsLow,
   });
 
   // ============================================================================
@@ -757,6 +789,43 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
     }
   }
 
+  /**
+   * Consume credits and trigger auto top-up if balance drops below threshold.
+   * Auto top-up runs in the background and doesn't block the return.
+   */
+  async function consumeCredits(params: {
+    userId: string;
+    creditType: string;
+    amount: number;
+    description?: string;
+    metadata?: Record<string, unknown>;
+    idempotencyKey?: string;
+  }): Promise<ConsumeResult> {
+    const result = await credits.consume(params);
+
+    if (result.success) {
+      // Fire-and-forget: don't await, don't block the return
+      topUpHandler
+        .triggerAutoTopUpIfNeeded({
+          userId: params.userId,
+          creditType: params.creditType,
+          currentBalance: result.balance,
+        })
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          console.error("Auto top-up error:", err);
+          callbacks?.onAutoTopUpFailed?.({
+            userId: params.userId,
+            creditType: params.creditType,
+            reason: "unexpected_error",
+            error: message,
+          });
+        });
+    }
+
+    return result;
+  }
+
   // Return handler function with additional methods attached
   return Object.assign(handler, {
     /**
@@ -769,5 +838,11 @@ export function createStripeHandler(config: StripeHandlerConfig = {}) {
      * Check if a user has a saved payment method for top-ups.
      */
     hasPaymentMethod: topUpHandler.hasPaymentMethod,
+
+    /**
+     * Consume credits with automatic top-up when balance drops below threshold.
+     * Use this instead of `credits.consume()` to enable auto top-up functionality.
+     */
+    consumeCredits,
   });
 }
