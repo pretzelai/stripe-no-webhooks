@@ -57,6 +57,15 @@ export async function checkIdempotencyKey(key: string): Promise<boolean> {
   return result.rows.length > 0;
 }
 
+export async function checkIdempotencyKeyPrefix(prefix: string): Promise<boolean> {
+  const p = ensurePool();
+  const result = await p.query(
+    `SELECT 1 FROM ${schema}.credit_ledger WHERE idempotency_key LIKE $1 LIMIT 1`,
+    [prefix + "%"]
+  );
+  return result.rows.length > 0;
+}
+
 export async function countAutoTopUpsThisMonth(
   userId: string,
   creditType: string

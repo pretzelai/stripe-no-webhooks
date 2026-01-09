@@ -30,6 +30,9 @@
     "build": "tsup src/index.ts src/client.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts src/client.ts --format cjs,esm --dts --watch",
     "test": "bun test",
+    "test:db:up": "docker compose -f tests/docker-compose.yml up -d && sleep 2",
+    "test:db:down": "docker compose -f tests/docker-compose.yml down",
+    "test:credits": "bun test tests/credits.test.ts",
     "prepublishOnly": "npm run build",
     "release": "npm version patch && npm publish"
   },
