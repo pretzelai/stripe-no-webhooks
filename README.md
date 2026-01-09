@@ -34,6 +34,7 @@ npx stripe-no-webhooks config
 ```
 
 This creates:
+
 - `lib/stripe.ts` - Initialize the client once
 - `app/api/stripe/[...all]/route.ts` - HTTP handler
 - `billing.config.ts` - Your plans
@@ -104,36 +105,10 @@ export default function Pricing() {
 }
 ```
 
-> For manual checkout implementation with full control, see [Frontend Client Reference](docs/reference.md#frontend-client).
+### 8. (optional) Backfill data
 
-### 7. Use the API anywhere
+If you had data in Stripe before deploying `stripe-no-webhooks`, you can backfill your database by running:
 
-```typescript
-// Import the client you created in lib/stripe.ts
-import { stripe } from "@/lib/stripe";
-
-// Check subscription status
-const hasAccess = await stripe.subscriptions.isActive(userId);
-
-// Get subscription details
-const sub = await stripe.subscriptions.get(userId);
-console.log(sub?.plan?.name); // "Premium"
-
-// Use credits
-const result = await stripe.credits.consume({
-  userId,
-  creditType: "api_calls",
-  amount: 1,
-});
-
-if (!result.success) {
-  throw new Error("Insufficient credits");
-}
+```bash
+npx stripe-no-webhooks backfill
 ```
-
-## Documentation
-
-- [Getting Started](docs/getting-started.md) - Full setup walkthrough
-- [Credits](docs/credits.md) - Allocate, consume, and top-up credits
-- [Team Billing](docs/team-billing.md) - Org subscriptions & per-seat credits
-- [API Reference](docs/reference.md) - Quick lookup
