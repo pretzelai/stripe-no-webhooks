@@ -5,19 +5,11 @@ import type { TransactionSource } from "../credits";
 import type { CreditsGrantTo } from "../credits/lifecycle";
 import type { AutoTopUpFailedReason } from "../credits/topup";
 
-// ============================================================================
-// User & Auth
-// ============================================================================
-
 export interface User {
   id: string;
   name?: string;
   email?: string;
 }
-
-// ============================================================================
-// Callbacks
-// ============================================================================
 
 export interface StripeWebhookCallbacks {
   onSubscriptionCreated?: (
@@ -80,10 +72,6 @@ export interface StripeWebhookCallbacks {
   }) => void | Promise<void>;
 }
 
-// ============================================================================
-// Config Types
-// ============================================================================
-
 export interface CreditsConfig {
   grantTo?: CreditsGrantTo;
   onTopUpCompleted?: (params: {
@@ -125,10 +113,6 @@ export interface CreditsConfig {
   }) => void | Promise<void>;
 }
 
-/**
- * Core configuration for the Stripe client.
- * Pass to createStripe() once, use everywhere.
- */
 export interface StripeConfig {
   stripeSecretKey?: string;
   stripeWebhookSecret?: string;
@@ -144,10 +128,6 @@ export interface StripeConfig {
   ) => string | Promise<string> | null | Promise<string | null>;
 }
 
-/**
- * Configuration for the HTTP request handler.
- * Pass to stripe.createHandler().
- */
 export interface HandlerConfig {
   resolveUser?: (
     request: Request
@@ -162,12 +142,7 @@ export interface HandlerConfig {
   automaticTax?: boolean;
 }
 
-// Legacy alias for backwards compatibility
 export type StripeHandlerConfig = StripeConfig & HandlerConfig;
-
-// ============================================================================
-// Request Bodies
-// ============================================================================
 
 export interface CheckoutRequestBody {
   planName?: string;
@@ -183,10 +158,6 @@ export interface CheckoutRequestBody {
 export interface CustomerPortalRequestBody {
   returnUrl?: string;
 }
-
-// ============================================================================
-// Internal Context (passed to route handlers)
-// ============================================================================
 
 export interface HandlerContext {
   stripe: Stripe;

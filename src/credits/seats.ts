@@ -63,7 +63,6 @@ export type RemoveSeatResult =
 export function createSeatHandler(config: Config) {
   const { stripe, pool, schema, billingConfig, mode, grantTo, callbacks } = config;
 
-  // Local wrappers that use closure variables
   async function resolveStripeCustomerId(entityId: string): Promise<string | null> {
     if (!pool) return null;
     return getStripeCustomerId(pool, schema, entityId);
@@ -77,10 +76,6 @@ export function createSeatHandler(config: Config) {
     return getPlanFromSubscription(subscription, billingConfig, mode);
   }
 
-  /**
-   * Grant credits to a seat user based on the org's subscription plan.
-   * Internal function used by both addSeat and lifecycle hooks.
-   */
   async function grantSeatCredits(
     userId: string,
     plan: Plan,
@@ -117,30 +112,19 @@ export function createSeatHandler(config: Config) {
     return creditsGranted;
   }
 
-  /**
-   * Add a user as a seat of an org's subscription.
-   * - In "seat-users" mode: grants credits to the individual user
-   * - In "subscriber" mode: grants credits to the org (shared pool)
-   * - In "manual" mode: no credit granting
-   * - If plan.perSeat is true: increments Stripe subscription quantity
-   * This operation is idempotent.
-   */
   async function addSeat(params: AddSeatParams): Promise<AddSeatResult> {
     const { userId, orgId } = params;
 
-    // Look up org's Stripe customer
     const customerId = await resolveStripeCustomerId(orgId);
     if (!customerId) {
       return { success: false, error: "Org has no Stripe customer" };
     }
 
-    // Get org's active subscription
     const subscription = await resolveActiveSubscription(customerId);
     if (!subscription) {
       return { success: false, error: "No active subscription found for org" };
     }
 
-    // Get plan from subscription
     const plan = resolvePlan(subscription);
     if (!plan) {
       return { success: false, error: "Could not resolve plan from subscription" };
@@ -149,13 +133,11 @@ export function createSeatHandler(config: Config) {
     let creditsGranted: Record<string, number> = {};
     let alreadyProcessed = false;
 
-    // Handle credits based on grantTo mode
     if (grantTo !== "manual" && plan.credits) {
-      // Determine who gets the credits
       const creditRecipient = grantTo === "seat-users" ? userId : orgId;
       const idempotencyPrefix = `seat_${orgId}_${userId}_${subscription.id}`;
 
-      // In seat-users mode, check for conflicts (user can only be seat of one subscription)
+      // User can only be seat of one subscription
       if (grantTo === "seat-users") {
         const existingSubscription = await getUserSeatSubscription(userId);
         if (existingSubscription && existingSubscription !== subscription.id) {
@@ -187,8 +169,6 @@ export function createSeatHandler(config: Config) {
       }
     }
 
-    // Handle per-seat billing (if configured)
-    // Always attempt the Stripe call - it has its own idempotency key
     if (plan.perSeat) {
       const item = subscription.items.data[0];
       if (item) {
@@ -206,30 +186,19 @@ export function createSeatHandler(config: Config) {
     return { success: true, creditsGranted };
   }
 
-  /**
-   * Remove a user as a seat of an org's subscription.
-   * - In "seat-users" mode: revokes credits from the user
-   * - In "subscriber" mode: revokes credits from the org (shared pool)
-   * - In "manual" mode: no credit revocation
-   * - If plan.perSeat is true: decrements Stripe subscription quantity
-   * This operation is idempotent.
-   */
   async function removeSeat(params: RemoveSeatParams): Promise<RemoveSeatResult> {
     const { userId, orgId } = params;
 
-    // Look up org's Stripe customer
     const customerId = await resolveStripeCustomerId(orgId);
     if (!customerId) {
       return { success: false, error: "Org has no Stripe customer" };
     }
 
-    // Get org's active subscription
     const subscription = await resolveActiveSubscription(customerId);
     if (!subscription) {
       return { success: false, error: "No active subscription found for org" };
     }
 
-    // Get plan from subscription
     const plan = resolvePlan(subscription);
     if (!plan) {
       return { success: false, error: "Could not resolve plan from subscription" };
@@ -237,9 +206,7 @@ export function createSeatHandler(config: Config) {
 
     const creditsRevoked: Record<string, number> = {};
 
-    // Handle credits based on grantTo mode
     if (grantTo !== "manual" && plan.credits) {
-      // Determine who to revoke from (same entity that received credits in addSeat)
       const creditHolder = grantTo === "seat-users" ? userId : orgId;
       const grantsFromSeat = await getCreditsGrantedBySource(creditHolder, subscription.id);
 
@@ -271,7 +238,6 @@ export function createSeatHandler(config: Config) {
       }
     }
 
-    // Handle per-seat billing
     if (plan.perSeat) {
       const item = subscription.items.data[0];
       if (item) {

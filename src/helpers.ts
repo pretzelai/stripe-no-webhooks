@@ -2,20 +2,10 @@ import type Stripe from "stripe";
 import type { Pool } from "pg";
 import type { BillingConfig, Plan } from "./BillingConfig";
 
-// ============================================================================
-// Plan Resolution Helpers
-// ============================================================================
-
-/**
- * Check if a plan has credits configured.
- */
 export function planHasCredits(plan: Plan | null | undefined): boolean {
   return plan?.credits !== undefined && Object.keys(plan.credits).length > 0;
 }
 
-/**
- * Find a plan by its Stripe price ID.
- */
 export function findPlanByPriceId(
   billingConfig: BillingConfig | undefined,
   mode: "test" | "production",
@@ -25,9 +15,6 @@ export function findPlanByPriceId(
   return plans?.find((p) => p.price.some((pr) => pr.id === priceId)) ?? null;
 }
 
-/**
- * Get the plan for a subscription by extracting its price ID.
- */
 export function getPlanFromSubscription(
   subscription: Stripe.Subscription,
   billingConfig: BillingConfig | undefined,
@@ -39,23 +26,12 @@ export function getPlanFromSubscription(
   return findPlanByPriceId(billingConfig, mode, priceId);
 }
 
-// ============================================================================
-// Stripe Helpers
-// ============================================================================
-
-/**
- * Get the customer ID string from a subscription.
- */
 export function getCustomerIdFromSubscription(subscription: Stripe.Subscription): string {
   return typeof subscription.customer === "string"
     ? subscription.customer
     : subscription.customer.id;
 }
 
-/**
- * Get the active or trialing subscription for a customer.
- * Expands price data to ensure unit_amount is available.
- */
 export async function getActiveSubscription(
   stripe: Stripe,
   customerId: string
@@ -72,13 +48,6 @@ export async function getActiveSubscription(
   );
 }
 
-// ============================================================================
-// Database Helpers
-// ============================================================================
-
-/**
- * Get the Stripe customer ID for a user/entity from the database.
- */
 export async function getStripeCustomerId(
   pool: Pool,
   schema: string,
@@ -91,9 +60,6 @@ export async function getStripeCustomerId(
   return result.rows[0]?.stripe_customer_id ?? null;
 }
 
-/**
- * Get the user ID from a Stripe customer ID.
- */
 export async function getUserIdFromCustomer(
   pool: Pool,
   schema: string,

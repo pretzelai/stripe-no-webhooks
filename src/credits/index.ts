@@ -1,6 +1,11 @@
 import { Pool } from "pg";
-import { setPool } from "./db";
-import { getBalance, getAllBalances, hasCredits } from "./balance";
+import {
+  setPool,
+  getBalance,
+  getAllBalances,
+  hasCredits,
+  getHistory,
+} from "./db";
 import { consume } from "./consume";
 import {
   grant,
@@ -9,7 +14,6 @@ import {
   revokeAllCreditTypesForUser,
   setBalance,
 } from "./grant";
-import { getHistory } from "./history";
 
 export { CreditError } from "./types";
 export type {

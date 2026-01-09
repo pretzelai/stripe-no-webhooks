@@ -84,12 +84,7 @@ export async function handleWebhook(
   }
 }
 
-/**
- * Safety net for duplicate subscriptions.
- * If a customer somehow ends up with multiple active subscriptions,
- * keeps the highest-value one and cancels the rest.
- * Returns true if this subscription should skip credit granting (it will be cancelled).
- */
+// Safety net: if customer has multiple active subscriptions, keep highest-value one
 async function handleDuplicateSubscriptions(
   ctx: WebhookContext,
   subscription: Stripe.Subscription
@@ -128,12 +123,7 @@ async function handleDuplicateSubscriptions(
   return subscription.id !== toKeep.id;
 }
 
-/**
- * Handle upgrade via setup mode checkout.
- * When user upgrades without a payment method, we use setup mode to collect one,
- * then update their existing subscription with the new price.
- * This fires subscription.updated which triggers onSubscriptionPlanChanged for credit handling.
- */
+// Complete upgrade after setup mode checkout collected payment method
 async function handleSetupModeUpgrade(
   ctx: WebhookContext,
   session: Stripe.Checkout.Session
@@ -185,9 +175,6 @@ async function handleSetupModeUpgrade(
   }
 }
 
-/**
- * Extract payment method ID from a checkout session's setup intent.
- */
 async function getPaymentMethodFromSetupIntent(
   ctx: WebhookContext,
   session: Stripe.Checkout.Session
@@ -205,10 +192,7 @@ async function getPaymentMethodFromSetupIntent(
     : setupIntent.payment_method?.id;
 }
 
-/**
- * Save subscription's payment method as the customer's default.
- * This enables auto top-up and ensures future charges work with off-session payments.
- */
+// Save payment method as default for future off-session charges (auto top-up, renewals)
 async function saveDefaultPaymentMethod(
   ctx: WebhookContext,
   session: Stripe.Checkout.Session

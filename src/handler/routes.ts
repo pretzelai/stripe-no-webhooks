@@ -11,10 +11,6 @@ import {
   getActiveSubscription,
 } from "../helpers";
 
-// ============================================================================
-// Response Helpers
-// ============================================================================
-
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -38,10 +34,6 @@ function successResponse(
   return Response.redirect(redirectUrl, 303);
 }
 
-// ============================================================================
-// Subscription Helpers
-// ============================================================================
-
 async function hasPaymentMethod(
   stripe: Stripe,
   customerId: string
@@ -50,10 +42,6 @@ async function hasPaymentMethod(
   if ("deleted" in customer && customer.deleted) return false;
   return !!(customer as Stripe.Customer).invoice_settings?.default_payment_method;
 }
-
-// ============================================================================
-// Price Resolution
-// ============================================================================
 
 function resolvePriceId(
   body: CheckoutRequestBody,
@@ -109,14 +97,7 @@ async function getPriceMode(
   return price.type === "recurring" ? "subscription" : "payment";
 }
 
-// ============================================================================
-// Credit & Proration Helpers
-// ============================================================================
-
-/**
- * Determine proration behavior based on credit presence.
- * Only disable proration when BOTH plans have credits (to prevent gaming).
- */
+// Disable proration when BOTH plans have credits (to prevent gaming)
 function shouldDisableProration(
   billingConfig: BillingConfig | undefined,
   mode: "test" | "production",
@@ -127,10 +108,6 @@ function shouldDisableProration(
   const newPlan = findPlanByPriceId(billingConfig, mode, newPriceId);
   return planHasCredits(oldPlan) && planHasCredits(newPlan);
 }
-
-// ============================================================================
-// Checkout Handler
-// ============================================================================
 
 export async function handleCheckout(
   request: Request,
@@ -174,9 +151,7 @@ export async function handleCheckout(
       createIfNotFound: true,
     });
 
-    // ========================================================================
-    // Smart Checkout: Handle existing subscriptions
-    // ========================================================================
+    // Handle existing subscriptions (smart checkout)
     if (customerId && priceMode === "subscription") {
       const currentSub = await getActiveSubscription(ctx.stripe, customerId);
 
@@ -184,7 +159,6 @@ export async function handleCheckout(
         const currentPriceId = currentSub.items.data[0]?.price?.id;
         const currentAmount = currentSub.items.data[0]?.price?.unit_amount ?? 0;
 
-        // Already on this plan
         if (currentPriceId === priceId) {
           return jsonResponse({
             success: true,
@@ -193,19 +167,14 @@ export async function handleCheckout(
           });
         }
 
-        // Get target plan amount
         const targetPrice = await ctx.stripe.prices.retrieve(priceId);
         const targetAmount = targetPrice.unit_amount ?? 0;
         const customerHasPaymentMethod = await hasPaymentMethod(ctx.stripe, customerId);
 
-        // Determine if this is an upgrade or downgrade
         const isUpgrade = targetAmount > currentAmount;
         const isDowngrade = targetAmount < currentAmount;
 
-        // ==================================================================
-        // DOWNGRADE: Schedule for period end
-        // Price changes immediately but credits stay until renewal (invoice.paid)
-        // ==================================================================
+        // Downgrade: schedule for period end (credits stay until renewal)
         if (isDowngrade) {
           await ctx.stripe.subscriptions.update(currentSub.id, {
             items: [{ id: currentSub.items.data[0].id, price: priceId }],
@@ -226,14 +195,7 @@ export async function handleCheckout(
           }, successUrl);
         }
 
-        // ==================================================================
-        // UPGRADE: Apply immediately
-        // - With payment method: direct update
-        // - Without payment method: setup mode checkout to collect card
-        // Credit handling based on upgrade type:
-        // - Free → Paid: revoke free credits, grant paid credits
-        // - Paid → Paid: keep old credits + grant new (no proration compensation)
-        // ==================================================================
+        // Upgrade: apply immediately
         const disableProration = shouldDisableProration(
           ctx.billingConfig,
           ctx.mode,
@@ -241,7 +203,6 @@ export async function handleCheckout(
           priceId
         );
 
-        // Direct upgrade if customer has payment method
         if (customerHasPaymentMethod && isUpgrade) {
           try {
             await ctx.stripe.subscriptions.update(currentSub.id, {
@@ -273,8 +234,7 @@ export async function handleCheckout(
           }, successUrl);
         }
 
-        // No payment method - use setup mode checkout to collect one,
-        // then webhook handler updates the subscription
+        // No payment method - collect via setup mode checkout
         const session = await ctx.stripe.checkout.sessions.create({
           customer: customerId,
           mode: "setup",
@@ -299,9 +259,7 @@ export async function handleCheckout(
       }
     }
 
-    // ========================================================================
-    // Standard checkout: No existing subscription
-    // ========================================================================
+    // Standard checkout (no existing subscription)
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       line_items: [{ price: priceId, quantity: body.quantity ?? 1 }],
       mode: priceMode,
@@ -350,10 +308,6 @@ export async function handleCheckout(
   }
 }
 
-// ============================================================================
-// Customer Portal Handler
-// ============================================================================
-
 export async function handleCustomerPortal(
   request: Request,
   ctx: HandlerContext
@@ -361,7 +315,6 @@ export async function handleCustomerPortal(
   try {
     const body: CustomerPortalRequestBody = await request.json().catch(() => ({}));
 
-    // Resolve user from request
     const user = ctx.resolveUser ? await ctx.resolveUser(request) : null;
     if (!user) {
       return errorResponse(
@@ -370,10 +323,8 @@ export async function handleCustomerPortal(
       );
     }
 
-    // Resolve org from request (if configured)
     const orgId = ctx.resolveOrg ? await ctx.resolveOrg(request) : null;
 
-    // Determine whose portal to open: org or user
     const customerId = await ctx.resolveStripeCustomerId({
       user: orgId ? { id: orgId } : user,
       createIfNotFound: false,

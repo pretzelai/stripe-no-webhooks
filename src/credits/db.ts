@@ -48,6 +48,15 @@ export async function getAllBalances(
   return balances;
 }
 
+export async function hasCredits(
+  userId: string,
+  creditType: string,
+  amount: number
+): Promise<boolean> {
+  const balance = await getBalance(userId, creditType);
+  return balance >= amount;
+}
+
 export async function checkIdempotencyKey(key: string): Promise<boolean> {
   const p = ensurePool();
   const result = await p.query(
@@ -152,11 +161,6 @@ async function ensureBalanceRowExists(
   );
 }
 
-/*
-  Retrieves the credit balance for a user and credit type,
-  locking the row with FOR UPDATE to prevent race conditions
-  during a transaction.
-*/
 async function getBalanceForUpdate(
   client: PoolClient,
   userId: string,
@@ -355,10 +359,9 @@ export async function atomicSet(
 
 export async function getHistory(
   userId: string,
-  creditType?: string,
-  limit = 50,
-  offset = 0
+  options?: { creditType?: string; limit?: number; offset?: number }
 ): Promise<CreditTransaction[]> {
+  const { creditType, limit = 50, offset = 0 } = options ?? {};
   const p = ensurePool();
 
   let query = `
@@ -396,10 +399,7 @@ export async function getHistory(
   }));
 }
 
-/**
- * Find all active seat users for a subscription.
- * A user is "active" if their most recent seat action is 'seat_grant' (not 'seat_revoke').
- */
+// "Active" = most recent seat action is 'seat_grant' (not 'seat_revoke')
 export async function getActiveSeatUsers(
   subscriptionId: string
 ): Promise<string[]> {
@@ -418,10 +418,6 @@ export async function getActiveSeatUsers(
   return result.rows.map((row) => row.user_id);
 }
 
-/**
- * Find which subscription a user is a seat of (if any).
- * Returns null if the user is not an active seat of any subscription.
- */
 export async function getUserSeatSubscription(
   userId: string
 ): Promise<string | null> {
@@ -440,18 +436,12 @@ export async function getUserSeatSubscription(
   return result.rows[0]?.subscription_id ?? null;
 }
 
-/**
- * Get the NET credits from a subscription (grants minus revocations).
- * Returns a map of credit_type -> net amount.
- * Used by lifecycle/seats to revoke only subscription credits (preserving top-ups).
- */
+// Returns NET credits from a subscription (grants - revocations), preserving top-ups
 export async function getCreditsGrantedBySource(
   userId: string,
   sourceId: string
 ): Promise<Record<string, number>> {
   const p = ensurePool();
-  // Sum all subscription-related transactions (positive grants and negative revocations)
-  // to get the NET credits still attributable to this subscription
   const result = await p.query(
     `SELECT credit_type_id, SUM(amount) as net_amount
      FROM ${schema}.credit_ledger

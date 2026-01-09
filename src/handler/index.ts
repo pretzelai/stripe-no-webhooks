@@ -34,7 +34,6 @@ import type {
 import { handleCheckout, handleCustomerPortal } from "./routes";
 import { handleWebhook } from "./webhook";
 
-// Re-export types
 export type { CreditsGrantTo };
 export type {
   TopUpParams,
@@ -59,12 +58,7 @@ export type {
   CustomerPortalRequestBody,
 } from "./types";
 
-// Keep old name as alias for backwards compatibility
 export { createStripe as createStripeHandler };
-
-// ============================================================================
-// Main Factory
-// ============================================================================
 
 export function createStripe(config: StripeConfig = {}) {
   const {
@@ -84,7 +78,6 @@ export function createStripe(config: StripeConfig = {}) {
   const mode = getMode(stripeSecretKey);
   const grantTo = creditsConfig?.grantTo ?? "subscriber";
 
-  // Initialize shared modules
   initCredits(pool, schema);
 
   const sync = databaseUrl
@@ -103,10 +96,6 @@ export function createStripe(config: StripeConfig = {}) {
     mode,
   });
 
-  // ============================================================================
-  // Customer Resolution
-  // ============================================================================
-
   async function resolveStripeCustomerId(options: {
     user: User;
     createIfNotFound?: boolean;
@@ -114,7 +103,6 @@ export function createStripe(config: StripeConfig = {}) {
     const { user, createIfNotFound } = options;
     const { id: userId, name, email } = user;
 
-    // Check user_stripe_customer_map table
     if (pool) {
       const result = await pool.query(
         `SELECT stripe_customer_id FROM ${schema}.user_stripe_customer_map WHERE user_id = $1`,
@@ -125,7 +113,6 @@ export function createStripe(config: StripeConfig = {}) {
       }
     }
 
-    // Try mapUserIdToStripeCustomerId fallback
     if (mapUserIdToStripeCustomerId) {
       const customerId = await mapUserIdToStripeCustomerId(userId);
       if (customerId) {
@@ -133,7 +120,6 @@ export function createStripe(config: StripeConfig = {}) {
       }
     }
 
-    // Create a new Stripe customer if requested
     if (createIfNotFound) {
       const customerParams: Stripe.CustomerCreateParams = {
         metadata: { user_id: userId },
@@ -143,7 +129,6 @@ export function createStripe(config: StripeConfig = {}) {
 
       const customer = await stripe.customers.create(customerParams);
 
-      // Save mapping
       if (pool) {
         await pool.query(
           `INSERT INTO ${schema}.user_stripe_customer_map (user_id, stripe_customer_id)
@@ -158,10 +143,6 @@ export function createStripe(config: StripeConfig = {}) {
 
     return null;
   }
-
-  // ============================================================================
-  // Credits API with Auto Top-Up
-  // ============================================================================
 
   function createCreditsApi(callbacks?: {
     onAutoTopUpFailed?: (params: {
@@ -210,7 +191,6 @@ export function createStripe(config: StripeConfig = {}) {
       const result = await credits.consume(params);
 
       if (result.success) {
-        // Fire-and-forget: trigger auto top-up check
         topUpHandler
           .triggerAutoTopUpIfNeeded({
             userId: params.userId,
@@ -247,16 +227,11 @@ export function createStripe(config: StripeConfig = {}) {
     };
   }
 
-  // Create credits API with callbacks from config
   const creditsApi = createCreditsApi({
     onTopUpCompleted: creditsConfig?.onTopUpCompleted,
     onAutoTopUpFailed: creditsConfig?.onAutoTopUpFailed,
     onCreditsLow: creditsConfig?.onCreditsLow,
   });
-
-  // ============================================================================
-  // Seat Management
-  // ============================================================================
 
   const seatHandler = createSeatHandler({
     stripe,
@@ -271,10 +246,6 @@ export function createStripe(config: StripeConfig = {}) {
     },
   });
 
-  // ============================================================================
-  // Handler Factory
-  // ============================================================================
-
   function createHandler(handlerConfig: HandlerConfig = {}) {
     const {
       resolveUser,
@@ -283,7 +254,6 @@ export function createStripe(config: StripeConfig = {}) {
       automaticTax = false,
     } = handlerConfig;
 
-    // Create lifecycle and handlers with callbacks
     const creditLifecycle = createCreditLifecycle({
       pool,
       schema,
@@ -331,7 +301,6 @@ export function createStripe(config: StripeConfig = {}) {
       callbacks,
     };
 
-    // The actual request handler
     async function handler(request: Request): Promise<Response> {
       const url = new URL(request.url);
       const action = url.pathname.split("/").filter(Boolean).pop();
@@ -363,24 +332,11 @@ export function createStripe(config: StripeConfig = {}) {
     return handler;
   }
 
-  // ============================================================================
-  // Return Client Object
-  // ============================================================================
-
   return {
-    /** Create an HTTP request handler for checkout, webhooks, and customer portal */
     createHandler,
-
-    /** Subscription status and info */
     subscriptions: subscriptionsApi,
-
-    /** Credit balance and operations */
     credits: creditsApi,
-
-    /** Add a user as a seat in an org subscription */
     addSeat: seatHandler.addSeat,
-
-    /** Remove a user as a seat from an org subscription */
     removeSeat: seatHandler.removeSeat,
   };
 }
