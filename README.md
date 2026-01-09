@@ -7,9 +7,9 @@ Opinionated library to help you implement payments with Stripe. It syncs Stripe 
 This library is a wrapper on Stripe SDK (with some bells and whistles). It gives you an opinionated and clear path to implement payments:
 
 1. Define plans in code which sync to Stripe
-2. No need for webhook listerners - the library syncs all Stripe data locally in you DB
-3. Use simple APIs to create subscriptions and manages credits
-4. Use a handful of callbacks (for eg, `onSubscriptionCreated`) for custom logic as needed
+2. No manual webhook setup - the library handles webhooks and syncs Stripe data to your DB
+3. Simple APIs for subscriptions and credits
+4. Optional callbacks (`onSubscriptionCreated`, etc.) for custom logic
 
 ## Setup
 
@@ -105,7 +105,7 @@ export default function Pricing() {
 }
 ```
 
-### 8. (optional) Backfill data
+### 7. (optional) Backfill data
 
 If you had data in Stripe before deploying `stripe-no-webhooks`, you can backfill your database by running:
 
