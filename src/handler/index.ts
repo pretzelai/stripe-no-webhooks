@@ -1,7 +1,7 @@
 import { StripeSync } from "@pretzelai/stripe-sync-engine";
 import Stripe from "stripe";
 import { Pool } from "pg";
-import { getMode } from "../utils";
+import { getMode } from "../helpers";
 import { initCredits, credits, type ConsumeResult } from "../credits";
 import { createCreditLifecycle, type CreditsGrantTo } from "../credits/lifecycle";
 import {

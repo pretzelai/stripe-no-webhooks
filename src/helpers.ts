@@ -2,6 +2,16 @@ import type Stripe from "stripe";
 import type { Pool } from "pg";
 import type { BillingConfig, Plan } from "./BillingConfig";
 
+export function getMode(stripeKey: string): "test" | "production" {
+  if (stripeKey.includes("_test_")) {
+    return "test";
+  } else if (stripeKey.includes("_live_")) {
+    return "production";
+  } else {
+    throw new Error("Invalid Stripe key");
+  }
+}
+
 export function planHasCredits(plan: Plan | null | undefined): boolean {
   return plan?.credits !== undefined && Object.keys(plan.credits).length > 0;
 }

@@ -6,8 +6,8 @@ import {
   hasCredits,
   getHistory,
 } from "./db";
-import { consume } from "./consume";
 import {
+  consume,
   grant,
   revoke,
   revokeAll,
