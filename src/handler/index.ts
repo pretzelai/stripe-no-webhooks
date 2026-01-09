@@ -13,7 +13,7 @@ import {
   type AutoTopUpFailedReason,
 } from "../credits/topup";
 import {
-  createSeatHandler,
+  createSeatsApi,
   type AddSeatParams,
   type AddSeatResult,
   type RemoveSeatParams,
@@ -58,9 +58,7 @@ export type {
   CustomerPortalRequestBody,
 } from "./types";
 
-export { createStripe as createStripeHandler };
-
-export function createStripe(config: StripeConfig = {}) {
+export function createStripeHandler(config: StripeConfig = {}) {
   const {
     stripeSecretKey = process.env.STRIPE_SECRET_KEY!,
     stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET!,
@@ -233,7 +231,7 @@ export function createStripe(config: StripeConfig = {}) {
     onCreditsLow: creditsConfig?.onCreditsLow,
   });
 
-  const seatHandler = createSeatHandler({
+  const seatsApi = createSeatsApi({
     stripe,
     pool,
     schema,
@@ -336,7 +334,6 @@ export function createStripe(config: StripeConfig = {}) {
     createHandler,
     subscriptions: subscriptionsApi,
     credits: creditsApi,
-    addSeat: seatHandler.addSeat,
-    removeSeat: seatHandler.removeSeat,
+    seats: seatsApi,
   };
 }

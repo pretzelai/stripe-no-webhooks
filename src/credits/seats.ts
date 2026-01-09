@@ -60,7 +60,7 @@ export type RemoveSeatResult =
   | { success: true; creditsRevoked: Record<string, number> }
   | { success: false; error: string };
 
-export function createSeatHandler(config: Config) {
+export function createSeatsApi(config: Config) {
   const { stripe, pool, schema, billingConfig, mode, grantTo, callbacks } = config;
 
   async function resolveStripeCustomerId(entityId: string): Promise<string | null> {
@@ -112,7 +112,7 @@ export function createSeatHandler(config: Config) {
     return creditsGranted;
   }
 
-  async function addSeat(params: AddSeatParams): Promise<AddSeatResult> {
+  async function add(params: AddSeatParams): Promise<AddSeatResult> {
     const { userId, orgId } = params;
 
     const customerId = await resolveStripeCustomerId(orgId);
@@ -186,7 +186,7 @@ export function createSeatHandler(config: Config) {
     return { success: true, creditsGranted };
   }
 
-  async function removeSeat(params: RemoveSeatParams): Promise<RemoveSeatResult> {
+  async function remove(params: RemoveSeatParams): Promise<RemoveSeatResult> {
     const { userId, orgId } = params;
 
     const customerId = await resolveStripeCustomerId(orgId);
@@ -259,8 +259,5 @@ export function createSeatHandler(config: Config) {
     return { success: true, creditsRevoked };
   }
 
-  return {
-    addSeat,
-    removeSeat,
-  };
+  return { add, remove };
 }

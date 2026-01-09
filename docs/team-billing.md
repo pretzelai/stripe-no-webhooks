@@ -56,9 +56,9 @@ Two modes via `grantTo` config:
 
 ```typescript
 // lib/stripe.ts - credits go to subscriber (org) by default
-import { createStripe } from "stripe-no-webhooks";
+import { createStripeHandler } from "stripe-no-webhooks";
 
-export const stripe = createStripe({ billingConfig });
+export const stripe = createStripeHandler({ billingConfig });
 ```
 
 ```typescript
@@ -77,9 +77,9 @@ await stripe.credits.consume({
 
 ```typescript
 // lib/stripe.ts
-import { createStripe } from "stripe-no-webhooks";
+import { createStripeHandler } from "stripe-no-webhooks";
 
-export const stripe = createStripe({
+export const stripe = createStripeHandler({
   billingConfig,
   credits: { grantTo: "seat-users" },
 });
@@ -91,10 +91,10 @@ Each team member gets their own credit allocation automatically when you add sea
 import { stripe } from "@/lib/stripe";
 
 // Add members
-await stripe.addSeat({ userId: "user_123", orgId: "org_456" });
+await stripe.seats.add({ userId: "user_123", orgId: "org_456" });
 
 // Remove members
-await stripe.removeSeat({ userId: "user_123", orgId: "org_456" });
+await stripe.seats.remove({ userId: "user_123", orgId: "org_456" });
 
 // Consume individual credits
 await stripe.credits.consume({
@@ -116,4 +116,4 @@ Charge per team member ($X/user/month):
 }
 ```
 
-`addSeat` increments subscription quantity (prorated). `removeSeat` decrements it.
+`seats.add` increments subscription quantity (prorated). `seats.remove` decrements it.

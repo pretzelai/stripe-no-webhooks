@@ -5,10 +5,10 @@ Quick lookup for all APIs.
 ## Client
 
 ```typescript
-import { createStripe } from "stripe-no-webhooks";
+import { createStripeHandler } from "stripe-no-webhooks";
 
 // Create once in lib/stripe.ts
-const stripe = createStripe({
+const stripe = createStripeHandler({
   stripeSecretKey?: string,          // Default: STRIPE_SECRET_KEY env
   stripeWebhookSecret?: string,      // Default: STRIPE_WEBHOOK_SECRET env
   databaseUrl?: string,              // Default: DATABASE_URL env
@@ -213,14 +213,14 @@ await stripe.credits.topUp({
 
 ```typescript
 // Add user as seat
-await stripe.addSeat({
+await stripe.seats.add({
   userId: string,
   orgId: string,
 }): Promise<{ success: true, creditsGranted: Record<string, number> }
             | { success: false, error: string }>
 
 // Remove user as seat
-await stripe.removeSeat({
+await stripe.seats.remove({
   userId: string,
   orgId: string,
 }): Promise<{ success: true, creditsRevoked: Record<string, number> }

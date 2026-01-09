@@ -1,8 +1,8 @@
-import { createStripe } from "stripe-no-webhooks";
+import { createStripeHandler } from "stripe-no-webhooks";
 import billingConfig from "../billing.config";
 
 // Initialize once, use everywhere
-export const stripe = createStripe({
+export const stripe = createStripeHandler({
   billingConfig,
   // Keys and database URL are read from environment variables by default:
   // - STRIPE_SECRET_KEY

@@ -11,7 +11,7 @@ import {
   cleanupAllTestData,
 } from "./setup";
 import { initCredits, credits } from "../src/credits";
-import { createSeatHandler } from "../src/credits/seats";
+import { createSeatsApi } from "../src/credits/seats";
 import type { BillingConfig } from "../src/BillingConfig";
 import StripeMock from "./stripe-mock";
 
@@ -142,7 +142,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
   test("grants credits to user when added as seat", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -151,7 +151,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
       grantTo: "seat-users",
     });
 
-    const result = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    const result = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -171,7 +171,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
   test("multiple users can be added as seats", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -180,9 +180,9 @@ describe("Seats: Add Seat (seat-users mode)", () => {
       grantTo: "seat-users",
     });
 
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
-    await seatHandler.addSeat({ userId: "user_bob", orgId: "org_1" });
-    await seatHandler.addSeat({ userId: "user_carol", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_bob", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_carol", orgId: "org_1" });
 
     // Each user should have their own credits
     expect(await credits.getBalance("user_alice", "api_calls")).toBe(5000);
@@ -193,7 +193,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
   test("idempotent: adding same seat twice returns success without double-granting", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -203,8 +203,8 @@ describe("Seats: Add Seat (seat-users mode)", () => {
     });
 
     // Add seat twice
-    const result1 = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
-    const result2 = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    const result1 = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
+    const result2 = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(result1.success).toBe(true);
     expect(result2.success).toBe(true);
@@ -214,7 +214,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
   });
 
   test("fails if org has no Stripe customer", async () => {
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -223,7 +223,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
       grantTo: "seat-users",
     });
 
-    const result = await seatHandler.addSeat({ userId: "user_alice", orgId: "nonexistent_org" });
+    const result = await seatsApi.add({ userId: "user_alice", orgId: "nonexistent_org" });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -236,7 +236,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
     await seedCustomer({ id: "cus_org_1", metadata: { user_id: "org_1" } });
     await seedUserMap({ userId: "org_1", stripeCustomerId: "cus_org_1" });
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -245,7 +245,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
       grantTo: "seat-users",
     });
 
-    const result = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    const result = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -258,7 +258,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
     await setupOrgWithSubscription("org_2", "cus_org_2", "sub_team_2", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -268,11 +268,11 @@ describe("Seats: Add Seat (seat-users mode)", () => {
     });
 
     // Add user to first org
-    const result1 = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    const result1 = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
     expect(result1.success).toBe(true);
 
     // Try to add same user to second org - should fail
-    const result2 = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_2" });
+    const result2 = await seatsApi.add({ userId: "user_alice", orgId: "org_2" });
     expect(result2.success).toBe(false);
     if (!result2.success) {
       expect(result2.error).toContain("already a seat of another subscription");
@@ -288,7 +288,7 @@ describe("Seats: Add Seat (subscriber mode)", () => {
   test("grants credits to org (shared pool) when seat added", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -297,7 +297,7 @@ describe("Seats: Add Seat (subscriber mode)", () => {
       grantTo: "subscriber", // Credits go to org, not user
     });
 
-    const result = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    const result = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(result.success).toBe(true);
 
@@ -309,7 +309,7 @@ describe("Seats: Add Seat (subscriber mode)", () => {
   test("multiple seats add to org's shared pool", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -318,8 +318,8 @@ describe("Seats: Add Seat (subscriber mode)", () => {
       grantTo: "subscriber",
     });
 
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
-    await seatHandler.addSeat({ userId: "user_bob", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_bob", orgId: "org_1" });
 
     // Org should have 2x credits (one per seat)
     expect(await credits.getBalance("org_1", "api_calls")).toBe(10000);
@@ -334,7 +334,7 @@ describe("Seats: Remove Seat", () => {
   test("revokes credits from user when removed as seat", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -344,11 +344,11 @@ describe("Seats: Remove Seat", () => {
     });
 
     // Add seat
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
     expect(await credits.getBalance("user_alice", "api_calls")).toBe(5000);
 
     // Remove seat
-    const result = await seatHandler.removeSeat({ userId: "user_alice", orgId: "org_1" });
+    const result = await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -364,7 +364,7 @@ describe("Seats: Remove Seat", () => {
   test("only revokes credits from this subscription (preserves top-ups)", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -374,7 +374,7 @@ describe("Seats: Remove Seat", () => {
     });
 
     // Add seat
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     // User also has a top-up
     await credits.grant({
@@ -388,7 +388,7 @@ describe("Seats: Remove Seat", () => {
     expect(await credits.getBalance("user_alice", "api_calls")).toBe(6000);
 
     // Remove seat - should only revoke seat credits, not top-up
-    await seatHandler.removeSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     // User should still have top-up credits
     expect(await credits.getBalance("user_alice", "api_calls")).toBe(1000);
@@ -397,7 +397,7 @@ describe("Seats: Remove Seat", () => {
   test("revokes partial balance if user consumed some credits", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -407,7 +407,7 @@ describe("Seats: Remove Seat", () => {
     });
 
     // Add seat
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     // User consumes some credits
     await credits.consume({
@@ -420,7 +420,7 @@ describe("Seats: Remove Seat", () => {
     expect(await credits.getBalance("user_alice", "api_calls")).toBe(2000);
 
     // Remove seat - should revoke remaining balance
-    const result = await seatHandler.removeSeat({ userId: "user_alice", orgId: "org_1" });
+    const result = await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -439,7 +439,7 @@ describe("Seats: Per-Seat Billing", () => {
   test("increments subscription quantity when adding seat", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_per_seat_1", "price_team_per_seat", 1);
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -449,7 +449,7 @@ describe("Seats: Per-Seat Billing", () => {
     });
 
     // Add seat
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     // Check subscription quantity in mock
     const subscription = await stripe.subscriptions.retrieve("sub_per_seat_1");
@@ -459,7 +459,7 @@ describe("Seats: Per-Seat Billing", () => {
   test("decrements subscription quantity when removing seat", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_per_seat_1", "price_team_per_seat", 3);
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -469,10 +469,10 @@ describe("Seats: Per-Seat Billing", () => {
     });
 
     // Add seat first (to create ledger entry)
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     // Remove seat
-    await seatHandler.removeSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     // Check subscription quantity - should go down
     const subscription = await stripe.subscriptions.retrieve("sub_per_seat_1");
@@ -482,7 +482,7 @@ describe("Seats: Per-Seat Billing", () => {
   test("does not go below 1 seat when removing", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_per_seat_1", "price_team_per_seat", 1);
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -492,8 +492,8 @@ describe("Seats: Per-Seat Billing", () => {
     });
 
     // Add and remove seat
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
-    await seatHandler.removeSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     // Quantity should still be at least 1
     const subscription = await stripe.subscriptions.retrieve("sub_per_seat_1");
@@ -509,7 +509,7 @@ describe("Seats: Manual Mode", () => {
   test("does not grant credits in manual mode", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -518,7 +518,7 @@ describe("Seats: Manual Mode", () => {
       grantTo: "manual",
     });
 
-    const result = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    const result = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -541,7 +541,7 @@ describe("Seats: Callbacks", () => {
 
     const grantedCredits: Array<{ userId: string; creditType: string; amount: number }> = [];
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -559,7 +559,7 @@ describe("Seats: Callbacks", () => {
       },
     });
 
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(grantedCredits).toHaveLength(2);
     expect(grantedCredits).toContainEqual({ userId: "user_alice", creditType: "api_calls", amount: 5000 });
@@ -571,7 +571,7 @@ describe("Seats: Callbacks", () => {
 
     const revokedCredits: Array<{ userId: string; creditType: string; amount: number }> = [];
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -589,8 +589,8 @@ describe("Seats: Callbacks", () => {
       },
     });
 
-    await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
-    await seatHandler.removeSeat({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
+    await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     expect(revokedCredits).toHaveLength(2);
     expect(revokedCredits).toContainEqual({ userId: "user_alice", creditType: "api_calls", amount: 5000 });
@@ -606,7 +606,7 @@ describe("Seats: Plan Without Credits", () => {
   test("addSeat succeeds for plan without credits", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_no_credits", "price_no_credits");
 
-    const seatHandler = createSeatHandler({
+    const seatsApi = createSeatsApi({
       stripe: stripe as any,
       pool,
       schema: "stripe",
@@ -615,7 +615,7 @@ describe("Seats: Plan Without Credits", () => {
       grantTo: "seat-users",
     });
 
-    const result = await seatHandler.addSeat({ userId: "user_alice", orgId: "org_1" });
+    const result = await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(result.success).toBe(true);
     if (result.success) {
