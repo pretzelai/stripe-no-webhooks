@@ -6,6 +6,11 @@ import type { CreditsGrantTo } from "./lifecycle";
 import { CreditError } from "./types";
 import { credits } from "./index";
 import { getUserSeatSubscription, getCreditsGrantedBySource } from "./db";
+import {
+  getPlanFromSubscription,
+  getStripeCustomerId,
+  getActiveSubscription,
+} from "../helpers";
 
 type Callbacks = {
   onCreditsGranted?: (params: {
@@ -23,7 +28,7 @@ type Callbacks = {
     amount: number;
     previousBalance: number;
     newBalance: number;
-    source: "cancellation" | "manual" | "seat_revoke";
+    source: "cancellation" | "manual" | "seat_revoke" | "renewal" | "plan_change";
   }) => void | Promise<void>;
 };
 
@@ -58,35 +63,18 @@ export type RemoveSeatResult =
 export function createSeatHandler(config: Config) {
   const { stripe, pool, schema, billingConfig, mode, grantTo, callbacks } = config;
 
-  async function getStripeCustomerId(entityId: string): Promise<string | null> {
+  // Local wrappers that use closure variables
+  async function resolveStripeCustomerId(entityId: string): Promise<string | null> {
     if (!pool) return null;
-    const result = await pool.query(
-      `SELECT stripe_customer_id FROM ${schema}.user_stripe_customer_map WHERE user_id = $1`,
-      [entityId]
-    );
-    return result.rows[0]?.stripe_customer_id ?? null;
+    return getStripeCustomerId(pool, schema, entityId);
   }
 
-  async function getActiveSubscription(
-    customerId: string
-  ): Promise<Stripe.Subscription | null> {
-    // Include both active and trialing subscriptions
-    const subscriptions = await stripe.subscriptions.list({
-      customer: customerId,
-      limit: 10,
-    });
-    const valid = subscriptions.data.find(
-      (s) => s.status === "active" || s.status === "trialing"
-    );
-    return valid ?? null;
+  async function resolveActiveSubscription(customerId: string): Promise<Stripe.Subscription | null> {
+    return getActiveSubscription(stripe, customerId);
   }
 
   function resolvePlan(subscription: Stripe.Subscription): Plan | null {
-    const price = subscription.items.data[0]?.price;
-    if (!price) return null;
-    const priceId = typeof price === "string" ? price : price.id;
-    const plans = billingConfig?.[mode]?.plans;
-    return plans?.find((p) => p.price.some((pr) => pr.id === priceId)) ?? null;
+    return getPlanFromSubscription(subscription, billingConfig, mode);
   }
 
   /**
@@ -141,13 +129,13 @@ export function createSeatHandler(config: Config) {
     const { userId, orgId } = params;
 
     // Look up org's Stripe customer
-    const customerId = await getStripeCustomerId(orgId);
+    const customerId = await resolveStripeCustomerId(orgId);
     if (!customerId) {
       return { success: false, error: "Org has no Stripe customer" };
     }
 
     // Get org's active subscription
-    const subscription = await getActiveSubscription(customerId);
+    const subscription = await resolveActiveSubscription(customerId);
     if (!subscription) {
       return { success: false, error: "No active subscription found for org" };
     }
@@ -200,7 +188,8 @@ export function createSeatHandler(config: Config) {
     }
 
     // Handle per-seat billing (if configured)
-    if (plan.perSeat && !alreadyProcessed) {
+    // Always attempt the Stripe call - it has its own idempotency key
+    if (plan.perSeat) {
       const item = subscription.items.data[0];
       if (item) {
         await stripe.subscriptions.update(
@@ -229,13 +218,13 @@ export function createSeatHandler(config: Config) {
     const { userId, orgId } = params;
 
     // Look up org's Stripe customer
-    const customerId = await getStripeCustomerId(orgId);
+    const customerId = await resolveStripeCustomerId(orgId);
     if (!customerId) {
       return { success: false, error: "Org has no Stripe customer" };
     }
 
     // Get org's active subscription
-    const subscription = await getActiveSubscription(customerId);
+    const subscription = await resolveActiveSubscription(customerId);
     if (!subscription) {
       return { success: false, error: "No active subscription found for org" };
     }
@@ -252,9 +241,6 @@ export function createSeatHandler(config: Config) {
     if (grantTo !== "manual" && plan.credits) {
       // Determine who to revoke from (same entity that received credits in addSeat)
       const creditHolder = grantTo === "seat-users" ? userId : orgId;
-
-      // Get credits that were granted for this seat (uses idempotency key pattern)
-      const idempotencyPattern = `seat_${orgId}_${userId}_${subscription.id}`;
       const grantsFromSeat = await getCreditsGrantedBySource(creditHolder, subscription.id);
 
       for (const [creditType, grantedAmount] of Object.entries(grantsFromSeat)) {

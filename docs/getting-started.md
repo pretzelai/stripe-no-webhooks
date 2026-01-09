@@ -23,7 +23,12 @@ npx stripe-no-webhooks migrate postgresql://user:pass@host/db
 npx stripe-no-webhooks config
 ```
 
-Creates `billing.config.ts`, sets up webhook, adds secrets to `.env`.
+Creates:
+- `billing.config.ts` - Your plans
+- `lib/stripe.ts` - Initialize the client once
+- `app/api/stripe/[...all]/route.ts` - HTTP handler
+
+Also sets up webhook and adds secrets to `.env`.
 
 ## 4. Define Your Plans
 
@@ -58,65 +63,81 @@ export default billingConfig;
 npx stripe-no-webhooks sync
 ```
 
-## 6. Create the API Route
+## 6. Initialize the Client
 
-**Next.js** (`app/api/stripe/[action]/route.ts`):
+Create once in `lib/stripe.ts`:
 
 ```typescript
-import { createStripeHandler } from "stripe-no-webhooks";
+import { createStripe } from "stripe-no-webhooks";
+import billingConfig from "../billing.config";
+
+export const stripe = createStripe({
+  billingConfig,
+  // Keys and database URL are read from environment variables by default:
+  // - STRIPE_SECRET_KEY
+  // - STRIPE_WEBHOOK_SECRET
+  // - DATABASE_URL
+});
+```
+
+## 7. Create the API Route
+
+**Next.js App Router** (`app/api/stripe/[...all]/route.ts`):
+
+```typescript
+import { stripe } from "@/lib/stripe";
+import { auth } from "@clerk/nextjs/server"; // or your auth library
+
+export const POST = stripe.createHandler({
+  // REQUIRED: Resolve the authenticated user from the request
+  resolveUser: async () => {
+    const { userId } = await auth();
+    return userId ? { id: userId } : null;
+  },
+});
+```
+
+The `resolveUser` function securely extracts the authenticated user from the request. This is required for checkout and customer portal to work.
+
+## 8. Generate a Pricing Page
+
+```bash
+npx stripe-no-webhooks generate pricing-page
+```
+
+This creates `components/PricingPage.tsx` with:
+- Loading spinners on buttons
+- Error display
+- Monthly/yearly interval toggle
+- Current plan highlighting
+
+Use it in your page:
+
+```tsx
+import { PricingPage } from "@/components/PricingPage";
 import billingConfig from "@/billing.config";
 
-const stripe = createStripeHandler({
-  billingConfig,
-  successUrl: "http://localhost:3000/success",
-  cancelUrl: "http://localhost:3000/",
-});
+export default function Pricing() {
+  const plans = billingConfig.test?.plans || [];
 
-export async function POST(request: Request) {
-  return stripe(request);
+  // Pass the user's current plan ID to highlight it
+  return <PricingPage plans={plans} currentPlanId="free" />;
 }
 ```
 
-## 7. Add Checkout Button
+The component handles checkout and customer portal automatically. Users on a plan see "Manage Subscription" which opens Stripe's billing portal.
 
-```typescript
-"use client";
-import { checkout } from "stripe-no-webhooks/client";
+> For manual implementation with custom UI, see [Frontend Client Reference](./reference.md#frontend-client).
 
-<button onClick={() => checkout({ planName: "Pro", interval: "month" })}>
-  Subscribe
-</button>
-```
+## How User Mapping Works
 
-## 8. Customer Portal (optional)
+The `resolveUser` function you provide is called on every checkout and portal request. The library then:
 
-Let users manage their subscription via Stripe's hosted portal:
+1. Uses your resolver to get the authenticated user
+2. Looks up or creates a Stripe customer for that user
+3. Stores the mapping in the `user_stripe_customer_map` table
 
-```typescript
-async function openPortal() {
-  const res = await fetch("/api/stripe/customer_portal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user: { id: currentUser.id } }),
-  });
-  const { url } = await res.json();
-  window.location.href = url;
-}
-```
-
-## Connecting Users
-
-Pass user info in checkout to link subscriptions to your users:
-
-```typescript
-checkout({
-  planName: "Pro",
-  interval: "month",
-  user: { id: user.id, email: user.email },
-});
-```
-
-Or configure `getUser` in the handler to extract from the request automatically.
+No user info is read from the request body—it all comes from your resolver, ensuring requests can't be spoofed.
 
 ## Next Steps
 

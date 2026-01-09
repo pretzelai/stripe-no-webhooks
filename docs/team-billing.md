@@ -2,18 +2,46 @@
 
 Bill organizations instead of individuals.
 
-## Org Checkout
+## Setup
 
-Pass `orgId` to bill an organization:
+Add `resolveOrg` to your handler to enable org billing:
+
+```typescript
+// app/api/stripe/[...all]/route.ts
+import { stripe } from "@/lib/stripe";
+
+export const POST = stripe.createHandler({
+  resolveUser: async () => {
+    const { userId } = await auth();
+    return userId ? { id: userId } : null;
+  },
+
+  // Enable org billing
+  resolveOrg: async () => {
+    // Return the org ID if this is an org checkout, null otherwise
+    // You decide how to determine this (session state, user's current org, etc.)
+    const session = await getSession();
+    return session.currentOrgId ?? null;
+  },
+});
+```
+
+When `resolveOrg` returns an org ID:
+- The org becomes the Stripe customer (billing entity)
+- In `seat-users` mode, the user (from `resolveUser`) becomes the first seat
+
+## Frontend
+
+The frontend just requests the plan—no org ID needed:
 
 ```typescript
 checkout({
   planName: "Team",
   interval: "month",
-  orgId: "org_456",
-  user: { id: "admin_123", email: "admin@acme.com" },
 });
 ```
+
+The server determines which org to bill via your `resolveOrg` function.
 
 ## Credit Distribution
 
@@ -27,7 +55,15 @@ Two modes via `grantTo` config:
 ### Shared Pool
 
 ```typescript
-const stripe = createStripeHandler({ billingConfig });
+// lib/stripe.ts - credits go to subscriber (org) by default
+import { createStripe } from "stripe-no-webhooks";
+
+export const stripe = createStripe({ billingConfig });
+```
+
+```typescript
+// Anywhere in your app
+import { stripe } from "@/lib/stripe";
 
 // All team members consume from org's balance
 await stripe.credits.consume({
@@ -40,7 +76,10 @@ await stripe.credits.consume({
 ### Per-Seat Credits
 
 ```typescript
-const stripe = createStripeHandler({
+// lib/stripe.ts
+import { createStripe } from "stripe-no-webhooks";
+
+export const stripe = createStripe({
   billingConfig,
   credits: { grantTo: "seat-users" },
 });
@@ -48,21 +87,16 @@ const stripe = createStripeHandler({
 
 Each team member gets their own credit allocation automatically when you add seats:
 
-**Add members:**
-
 ```typescript
+import { stripe } from "@/lib/stripe";
+
+// Add members
 await stripe.addSeat({ userId: "user_123", orgId: "org_456" });
-```
 
-**Remove members:**
-
-```typescript
+// Remove members
 await stripe.removeSeat({ userId: "user_123", orgId: "org_456" });
-```
 
-**Consume individual credits:**
-
-```typescript
+// Consume individual credits
 await stripe.credits.consume({
   userId: "user_123", // individual user
   creditType: "api_calls",

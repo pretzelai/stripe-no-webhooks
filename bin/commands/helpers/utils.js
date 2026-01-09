@@ -100,7 +100,7 @@ function saveToEnvFiles(envVars, cwd = process.cwd()) {
 }
 
 function getTemplatesDir() {
-  return path.join(__dirname, "..", "..", "src", "templates");
+  return path.join(__dirname, "..", "..", "..", "src", "templates");
 }
 
 function getAppRouterTemplate() {
@@ -110,6 +110,11 @@ function getAppRouterTemplate() {
 
 function getPagesRouterTemplate() {
   const templatePath = path.join(getTemplatesDir(), "pages-router.ts");
+  return fs.readFileSync(templatePath, "utf8");
+}
+
+function getLibStripeTemplate() {
+  const templatePath = path.join(getTemplatesDir(), "lib-stripe.ts");
   return fs.readFileSync(templatePath, "utf8");
 }
 
@@ -128,6 +133,24 @@ function detectRouterType(cwd = process.cwd()) {
   }
 
   return { type: "app", useSrc: false };
+}
+
+function createLibStripe(useSrc, cwd = process.cwd()) {
+  const baseDir = useSrc ? path.join(cwd, "src") : cwd;
+  const prefix = useSrc ? "src/" : "";
+
+  const libDir = path.join(baseDir, "lib");
+  const libFile = path.join(libDir, "stripe.ts");
+  const relativePath = `${prefix}lib/stripe.ts`;
+
+  if (fs.existsSync(libFile)) {
+    return { path: relativePath, created: false };
+  }
+
+  fs.mkdirSync(libDir, { recursive: true });
+  const template = getLibStripeTemplate();
+  fs.writeFileSync(libFile, template);
+  return { path: relativePath, created: true };
 }
 
 function createApiRoute(routerType, useSrc, cwd = process.cwd()) {
@@ -211,7 +234,9 @@ module.exports = {
   getTemplatesDir,
   getAppRouterTemplate,
   getPagesRouterTemplate,
+  getLibStripeTemplate,
   detectRouterType,
+  createLibStripe,
   createApiRoute,
   isValidStripeKey,
   getMode,

@@ -9,6 +9,7 @@ require("dotenv").config({ path: path.join(process.cwd(), ".env") });
 const { migrate } = require("./commands/migrate");
 const { config } = require("./commands/config");
 const { sync } = require("./commands/sync");
+const { generate } = require("./commands/generate");
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -43,11 +44,16 @@ async function main() {
       await sync();
       break;
 
+    case "generate":
+      await generate(positional[0], { output: options.output });
+      break;
+
     default:
       console.log("Usage:");
       console.log("  npx stripe-no-webhooks migrate <connection_string> [--schema <name>]");
       console.log("  npx stripe-no-webhooks config");
       console.log("  npx stripe-no-webhooks sync");
+      console.log("  npx stripe-no-webhooks generate <component> [--output <path>]");
       process.exit(1);
   }
 }

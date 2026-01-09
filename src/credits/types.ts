@@ -9,7 +9,8 @@ export type TransactionSource =
   | "manual"
   | "usage"
   | "seat_grant"
-  | "seat_revoke";
+  | "seat_revoke"
+  | "plan_change";
 
 export type CreditTransaction = {
   id: string;

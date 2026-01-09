@@ -24,7 +24,7 @@ Note: make sure you also have `.env` or `.env.local` in your project so it can s
 ### 2. Create tables where all Stripe data will be automatically synced
 
 ```bash
-npx stripe-no-webhooks migrate postgresql://postgres.[USER]:[PASSWORD]@[DB_URL]/postgres
+npx stripe-no-webhooks migrate postgresql://[USER]:[PASSWORD]@[DB_URL]/postgres
 ```
 
 ### 3. Run `config` to generate files & webhook
@@ -33,11 +33,33 @@ npx stripe-no-webhooks migrate postgresql://postgres.[USER]:[PASSWORD]@[DB_URL]/
 npx stripe-no-webhooks config
 ```
 
-### 4. Create your plans
+This creates:
+- `lib/stripe.ts` - Initialize the client once
+- `app/api/stripe/[...all]/route.ts` - HTTP handler
+- `billing.config.ts` - Your plans
+
+### 4. Connect your auth
+
+Open `app/api/stripe/[...all]/route.ts` and add your auth:
+
+```typescript
+import { stripe } from "@/lib/stripe";
+import { auth } from "@clerk/nextjs/server"; // or your auth library
+
+export const POST = stripe.createHandler({
+  resolveUser: async () => {
+    const { userId } = await auth();
+    return userId ? { id: userId } : null;
+  },
+});
+```
+
+### 5. Create your plans
 
 ```javascript
-// billing.config.ts (automatically created during config)
+// billing.config.ts
 import type { BillingConfig } from "stripe-no-webhooks";
+
 const billingConfig: BillingConfig = {
   test: {
     plans: [
@@ -48,7 +70,6 @@ const billingConfig: BillingConfig = {
           { amount: 1000, currency: "usd", interval: "month" },
           { amount: 10000, currency: "usd", interval: "year" },
         ],
-        // Optional: give subscribers credits each billing cycle
         credits: {
           api_calls: { allocation: 1000 },
         },
@@ -65,41 +86,42 @@ Run sync:
 npx stripe-no-webhooks sync
 ```
 
-### 5. Implement a checkout button in your frontend:
+### 6. Generate a pricing page
 
-```javascript
-"use client";
-import { checkout } from "stripe-no-webhooks/client";
+```bash
+npx stripe-no-webhooks generate pricing-page
+```
 
-export default function Home() {
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <button
-        className="bg-blue-500 text-white px-4 py-2 rounded-md cursor-pointer"
-        onClick={() =>
-          checkout({
-            planName: "Premium",
-            interval: "month",
-          })
-        }
-      >
-        Checkout
-      </button>
-    </div>
-  );
+This creates a ready-to-use React component with loading states, error handling, and styling:
+
+```tsx
+import { PricingPage } from "@/components/PricingPage";
+import billingConfig from "@/billing.config";
+
+export default function Pricing() {
+  const plans = billingConfig.test?.plans || [];
+  return <PricingPage plans={plans} currentPlanId="free" />;
 }
 ```
 
-### 6. Use credits in your app (if configured):
+> For manual checkout implementation with full control, see [Frontend Client Reference](docs/reference.md#frontend-client).
+
+### 7. Use the API anywhere
 
 ```typescript
-import { createStripeHandler } from "stripe-no-webhooks";
+// Import the client you created in lib/stripe.ts
+import { stripe } from "@/lib/stripe";
 
-const stripe = createStripeHandler({ billingConfig });
+// Check subscription status
+const hasAccess = await stripe.subscriptions.isActive(userId);
 
-// Consume credits
+// Get subscription details
+const sub = await stripe.subscriptions.get(userId);
+console.log(sub?.plan?.name); // "Premium"
+
+// Use credits
 const result = await stripe.credits.consume({
-  userId: "user_123",
+  userId,
   creditType: "api_calls",
   amount: 1,
 });

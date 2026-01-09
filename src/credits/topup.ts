@@ -80,6 +80,18 @@ export type AutoTopUpFailedReason =
   | "payment_requires_action"
   | "unexpected_error";
 
+export type TopUpHandler = {
+  topUp: (params: TopUpParams) => Promise<TopUpResult>;
+  hasPaymentMethod: (userId: string) => Promise<boolean>;
+  triggerAutoTopUpIfNeeded: (params: {
+    userId: string;
+    creditType: string;
+    currentBalance: number;
+  }) => Promise<AutoTopUpResult>;
+  handlePaymentIntentSucceeded: (paymentIntent: Stripe.PaymentIntent) => Promise<void>;
+  handleTopUpCheckoutCompleted: (session: Stripe.Checkout.Session) => Promise<void>;
+};
+
 export function createTopUpHandler(deps: {
   stripe: Stripe;
   pool: Pool | null;
@@ -227,6 +239,32 @@ export function createTopUpHandler(deps: {
     return session.url;
   }
 
+  /**
+   * Try to create a recovery checkout, returning undefined if it fails.
+   * This prevents recovery checkout errors from masking the original payment error.
+   */
+  async function tryCreateRecoveryCheckout(
+    customerId: string,
+    creditType: string,
+    amount: number,
+    totalCents: number,
+    currency: string
+  ): Promise<string | undefined> {
+    try {
+      return await createRecoveryCheckout(
+        customerId,
+        creditType,
+        amount,
+        totalCents,
+        currency
+      );
+    } catch (err) {
+      // Log but don't throw - we still want to return the original error
+      console.error("Failed to create recovery checkout:", err);
+      return undefined;
+    }
+  }
+
   // for on-demand top-ups
   async function topUp(params: TopUpParams): Promise<TopUpResult> {
     const { userId, creditType, amount, idempotencyKey } = params;
@@ -308,10 +346,22 @@ export function createTopUpHandler(deps: {
     }
 
     const totalCents = amount * pricePerCreditCents;
+
+    // Stripe requires minimum ~50 cents in most currencies, use 60 to be safe with conversion
+    const STRIPE_MIN_CENTS = 60;
+    if (totalCents < STRIPE_MIN_CENTS) {
+      return {
+        success: false,
+        error: {
+          code: "INVALID_AMOUNT",
+          message: `Minimum purchase amount is ${STRIPE_MIN_CENTS} cents (${Math.ceil(STRIPE_MIN_CENTS / pricePerCreditCents)} credits at current price)`,
+        },
+      };
+    }
     const currency = subscription.currency;
 
     if (!customer.defaultPaymentMethod) {
-      const recoveryUrl = await createRecoveryCheckout(
+      const recoveryUrl = await tryCreateRecoveryCheckout(
         customer.id,
         creditType,
         amount,
@@ -369,8 +419,8 @@ export function createTopUpHandler(deps: {
         };
       }
 
-      // Payment needs action or failed
-      const recoveryUrl = await createRecoveryCheckout(
+      // Payment needs action or failed - offer recovery checkout
+      const recoveryUrl = await tryCreateRecoveryCheckout(
         customer.id,
         creditType,
         amount,
@@ -386,17 +436,40 @@ export function createTopUpHandler(deps: {
         },
       };
     } catch (err) {
-      const recoveryUrl = await createRecoveryCheckout(
-        customer.id,
-        creditType,
-        amount,
-        totalCents,
-        currency
-      );
-      const message = err instanceof Error ? err.message : "Payment failed";
+      // Check if this is a Stripe error
+      const stripeError = err as { type?: string; code?: string; message?: string };
+      const isCardError = stripeError.type === "card_error";
+      const isInvalidRequest = stripeError.type === "invalid_request_error";
+      const errorCode = stripeError.code;
+      const message = stripeError.message || "Payment failed";
+
+      // For card errors (declined, insufficient funds), offer recovery checkout
+      // For invalid request errors (config issues), don't try recovery - it won't help
+      if (isCardError) {
+        const recoveryUrl = await tryCreateRecoveryCheckout(
+          customer.id,
+          creditType,
+          amount,
+          totalCents,
+          currency
+        );
+        return {
+          success: false,
+          error: {
+            code: "PAYMENT_FAILED",
+            message,
+            recoveryUrl,
+          },
+        };
+      }
+
+      // Invalid request or other Stripe error - return without recovery URL
       return {
         success: false,
-        error: { code: "PAYMENT_FAILED", message, recoveryUrl },
+        error: {
+          code: isInvalidRequest ? "INVALID_AMOUNT" : "PAYMENT_FAILED",
+          message: errorCode ? `${errorCode}: ${message}` : message,
+        },
       };
     }
   }

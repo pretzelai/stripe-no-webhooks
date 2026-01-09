@@ -1,4 +1,4 @@
-const { runMigrations } = require("@supabase/stripe-sync-engine");
+const { runMigrations } = require("@pretzelai/stripe-sync-engine");
 const { Client } = require("pg");
 const { saveToEnvFiles } = require("./helpers/utils");
 

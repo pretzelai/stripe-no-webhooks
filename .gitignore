@@ -1,3 +1,5 @@
 node_modules
 .env
 dist
+local-docs
+stripe-no-webhooks-*.tgz

@@ -432,28 +432,30 @@ export async function getUserSeatSubscription(
 }
 
 /**
- * Get the total credits granted to a user from a specific source (e.g., subscription).
- * Returns a map of credit_type -> total amount granted.
- * Used by removeSeat to only revoke credits that came from the subscription.
+ * Get the NET credits from a subscription (grants minus revocations).
+ * Returns a map of credit_type -> net amount.
+ * Used by lifecycle/seats to revoke only subscription credits (preserving top-ups).
  */
 export async function getCreditsGrantedBySource(
   userId: string,
   sourceId: string
 ): Promise<Record<string, number>> {
   const p = ensurePool();
+  // Sum all subscription-related transactions (positive grants and negative revocations)
+  // to get the NET credits still attributable to this subscription
   const result = await p.query(
-    `SELECT credit_type_id, SUM(amount) as total_granted
+    `SELECT credit_type_id, SUM(amount) as net_amount
      FROM ${schema}.credit_ledger
      WHERE user_id = $1
        AND source_id = $2
-       AND source = 'seat_grant'
-       AND amount > 0
-     GROUP BY credit_type_id`,
+       AND source IN ('subscription', 'renewal', 'seat_grant', 'plan_change', 'cancellation', 'seat_revoke')
+     GROUP BY credit_type_id
+     HAVING SUM(amount) > 0`,
     [userId, sourceId]
   );
-  const grants: Record<string, number> = {};
+  const net: Record<string, number> = {};
   for (const row of result.rows) {
-    grants[row.credit_type_id] = Number(row.total_granted);
+    net[row.credit_type_id] = Number(row.net_amount);
   }
-  return grants;
+  return net;
 }

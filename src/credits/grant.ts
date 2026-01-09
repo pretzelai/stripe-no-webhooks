@@ -110,9 +110,12 @@ export async function revokeAll(params: {
     return { previousBalance: 0, amountRevoked: 0 };
   }
 
+  // Pass a large amount - atomicRevoke will cap it to actual balance
   const result = await revoke({ ...params, amount: currentBalance });
+  // Calculate actual previousBalance from result
+  const previousBalance = result.balance + result.amountRevoked;
   return {
-    previousBalance: currentBalance,
+    previousBalance,
     amountRevoked: result.amountRevoked,
   };
 }

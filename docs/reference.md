@@ -2,12 +2,13 @@
 
 Quick lookup for all APIs.
 
-## Handler
+## Client
 
 ```typescript
-import { createStripeHandler } from "stripe-no-webhooks";
+import { createStripe } from "stripe-no-webhooks";
 
-const stripe = createStripeHandler({
+// Create once in lib/stripe.ts
+const stripe = createStripe({
   stripeSecretKey?: string,          // Default: STRIPE_SECRET_KEY env
   stripeWebhookSecret?: string,      // Default: STRIPE_WEBHOOK_SECRET env
   databaseUrl?: string,              // Default: DATABASE_URL env
@@ -15,14 +16,39 @@ const stripe = createStripeHandler({
   billingConfig?: BillingConfig,
   successUrl?: string,
   cancelUrl?: string,
-  automaticTax?: boolean,            // Default: true
   credits?: {
     grantTo?: "subscriber" | "organization" | "seat-users" | "manual",
   },
-  callbacks?: StripeWebhookCallbacks,
-  getUser?: (request: Request) => User | null,
-  mapUserIdToStripeCustomerId?: (userId: string) => string | null,
+
+  // Map user ID to existing Stripe customer ID (for migrations)
+  mapUserIdToStripeCustomerId?: (userId: string) => string | null | Promise<string | null>,
 });
+```
+
+## Handler
+
+```typescript
+// Create HTTP handler with request-specific config
+export const POST = stripe.createHandler({
+  // REQUIRED: Resolve authenticated user from request
+  resolveUser?: (request: Request) => User | null | Promise<User | null>,
+
+  // OPTIONAL: Resolve org for team/org billing
+  resolveOrg?: (request: Request) => string | null | Promise<string | null>,
+
+  // OPTIONAL: Callbacks for subscription events
+  callbacks?: StripeWebhookCallbacks,
+
+  // OPTIONAL: Enable automatic tax calculation
+  automaticTax?: boolean,            // Default: false
+});
+
+// User type
+type User = {
+  id: string;
+  name?: string;
+  email?: string;
+};
 ```
 
 ## Routes
@@ -34,6 +60,72 @@ The handler responds to POST requests:
 | `/checkout` | Create checkout session |
 | `/webhook` | Handle Stripe webhooks |
 | `/customer_portal` | Open billing portal |
+
+### Calling from the browser
+
+When using `fetch()` from the browser, send the `Accept: application/json` header to receive a JSON response with the URL. Without this header, the server returns a 303 redirect which causes CORS errors.
+
+```typescript
+// Checkout
+const res = await fetch("/api/stripe/checkout", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  },
+  body: JSON.stringify({ planName: "Pro", interval: "month" }),
+});
+const { url } = await res.json();
+window.location.href = url;
+
+// Customer Portal
+const res = await fetch("/api/stripe/customer_portal", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  },
+});
+const { url } = await res.json();
+window.location.href = url;
+```
+
+## Subscriptions API
+
+```typescript
+// Check if user has active subscription
+await stripe.subscriptions.isActive(userId: string): Promise<boolean>
+
+// Get current subscription
+await stripe.subscriptions.get(userId: string): Promise<Subscription | null>
+
+// List all subscriptions
+await stripe.subscriptions.list(userId: string): Promise<Subscription[]>
+```
+
+```typescript
+type SubscriptionStatus =
+  | "active"
+  | "trialing"
+  | "past_due"
+  | "canceled"
+  | "unpaid"
+  | "incomplete"
+  | "paused";
+
+type Subscription = {
+  id: string,
+  status: SubscriptionStatus,
+  plan: {
+    id: string,
+    name: string,
+    priceId: string,
+  } | null,
+  currentPeriodStart: Date,
+  currentPeriodEnd: Date,
+  cancelAtPeriodEnd: boolean,
+}
+```
 
 ## Credits API
 
@@ -234,28 +326,118 @@ type AutoTopUp = {
 };
 ```
 
-## Client
+## Frontend Client
+
+### Generated Pricing Page (Recommended)
+
+Generate a ready-to-use pricing component:
+
+```bash
+npx stripe-no-webhooks generate pricing-page
+```
+
+Creates `components/PricingPage.tsx` with loading states, error handling, and styling built-in.
+
+```tsx
+import { PricingPage } from "@/components/PricingPage";
+import billingConfig from "@/billing.config";
+
+const plans = billingConfig.test?.plans || [];
+
+<PricingPage
+  plans={plans}
+  currentPlanId="free"           // Highlights current plan
+  currentInterval="month"        // Default interval selection
+  onError={(err) => {}}          // Optional error callback
+/>
+```
+
+### Manual Implementation
+
+For full control over the UI, use `createCheckoutClient` with callbacks:
 
 ```typescript
-import { checkout, createCheckoutClient } from "stripe-no-webhooks/client";
+import { createCheckoutClient } from "stripe-no-webhooks/client";
 
-// Default client (uses /api/stripe/checkout)
+const { checkout, customerPortal } = createCheckoutClient({
+  // Optional: Custom endpoints
+  checkoutEndpoint: "/api/stripe/checkout",
+  customerPortalEndpoint: "/api/stripe/customer_portal",
+
+  // Callbacks for UI state management
+  onLoading: (isLoading: boolean) => {
+    // Update your loading state
+    setIsLoading(isLoading);
+  },
+  onError: (error: Error) => {
+    // Show error to user
+    toast.error(error.message);
+  },
+  onRedirect: (url: string) => {
+    // Called right before redirect - show a message, track analytics, etc.
+    console.log("Redirecting to:", url);
+  },
+});
+```
+
+Example with React state:
+
+```tsx
+"use client";
+import { useState } from "react";
+import { createCheckoutClient } from "stripe-no-webhooks/client";
+
+export function CheckoutButton({ planName }: { planName: string }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const { checkout } = createCheckoutClient({
+    onLoading: setLoading,
+    onError: (err) => setError(err.message),
+  });
+
+  return (
+    <>
+      <button
+        onClick={() => checkout({ planName, interval: "month" })}
+        disabled={loading}
+      >
+        {loading ? "Loading..." : "Subscribe"}
+      </button>
+      {error && <p className="error">{error}</p>}
+    </>
+  );
+}
+```
+
+### Checkout Options
+
+```typescript
 checkout({
-  planName?: string,
-  planId?: string,
+  planName?: string,             // Plan name from billing config
+  planId?: string,               // Plan ID from billing config
   interval?: "month" | "year" | "week" | "one_time",
-  priceId?: string,
-  quantity?: number,
-  customerEmail?: string,
-  successUrl?: string,
-  cancelUrl?: string,
+  priceId?: string,              // Direct Stripe price ID (bypasses config)
+  quantity?: number,             // Default: 1
+  successUrl?: string,           // Override success redirect
+  cancelUrl?: string,            // Override cancel redirect
   metadata?: Record<string, string>,
 });
 
-// Custom endpoint
-const { checkout } = createCheckoutClient({
-  checkoutEndpoint: "/my/custom/endpoint",
-});
+// Customer Portal - redirects to Stripe billing portal
+customerPortal();
+```
+
+### Default Exports
+
+For simple usage without callbacks:
+
+```typescript
+import { checkout, customerPortal } from "stripe-no-webhooks/client";
+
+// These use default /api/stripe endpoints with no callbacks
+<button onClick={() => checkout({ planName: "Pro" })}>Subscribe</button>
+<button onClick={() => customerPortal()}>Manage Billing</button>
 ```
 
 ## Types
@@ -306,6 +488,7 @@ npx stripe-no-webhooks config
 # Sync plans to Stripe
 npx stripe-no-webhooks sync
 
-# Validate configuration
-npx stripe-no-webhooks validate
+# Generate UI components
+npx stripe-no-webhooks generate pricing-page
+npx stripe-no-webhooks generate pricing-page --output src/components/Pricing.tsx
 ```

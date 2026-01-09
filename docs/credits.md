@@ -29,7 +29,7 @@ credits: {
 ## Consume Credits
 
 ```typescript
-const stripe = createStripeHandler({ billingConfig });
+import { stripe } from "@/lib/stripe";
 
 const result = await stripe.credits.consume({
   userId: "user_123",
@@ -109,9 +109,14 @@ Auto top-up triggers automatically when using `stripe.credits.consume()`.
 
 ## Callbacks
 
+Callbacks are passed when creating the handler:
+
 ```typescript
-const stripe = createStripeHandler({
-  billingConfig,
+// app/api/stripe/[...all]/route.ts
+import { stripe } from "@/lib/stripe";
+
+export const POST = stripe.createHandler({
+  resolveUser: async () => { /* ... */ },
   callbacks: {
     onCreditsGranted: ({ userId, creditType, amount }) => {},
     onCreditsRevoked: ({ userId, creditType, amount }) => {},

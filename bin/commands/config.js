@@ -7,6 +7,7 @@ const {
   saveToEnvFiles,
   getTemplatesDir,
   detectRouterType,
+  createLibStripe,
   createApiRoute,
   isValidStripeKey,
   loadStripe,
@@ -116,8 +117,23 @@ async function config(options = {}) {
     rl.close();
   }
 
+  // Create lib/stripe.ts (idempotent)
+  logger.log(`\n📁 Setting up lib/stripe.ts...`);
+  try {
+    const result = createLibStripe(useSrc, cwd);
+    if (result.created) {
+      logger.log(`✅ Created ${result.path}`);
+    } else {
+      logger.log(`✓ ${result.path} already exists`);
+    }
+  } catch (error) {
+    logger.error("❌ Failed to create lib/stripe.ts:", error.message);
+    if (exitOnError) process.exit(1);
+    return { success: false, error: error.message };
+  }
+
   // Create API route (idempotent)
-  logger.log(`\n📁 Setting up API route...`);
+  logger.log(`📁 Setting up API route...`);
   try {
     const result = createApiRoute(routerType, useSrc, cwd);
     if (result.created) {
