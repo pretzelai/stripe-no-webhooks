@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import type { BillingConfig } from "../BillingConfig";
-import type { HandlerContext, CheckoutRequestBody } from "./types";
+import type { HandlerContext, CheckoutRequestBody } from "../types";
 import { jsonResponse, errorResponse, successResponse } from "./utils";
 import {
   planHasCredits,

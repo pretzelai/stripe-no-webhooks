@@ -1,9 +1,9 @@
 import type Stripe from "stripe";
 import type { Pool } from "pg";
-import type { BillingConfig, PriceInterval } from "../BillingConfig";
-import type { TransactionSource } from "../credits";
-import type { CreditsGrantTo } from "../credits/lifecycle";
-import type { AutoTopUpFailedReason } from "../credits/topup";
+import type { BillingConfig, PriceInterval } from "./BillingConfig";
+import type { TransactionSource } from "./credits";
+import type { CreditsGrantTo } from "./credits/lifecycle";
+import type { AutoTopUpFailedReason } from "./credits/topup";
 
 export interface User {
   id: string;
@@ -44,7 +44,12 @@ export interface StripeWebhookCallbacks {
     amount: number;
     previousBalance: number;
     newBalance: number;
-    source: "cancellation" | "manual" | "seat_revoke" | "renewal" | "plan_change";
+    source:
+      | "cancellation"
+      | "manual"
+      | "seat_revoke"
+      | "renewal"
+      | "plan_change";
   }) => void | Promise<void>;
 
   onTopUpCompleted?: (params: {
@@ -86,7 +91,12 @@ export interface CreditsConfig {
   onAutoTopUpFailed?: (params: {
     userId: string;
     creditType: string;
-    reason: "max_per_month_reached" | "no_payment_method" | "payment_failed" | "payment_requires_action" | "unexpected_error";
+    reason:
+      | "max_per_month_reached"
+      | "no_payment_method"
+      | "payment_failed"
+      | "payment_requires_action"
+      | "unexpected_error";
     error?: string;
   }) => void | Promise<void>;
   onCreditsLow?: (params: {
@@ -109,7 +119,12 @@ export interface CreditsConfig {
     amount: number;
     previousBalance: number;
     newBalance: number;
-    source: "cancellation" | "manual" | "seat_revoke" | "renewal" | "plan_change";
+    source:
+      | "cancellation"
+      | "manual"
+      | "seat_revoke"
+      | "renewal"
+      | "plan_change";
   }) => void | Promise<void>;
 }
 

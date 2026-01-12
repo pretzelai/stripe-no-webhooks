@@ -1,12 +1,12 @@
 import { StripeSync } from "@pretzelai/stripe-sync-engine";
 import Stripe from "stripe";
 import { Pool } from "pg";
-import { getMode } from "../helpers";
-import { initCredits, credits, type ConsumeResult } from "../credits";
+import { getMode } from "./helpers";
+import { initCredits, credits, type ConsumeResult } from "./credits";
 import {
   createCreditLifecycle,
   type CreditsGrantTo,
-} from "../credits/lifecycle";
+} from "./credits/lifecycle";
 import {
   createTopUpHandler,
   type TopUpParams,
@@ -14,19 +14,19 @@ import {
   type TopUpPending,
   type AutoTopUpResult,
   type AutoTopUpFailedReason,
-} from "../credits/topup";
+} from "./credits/topup";
 import {
   createSeatsApi,
   type AddSeatParams,
   type AddSeatResult,
   type RemoveSeatParams,
   type RemoveSeatResult,
-} from "../credits/seats";
+} from "./credits/seats";
 import {
   createSubscriptionsApi,
   type Subscription,
   type SubscriptionStatus,
-} from "../subscriptions";
+} from "./subscriptions";
 
 import type {
   User,
@@ -34,9 +34,9 @@ import type {
   HandlerConfig,
   HandlerContext,
 } from "./types";
-import { handleCheckout } from "./checkout";
-import { handleCustomerPortal } from "./customer-portal";
-import { handleWebhook } from "./webhook";
+import { handleCheckout } from "./handlers/checkout";
+import { handleCustomerPortal } from "./handlers/customer-portal";
+import { handleWebhook } from "./handlers/webhook";
 
 export type { CreditsGrantTo };
 export type {

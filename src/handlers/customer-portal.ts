@@ -1,4 +1,4 @@
-import type { HandlerContext, CustomerPortalRequestBody } from "./types";
+import type { HandlerContext, CustomerPortalRequestBody } from "../types";
 import { errorResponse, successResponse } from "./utils";
 
 export async function handleCustomerPortal(

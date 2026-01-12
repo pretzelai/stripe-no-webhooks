@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import type { StripeSync } from "@pretzelai/stripe-sync-engine";
-import type { StripeWebhookCallbacks } from "./types";
+import type { StripeWebhookCallbacks } from "../types";
 import type { CreditLifecycle } from "../credits/lifecycle";
 import type { TopUpHandler } from "../credits/topup";
 import { getCustomerIdFromSubscription } from "../helpers";
@@ -205,7 +205,9 @@ async function saveDefaultPaymentMethod(
 
     if (!subscriptionId) return;
 
-    const subscription = await ctx.stripe.subscriptions.retrieve(subscriptionId);
+    const subscription = await ctx.stripe.subscriptions.retrieve(
+      subscriptionId
+    );
     const paymentMethod = subscription.default_payment_method;
     const customerId =
       typeof subscription.customer === "string"
@@ -235,7 +237,10 @@ async function handleEvent(
       const subscription = event.data.object as Stripe.Subscription;
 
       // Safety net: if customer has multiple active subscriptions, cancel duplicates
-      const shouldSkipCredits = await handleDuplicateSubscriptions(ctx, subscription);
+      const shouldSkipCredits = await handleDuplicateSubscriptions(
+        ctx,
+        subscription
+      );
       if (shouldSkipCredits) break;
 
       // Grant initial credits for the new subscription
@@ -285,8 +290,14 @@ async function handleEvent(
         const oldPriceId = prev.items.data?.[0]?.price?.id;
         const newPriceId = subscription.items.data[0]?.price?.id;
         if (oldPriceId && newPriceId && oldPriceId !== newPriceId) {
-          await ctx.creditLifecycle.onSubscriptionPlanChanged(subscription, oldPriceId);
-          await ctx.callbacks?.onSubscriptionPlanChanged?.(subscription, oldPriceId);
+          await ctx.creditLifecycle.onSubscriptionPlanChanged(
+            subscription,
+            oldPriceId
+          );
+          await ctx.callbacks?.onSubscriptionPlanChanged?.(
+            subscription,
+            oldPriceId
+          );
         }
       }
       break;
@@ -300,14 +311,14 @@ async function handleEvent(
       // New (2025-12-15+): invoice.parent?.subscription_details?.subscription
       const subscriptionId =
         invoice.subscription ??
-        (invoice as unknown as { parent?: { subscription_details?: { subscription?: string } } })
-          .parent?.subscription_details?.subscription;
+        (
+          invoice as unknown as {
+            parent?: { subscription_details?: { subscription?: string } };
+          }
+        ).parent?.subscription_details?.subscription;
 
       // Handle subscription renewals
-      if (
-        invoice.billing_reason === "subscription_cycle" &&
-        subscriptionId
-      ) {
+      if (invoice.billing_reason === "subscription_cycle" && subscriptionId) {
         const subId =
           typeof subscriptionId === "string"
             ? subscriptionId
@@ -315,7 +326,8 @@ async function handleEvent(
         const subscription = await ctx.stripe.subscriptions.retrieve(subId);
 
         // Check for pending credit downgrade (price already changed, credits deferred to renewal)
-        const pendingCreditDowngrade = subscription.metadata?.pending_credit_downgrade;
+        const pendingCreditDowngrade =
+          subscription.metadata?.pending_credit_downgrade;
 
         if (pendingCreditDowngrade === "true") {
           // Price was already changed at downgrade time, now adjust credits
@@ -331,7 +343,10 @@ async function handleEvent(
 
           // Handle credit changes via onDowngradeApplied
           if (currentPriceId) {
-            await ctx.creditLifecycle.onDowngradeApplied(subscription, currentPriceId);
+            await ctx.creditLifecycle.onDowngradeApplied(
+              subscription,
+              currentPriceId
+            );
           }
           // Note: Don't call onSubscriptionRenewed since downgrade handles credits differently
           break;
@@ -357,7 +372,10 @@ async function handleEvent(
 
       // Handle setup mode upgrade: user upgraded from Free/no-payment-method plan
       // Checkout collected payment method, now update the existing subscription
-      if (session.mode === "setup" && session.metadata?.upgrade_subscription_id) {
+      if (
+        session.mode === "setup" &&
+        session.metadata?.upgrade_subscription_id
+      ) {
         await handleSetupModeUpgrade(ctx, session);
         break;
       }
