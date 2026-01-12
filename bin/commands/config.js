@@ -1,11 +1,9 @@
-const fs = require("fs");
-const path = require("path");
 const {
   createPrompt,
   question,
   questionHidden,
   saveToEnvFiles,
-  getTemplatesDir,
+  writeTemplate,
   detectRouterType,
   isValidStripeKey,
   loadStripe,
@@ -32,8 +30,11 @@ async function config(options = {}) {
   logger.log("\n🔧 Stripe Webhook Configuration\n");
 
   const { type: routerType, useSrc } = detectRouterType(cwd);
-  const routerLabel = routerType === "app" ? "App Router" : "Pages Router";
-  logger.log(`📂 Detected: ${routerLabel}${useSrc ? " (src/)" : ""}\n`);
+  logger.log(
+    `📂 Detected: ${routerType === "app" ? "App Router" : "Pages Router"}${
+      useSrc ? " (src/)" : ""
+    }\n`
+  );
 
   // Check for existing valid Stripe key
   const existingStripeKey = env.STRIPE_SECRET_KEY || "";
@@ -107,73 +108,69 @@ async function config(options = {}) {
     rl.close();
   }
 
-  const templatesDir = getTemplatesDir();
-  const baseDir = path.join(cwd, useSrc ? "src" : "");
-  const prefix = useSrc ? "src/" : "";
-
-  // Create lib/stripe.ts (idempotent)
+  // Create lib/stripe.ts
   logger.log(`\n📁 Setting up lib/stripe.ts...`);
   try {
-    const libStripePath = path.join(baseDir, "lib", "stripe.ts");
-    const libStripeRelative = `${prefix}lib/stripe.ts`;
-    if (fs.existsSync(libStripePath)) {
-      logger.log(`✓ ${libStripeRelative} already exists`);
-    } else {
-      fs.mkdirSync(path.dirname(libStripePath), { recursive: true });
-      fs.writeFileSync(
-        libStripePath,
-        fs.readFileSync(path.join(templatesDir, "lib-stripe.ts"), "utf8")
-      );
-      logger.log(`✅ Created ${libStripeRelative}`);
-    }
+    const result = writeTemplate({
+      templateName: "lib-stripe.ts",
+      destPath: "lib/stripe.ts",
+      cwd,
+    });
+    logger.log(
+      result.created
+        ? `✅ Created ${result.path}`
+        : `✓ ${result.path} already exists`
+    );
   } catch (error) {
     logger.error("❌ Failed to create lib/stripe.ts:", error.message);
     if (exitOnError) process.exit(1);
     return { success: false, error: error.message };
   }
 
-  // Create API route (idempotent)
+  // Create API route
   logger.log(`📁 Setting up API route...`);
   try {
     const isApp = routerType === "app";
-    const routeRelPath = isApp
-      ? "app/api/stripe/[...all]/route.ts"
-      : "pages/api/stripe/[...all].ts";
-    const routePath = path.join(baseDir, routeRelPath);
-    const routeRelative = `${prefix}${routeRelPath}`;
-    if (fs.existsSync(routePath)) {
-      logger.log(`✓ ${routeRelative} already exists`);
-    } else {
-      const templateName = isApp ? "app-router.ts" : "pages-router.ts";
-      const commentPattern = isApp
-        ? /^\/\/ app\/api\/stripe\/\[\.\.\.all\]\/route\.ts\n/
-        : /^\/\/ pages\/api\/stripe\/\[\.\.\.all\]\.ts\n/;
-      const template = fs
-        .readFileSync(path.join(templatesDir, templateName), "utf8")
-        .replace(commentPattern, "");
-      fs.mkdirSync(path.dirname(routePath), { recursive: true });
-      fs.writeFileSync(routePath, template);
-      logger.log(`✅ Created ${routeRelative}`);
-    }
+    const result = writeTemplate({
+      templateName: isApp ? "app-router.ts" : "pages-router.ts",
+      destPath: isApp
+        ? "app/api/stripe/[...all]/route.ts"
+        : "pages/api/stripe/[...all].ts",
+      cwd,
+      routerType,
+      transform: (t) =>
+        t.replace(
+          isApp
+            ? /^\/\/ app\/api\/stripe\/\[\.\.\.all\]\/route\.ts\n/
+            : /^\/\/ pages\/api\/stripe\/\[\.\.\.all\]\.ts\n/,
+          ""
+        ),
+    });
+    logger.log(
+      result.created
+        ? `✅ Created ${result.path}`
+        : `✓ ${result.path} already exists`
+    );
   } catch (error) {
     logger.error("❌ Failed to create API route:", error.message);
     if (exitOnError) process.exit(1);
     return { success: false, error: error.message };
   }
 
-  // Create billing.config.ts (idempotent)
+  // Create billing.config.ts (in project root, not src)
   logger.log(`📁 Setting up billing.config.ts...`);
   try {
-    const billingConfigPath = path.join(cwd, "billing.config.ts");
-    if (fs.existsSync(billingConfigPath)) {
-      logger.log(`✓ billing.config.ts already exists`);
-    } else {
-      fs.writeFileSync(
-        billingConfigPath,
-        fs.readFileSync(path.join(templatesDir, "billing.config.ts"), "utf8")
-      );
-      logger.log(`✅ Created billing.config.ts`);
-    }
+    const result = writeTemplate({
+      templateName: "billing.config.ts",
+      destPath: "billing.config.ts",
+      cwd,
+      inProjectRoot: true,
+    });
+    logger.log(
+      result.created
+        ? `✅ Created billing.config.ts`
+        : `✓ billing.config.ts already exists`
+    );
   } catch (error) {
     logger.error("❌ Failed to create billing.config.ts:", error.message);
     if (exitOnError) process.exit(1);

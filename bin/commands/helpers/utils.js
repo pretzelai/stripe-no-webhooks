@@ -89,6 +89,39 @@ function getTemplatesDir() {
   return path.join(__dirname, "..", "..", "..", "src", "templates");
 }
 
+function writeTemplate({
+  templateName,
+  destPath,
+  cwd = process.cwd(),
+  overwrite = false,
+  transform,
+  routerType = null,
+  inProjectRoot = false,
+}) {
+  const detected = detectRouterType(cwd);
+  const type = routerType || detected.type;
+  const useSrc = inProjectRoot ? false : detected.useSrc;
+
+  const baseDir = path.join(cwd, useSrc ? "src" : "");
+  const absPath = path.join(baseDir, destPath);
+  const relativePath = (useSrc ? "src/" : "") + destPath;
+
+  if (fs.existsSync(absPath) && !overwrite) {
+    return { created: false, path: relativePath, routerType: type };
+  }
+
+  const template = fs.readFileSync(
+    path.join(getTemplatesDir(), templateName),
+    "utf8"
+  );
+  const content = transform ? transform(template) : template;
+
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  fs.writeFileSync(absPath, content);
+
+  return { created: true, path: relativePath, routerType: type };
+}
+
 function detectRouterType(cwd = process.cwd()) {
   const hasAppDir = fs.existsSync(path.join(cwd, "app"));
   const hasSrcAppDir = fs.existsSync(path.join(cwd, "src", "app"));
@@ -127,6 +160,7 @@ module.exports = {
   questionHidden,
   saveToEnvFiles,
   getTemplatesDir,
+  writeTemplate,
   detectRouterType,
   isValidStripeKey,
   getMode,
