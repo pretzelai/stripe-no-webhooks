@@ -87,7 +87,41 @@ Run sync:
 npx stripe-no-webhooks sync
 ```
 
-### 6. (optional) Generate a pricing page
+### 6. (optional) Write custom logic for subscriptions
+
+You probably want something to happen when a new user subscribes or a subscription cancels:
+
+```typescript
+// app/api/stripe/[...all]/route.ts
+import { stripe } from "@/lib/stripe";
+import type { Stripe } from "stripe";
+
+export const POST = stripe.createHandler({
+  // ...
+  callbacks: {
+    onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
+      console.log("New subscription:", subscription.id);
+    },
+    onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
+      console.log("Subscription cancelled:", subscription.id);
+    },
+  },
+});
+```
+
+Supported callbacks:
+
+- `onSubscriptionCreated`
+- `onSubscriptionCancelled`
+- `onSubscriptionRenewed`
+- `onSubscriptionPlanChanged`
+- `onCreditsGranted`
+- `onCreditsRevoked`
+- `onTopUpCompleted`
+- `onAutoTopUpFailed`
+- `onCreditsLow`
+
+### 7. (optional) Generate a pricing page
 
 ```bash
 npx stripe-no-webhooks generate pricing-page
@@ -107,7 +141,7 @@ export default function Pricing() {
 }
 ```
 
-### 7. (optional) Backfill data
+### 8. (optional) Backfill data
 
 If you had data in Stripe before deploying `stripe-no-webhooks`, you can backfill your database by running:
 
