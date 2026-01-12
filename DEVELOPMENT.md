@@ -22,3 +22,8 @@ To test changes, repeat both steps (rebuild, repack, reinstall).
 cd /path/to/your-test-app
 stripe-no-webhooks config
 ```
+
+## Running tests inside stripe-no-webhooks repository
+```bash
+npm run test:db:up
+npm run test
