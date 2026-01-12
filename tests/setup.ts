@@ -212,14 +212,27 @@ export async function seedSubscription(params: SeedSubscriptionParams): Promise<
     metadata = {},
   } = params;
 
+  // Build items JSONB to match Stripe's format
+  const itemId = `si_${id.replace("sub_", "")}`;
+  const items = {
+    object: "list",
+    data: [
+      {
+        id: itemId,
+        object: "subscription_item",
+        price: { id: priceId },
+        quantity,
+      },
+    ],
+  };
+
   await pool!.query(`
-    INSERT INTO ${SCHEMA}.subscriptions (id, object, customer, status, current_period_start, current_period_end, metadata, created, livemode)
-    VALUES ($1, 'subscription', $2, $3, $4, $5, $6, extract(epoch from now())::bigint, false)
-    ON CONFLICT (id) DO UPDATE SET status = $3, current_period_start = $4, current_period_end = $5, metadata = $6
-  `, [id, customerId, status, currentPeriodStart, currentPeriodEnd, JSON.stringify(metadata)]);
+    INSERT INTO ${SCHEMA}.subscriptions (id, object, customer, status, current_period_start, current_period_end, cancel_at_period_end, metadata, items, created, livemode)
+    VALUES ($1, 'subscription', $2, $3, $4, $5, false, $6, $7, extract(epoch from now())::bigint, false)
+    ON CONFLICT (id) DO UPDATE SET status = $3, current_period_start = $4, current_period_end = $5, cancel_at_period_end = false, metadata = $6, items = $7
+  `, [id, customerId, status, currentPeriodStart, currentPeriodEnd, JSON.stringify(metadata), JSON.stringify(items)]);
 
   // Also insert subscription item
-  const itemId = `si_${id.replace("sub_", "")}`;
   await pool!.query(`
     INSERT INTO ${SCHEMA}.subscription_items (id, object, subscription, price, quantity, created)
     VALUES ($1, 'subscription_item', $2, $3, $4, extract(epoch from now())::bigint)
