@@ -12,25 +12,19 @@ function checkStripeCLI() {
 }
 
 function getNextDevPort(cwd = process.cwd()) {
-  const pkgPath = path.join(cwd, "package.json");
-
-  if (fs.existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      const devScript = pkg.scripts?.dev || "";
-      const portMatch = devScript.match(/-p\s*(\d+)|--port\s*(\d+)/);
-      if (portMatch) {
-        return portMatch[1] || portMatch[2];
-      }
-    } catch {}
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(cwd, "package.json"), "utf8")
+    );
+    const match = (pkg.scripts?.dev || "").match(/-p\s*(\d+)|--port\s*(\d+)/);
+    return match ? match[1] || match[2] : "3000";
+  } catch {
+    return "3000";
   }
-
-  return "3000";
 }
 
 async function setupDev(options = {}) {
   const { cwd = process.cwd(), logger = console, exitOnError = true } = options;
-
   const pkgPath = path.join(cwd, "package.json");
 
   if (!fs.existsSync(pkgPath)) {
@@ -46,27 +40,21 @@ async function setupDev(options = {}) {
   }
 
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+  pkg.scripts = pkg.scripts || {};
 
-  if (!pkg.scripts) {
-    pkg.scripts = {};
-  }
-
-  const currentDevScript = pkg.scripts.dev || "next dev";
   const port = getNextDevPort(cwd);
   const webhookUrl = `localhost:${port}/api/stripe/webhook`;
 
   if (
     pkg.scripts["dev:webhooks"] ||
-    currentDevScript.includes("stripe listen")
+    (pkg.scripts.dev || "").includes("stripe listen")
   ) {
     logger.log("✓ Webhook forwarding already configured in package.json");
     return { success: true, alreadyConfigured: true };
   }
 
   const stripeListenScript = `if command -v stripe >/dev/null 2>&1; then stripe listen --forward-to ${webhookUrl}; else echo "⚠️  Stripe CLI not available, skipping webhook forwarding"; fi`;
-
   pkg.scripts["dev:stripe"] = stripeListenScript;
-
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 
   logger.log("✅ Added dev:stripe script to package.json\n");
@@ -82,16 +70,7 @@ async function setupDev(options = {}) {
     logger.log("   https://stripe.com/docs/stripe-cli");
   }
 
-  return {
-    success: true,
-    scripts: {
-      "dev:stripe": stripeListenScript,
-    },
-  };
+  return { success: true, scripts: { "dev:stripe": stripeListenScript } };
 }
 
-module.exports = {
-  setupDev,
-  checkStripeCLI,
-  getNextDevPort,
-};
+module.exports = { setupDev, checkStripeCLI, getNextDevPort };

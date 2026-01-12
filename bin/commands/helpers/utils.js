@@ -12,27 +12,24 @@ function createPrompt() {
 function question(rl, query, defaultValue = "") {
   return new Promise((resolve) => {
     const prompt = defaultValue ? `${query} (${defaultValue}): ` : `${query}: `;
-    rl.question(prompt, (answer) => {
-      resolve(answer || defaultValue);
-    });
+    rl.question(prompt, (answer) => resolve(answer || defaultValue));
   });
 }
 
 function maskSecretKey(key) {
-  if (!key || key.length < 8) return "*****";
-  return key.slice(0, 3) + "*****" + key.slice(-4);
+  return !key || key.length < 8
+    ? "*****"
+    : key.slice(0, 3) + "*****" + key.slice(-4);
 }
 
 function questionHidden(rl, query, defaultValue = "") {
   return new Promise((resolve) => {
     const stdin = process.stdin;
     const stdout = process.stdout;
-
     const maskedDefault = defaultValue ? maskSecretKey(defaultValue) : "";
-    const prompt = maskedDefault
-      ? `${query} (${maskedDefault}): `
-      : `${query}: `;
-    stdout.write(prompt);
+    stdout.write(
+      maskedDefault ? `${query} (${maskedDefault}): ` : `${query}: `
+    );
 
     stdin.setRawMode(true);
     stdin.resume();
@@ -47,10 +44,8 @@ function questionHidden(rl, query, defaultValue = "") {
         stdout.write("\n");
         resolve(input || defaultValue);
       } else if (char === "\u0003") {
-        // Ctrl+C
         process.exit();
       } else if (char === "\u007F" || char === "\b") {
-        // Backspace
         if (input.length > 0) {
           input = input.slice(0, -1);
           stdout.write("\b \b");
@@ -60,7 +55,6 @@ function questionHidden(rl, query, defaultValue = "") {
         stdout.write("*");
       }
     };
-
     stdin.on("data", onData);
   });
 }
@@ -76,128 +70,85 @@ function saveToEnvFiles(envVars, cwd = process.cwd()) {
 
   for (const envFile of envFiles) {
     const envPath = path.join(cwd, envFile);
-    if (fs.existsSync(envPath)) {
-      let content = fs.readFileSync(envPath, "utf8");
+    if (!fs.existsSync(envPath)) continue;
 
-      for (const { key, value } of envVars) {
-        const line = `${key}=${value}`;
-        const regex = new RegExp(`^${key}=.*`, "m");
-
-        if (regex.test(content)) {
-          content = content.replace(regex, line);
-        } else {
-          const newline = content.endsWith("\n") ? "" : "\n";
-          content = content + newline + line + "\n";
-        }
-      }
-
-      fs.writeFileSync(envPath, content);
-      updatedFiles.push(envFile);
+    let content = fs.readFileSync(envPath, "utf8");
+    for (const { key, value } of envVars) {
+      const regex = new RegExp(`^${key}=.*`, "m");
+      content = regex.test(content)
+        ? content.replace(regex, `${key}=${value}`)
+        : content + (content.endsWith("\n") ? "" : "\n") + `${key}=${value}\n`;
     }
+    fs.writeFileSync(envPath, content);
+    updatedFiles.push(envFile);
   }
-
   return updatedFiles;
 }
 
 function getTemplatesDir() {
-  return path.join(__dirname, "../../..", "src", "templates");
+  return path.join(__dirname, "..", "..", "..", "src", "templates");
 }
 
-function getAppRouterTemplate() {
-  const templatePath = path.join(getTemplatesDir(), "app-router.ts");
-  return fs.readFileSync(templatePath, "utf8");
-}
+function writeTemplate({
+  templateName,
+  destPath,
+  cwd = process.cwd(),
+  overwrite = false,
+  transform,
+  routerType = null,
+  inProjectRoot = false,
+}) {
+  const detected = detectRouterType(cwd);
+  const type = routerType || detected.type;
+  const useSrc = inProjectRoot ? false : detected.useSrc;
 
-function getPagesRouterTemplate() {
-  const templatePath = path.join(getTemplatesDir(), "pages-router.ts");
-  return fs.readFileSync(templatePath, "utf8");
+  const baseDir = path.join(cwd, useSrc ? "src" : "");
+  const absPath = path.join(baseDir, destPath);
+  const relativePath = (useSrc ? "src/" : "") + destPath;
+
+  if (fs.existsSync(absPath) && !overwrite) {
+    return { created: false, path: relativePath, routerType: type };
+  }
+
+  const template = fs.readFileSync(
+    path.join(getTemplatesDir(), templateName),
+    "utf8"
+  );
+  const content = transform ? transform(template) : template;
+
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  fs.writeFileSync(absPath, content);
+
+  return { created: true, path: relativePath, routerType: type };
 }
 
 function detectRouterType(cwd = process.cwd()) {
   const hasAppDir = fs.existsSync(path.join(cwd, "app"));
-  const hasPagesDir = fs.existsSync(path.join(cwd, "pages"));
   const hasSrcAppDir = fs.existsSync(path.join(cwd, "src", "app"));
+  const hasPagesDir = fs.existsSync(path.join(cwd, "pages"));
   const hasSrcPagesDir = fs.existsSync(path.join(cwd, "src", "pages"));
 
-  if (hasAppDir || hasSrcAppDir) {
+  if (hasAppDir || hasSrcAppDir)
     return { type: "app", useSrc: hasSrcAppDir && !hasAppDir };
-  }
-
-  if (hasPagesDir || hasSrcPagesDir) {
+  if (hasPagesDir || hasSrcPagesDir)
     return { type: "pages", useSrc: hasSrcPagesDir && !hasPagesDir };
-  }
-
   return { type: "app", useSrc: false };
 }
 
-function createApiRoute(routerType, useSrc, cwd = process.cwd()) {
-  const baseDir = useSrc ? path.join(cwd, "src") : cwd;
-  const prefix = useSrc ? "src/" : "";
-
-  if (routerType === "app") {
-    const routeDir = path.join(baseDir, "app", "api", "stripe", "[...all]");
-    const routeFile = path.join(routeDir, "route.ts");
-    const relativePath = `${prefix}app/api/stripe/[...all]/route.ts`;
-
-    if (fs.existsSync(routeFile)) {
-      return { path: relativePath, created: false };
-    }
-
-    fs.mkdirSync(routeDir, { recursive: true });
-
-    let template = getAppRouterTemplate();
-    template = template.replace(
-      /^\/\/ app\/api\/stripe\/\[\.\.\.all\]\/route\.ts\n/,
-      ""
-    );
-
-    fs.writeFileSync(routeFile, template);
-    return { path: relativePath, created: true };
-  } else {
-    const routeDir = path.join(baseDir, "pages", "api", "stripe");
-    const routeFile = path.join(routeDir, "[...all].ts");
-    const relativePath = `${prefix}pages/api/stripe/[...all].ts`;
-
-    if (fs.existsSync(routeFile)) {
-      return { path: relativePath, created: false };
-    }
-
-    fs.mkdirSync(routeDir, { recursive: true });
-
-    let template = getPagesRouterTemplate();
-    template = template.replace(
-      /^\/\/ pages\/api\/stripe\/\[\.\.\.all\]\.ts\n/,
-      ""
-    );
-    fs.writeFileSync(routeFile, template);
-    return { path: relativePath, created: true };
-  }
-}
-
 function isValidStripeKey(key) {
-  return (
-    key &&
-    (key.startsWith("sk_live_") ||
-      key.startsWith("sk_test_") ||
-      key.startsWith("rk_live_") ||
-      key.startsWith("rk_test_"))
-  );
+  return key && /^(sk|rk)_(live|test)_/.test(key);
 }
 
 function getMode(stripeKey) {
-  if (stripeKey.includes("_test_")) {
-    return "test";
-  } else if (stripeKey.includes("_live_")) {
-    return "production";
-  } else {
-    throw new Error("Invalid Stripe key");
-  }
+  if (stripeKey.includes("_test_")) return "test";
+  if (stripeKey.includes("_live_")) return "production";
+  throw new Error("Invalid Stripe key");
 }
 
 function loadStripe() {
   try {
     return require("stripe").default || require("stripe");
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -209,10 +160,8 @@ module.exports = {
   questionHidden,
   saveToEnvFiles,
   getTemplatesDir,
-  getAppRouterTemplate,
-  getPagesRouterTemplate,
+  writeTemplate,
   detectRouterType,
-  createApiRoute,
   isValidStripeKey,
   getMode,
   loadStripe,

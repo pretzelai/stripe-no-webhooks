@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17.2
+    container_name: snw-test-postgres
+    ports:
+      - "54321:5432"
+    environment:
+      POSTGRES_DB: snw_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d snw_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10

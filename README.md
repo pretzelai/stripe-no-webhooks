@@ -1,10 +1,15 @@
 # stripe-no-webhooks
 
-Opinionated & Open Source library that automatically syncs Stripe to your database and gives you useful helpers to implement subscriptions.
+Opinionated library to help you implement payments with Stripe. It syncs Stripe data to your database and gives you useful helpers to implement subscriptions and credits.
 
 ## Why this library?
 
-Stripe documentation lacks the ability to clearly point you to an easy way to implement Stripe. Depending on what you google you might end up in a weird place and shoot yourself in the foot.
+This library is a wrapper on Stripe SDK (with some bells and whistles). It gives you an opinionated and clear path to implement payments:
+
+1. Define plans in code which sync to Stripe
+2. No manual webhook setup - the library handles webhooks and syncs Stripe data to your DB
+3. Simple APIs for subscriptions and credits
+4. Optional callbacks (`onSubscriptionCreated`, etc.) for custom logic
 
 ## Setup
 
@@ -19,7 +24,7 @@ Note: make sure you also have `.env` or `.env.local` in your project so it can s
 ### 2. Create tables where all Stripe data will be automatically synced
 
 ```bash
-npx stripe-no-webhooks migrate postgresql://postgres.[USER]:[PASSWORD]@[DB_URL]/postgres
+npx stripe-no-webhooks migrate postgresql://[USER]:[PASSWORD]@[DB_URL]/postgres
 ```
 
 ### 3. Run `config` to generate files & webhook
@@ -28,11 +33,34 @@ npx stripe-no-webhooks migrate postgresql://postgres.[USER]:[PASSWORD]@[DB_URL]/
 npx stripe-no-webhooks config
 ```
 
-### 4. Create your plans
+This creates:
+
+- `lib/stripe.ts` - Initialize the client once
+- `app/api/stripe/[...all]/route.ts` - HTTP handler
+- `billing.config.ts` - Your plans
+
+### 4. Connect your auth
+
+Open `app/api/stripe/[...all]/route.ts` and add your auth:
+
+```typescript
+import { stripe } from "@/lib/stripe";
+import { auth } from "@clerk/nextjs/server"; // or your auth library
+
+export const POST = stripe.createHandler({
+  resolveUser: async () => {
+    const { userId } = await auth();
+    return userId ? { id: userId } : null;
+  },
+});
+```
+
+### 5. Create your plans
 
 ```javascript
-// billing.config.ts (automatically created during config)
+// billing.config.ts
 import type { BillingConfig } from "stripe-no-webhooks";
+
 const billingConfig: BillingConfig = {
   test: {
     plans: [
@@ -40,17 +68,12 @@ const billingConfig: BillingConfig = {
         name: "Premium",
         description: "Access to all features",
         price: [
-          {
-            amount: 1000, // $10
-            currency: "usd",
-            interval: "month",
-          },
-          {
-            amount: 10000, // $100
-            currency: "usd",
-            interval: "year",
-          },
+          { amount: 1000, currency: "usd", interval: "month" },
+          { amount: 10000, currency: "usd", interval: "year" },
         ],
+        credits: {
+          api_calls: { allocation: 1000 },
+        },
       },
     ],
   },
@@ -64,32 +87,61 @@ Run sync:
 npx stripe-no-webhooks sync
 ```
 
-### 5. Implement a checkout button in your frontend:
+### 6. (optional) Write custom logic for subscriptions
 
-```javascript
-"use client";
-import { checkout } from "stripe-no-webhooks/client";
+You probably want something to happen when a new user subscribes or a subscription cancels:
 
-export default function Home() {
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <button
-        className="bg-blue-500 text-white px-4 py-2 rounded-md cursor-pointer"
-        onClick={() =>
-          checkout({
-            planName: "Premium",
-            interval: "month",
-          })
-        }
-      >
-        Checkout
-      </button>
-    </div>
-  );
+```typescript
+// app/api/stripe/[...all]/route.ts
+import { stripe } from "@/lib/stripe";
+import type { Stripe } from "stripe";
+
+export const POST = stripe.createHandler({
+  // ...
+  callbacks: {
+    onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
+      console.log("New subscription:", subscription.id);
+    },
+    onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
+      console.log("Subscription cancelled:", subscription.id);
+    },
+  },
+});
+```
+
+Supported callbacks:
+
+- `onSubscriptionCreated`
+- `onSubscriptionCancelled`
+- `onSubscriptionRenewed`
+- `onSubscriptionPlanChanged`
+- `onCreditsGranted`
+- `onCreditsRevoked`
+- `onTopUpCompleted`
+- `onAutoTopUpFailed`
+- `onCreditsLow`
+
+### 7. (optional) Generate a pricing page
+
+```bash
+npx stripe-no-webhooks generate pricing-page
+```
+
+This will create a `PricingPage` component in `@/components`. Feel free to edit styling manually or with AI.
+
+It is ready-to-use with loading states, error handling, and styling. Import it whenever you want:
+
+```tsx
+import { PricingPage } from "@/components/PricingPage";
+import billingConfig from "@/billing.config";
+
+export default function Pricing() {
+  const plans = billingConfig.test?.plans || [];
+  return <PricingPage plans={plans} currentPlanId="free" />;
 }
 ```
 
-### 6. (optional) Backfill data
+### 8. (optional) Backfill data
 
 If you had data in Stripe before deploying `stripe-no-webhooks`, you can backfill your database by running:
 

@@ -1,21 +1,38 @@
 // pages/api/stripe/[...all].ts
-import { createStripeHandler } from "stripe-no-webhooks";
+import { stripe } from "@/lib/stripe";
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { Stripe } from "stripe";
-import billingConfig from "../../../billing.config";
 
-const handler = createStripeHandler({
-  billingConfig,
+// TODO: Import your auth library
+// import { getAuth } from "@clerk/nextjs/server";
+// import { getServerSession } from "next-auth";
+
+const handler = stripe.createHandler({
+  // REQUIRED: Resolve the authenticated user from the request
+  resolveUser: async () => {
+    // Clerk:
+    // const { userId } = getAuth(req);
+    // return userId ? { id: userId } : null;
+
+    // NextAuth:
+    // const session = await getServerSession(req, res);
+    // return session?.user?.id ? { id: session.user.id } : null;
+
+    return null; // TODO: Replace with your auth
+  },
+
+  // OPTIONAL: Resolve org for team/org billing
+  // resolveOrg: async () => {
+  //   const session = await getSession(req);
+  //   return session.currentOrgId ?? null;
+  // },
+
   callbacks: {
     onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
-      // Called when a new subscription is created
       console.log("New subscription:", subscription.id);
-      // e.g., send welcome email, provision resources, etc.
     },
     onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
-      // Called when a subscription is cancelled
       console.log("Subscription cancelled:", subscription.id);
-      // e.g., send cancellation email, revoke access, etc.
     },
   },
 });
@@ -34,7 +51,7 @@ export default async function stripeHandler(
   // Convert NextApiRequest to Request for the handler
   const body = await new Promise<string>((resolve) => {
     let data = "";
-    req.on("data", (chunk) => (data += chunk));
+    req.on("data", (chunk: string) => (data += chunk));
     req.on("end", () => resolve(data));
   });
 

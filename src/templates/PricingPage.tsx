@@ -1,0 +1,450 @@
+"use client";
+
+import { useState, useMemo, useEffect } from "react";
+import { createCheckoutClient } from "stripe-no-webhooks/client";
+import type { Plan, PriceInterval } from "stripe-no-webhooks";
+
+interface PricingPageProps {
+  plans: Plan[];
+  currentPlanId?: string;
+  currentInterval?: PriceInterval;
+  onError?: (error: Error) => void;
+  /** Countdown duration in seconds before redirecting after plan switch (default: 5) */
+  redirectCountdown?: number;
+}
+
+const getPlanId = (plan: Plan) =>
+  plan.id || plan.name.toLowerCase().replace(/\s+/g, "-");
+
+const getPrice = (plan: Plan, interval: PriceInterval) => {
+  if (!plan.price || plan.price.length === 0) return null;
+  return plan.price.find((p) => p.interval === interval) || plan.price[0];
+};
+
+export function PricingPage({
+  plans,
+  currentPlanId,
+  currentInterval = "month",
+  onError,
+  redirectCountdown = 5,
+}: PricingPageProps) {
+  const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [interval, setInterval] = useState<PriceInterval>(currentInterval);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
+
+  // Handle countdown and redirect
+  useEffect(() => {
+    if (countdown === null || !redirectUrl) return;
+
+    if (countdown === 0) {
+      window.location.href = redirectUrl;
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setCountdown(countdown - 1);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [countdown, redirectUrl]);
+
+  const { checkout, customerPortal } = useMemo(
+    () =>
+      createCheckoutClient({
+        onLoading: (isLoading) => {
+          if (!isLoading) setLoadingPlanId(null);
+        },
+        onError: (err) => {
+          setError(err.message);
+          onError?.(err);
+        },
+        onPlanChanged: (url) => {
+          setRedirectUrl(url);
+          setCountdown(redirectCountdown);
+        },
+      }),
+    [onError, redirectCountdown]
+  );
+
+  const handleCheckout = async (plan: Plan) => {
+    setLoadingPlanId(getPlanId(plan));
+    setError(null);
+    setCountdown(null);
+    setRedirectUrl(null);
+    await checkout({ planId: getPlanId(plan), interval });
+  };
+
+  const handleManage = async () => {
+    setLoadingPlanId("manage");
+    setError(null);
+    setCountdown(null);
+    setRedirectUrl(null);
+    await customerPortal();
+  };
+
+  const formatPrice = (amount: number, currency: string) => {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      minimumFractionDigits: 0,
+    }).format(amount / 100);
+  };
+
+  // Check if we should show interval toggle (must have both month AND year prices)
+  const hasMultipleIntervals = useMemo(() => {
+    const allIntervals = new Set<PriceInterval>();
+    for (const plan of plans) {
+      for (const price of plan.price || []) {
+        if (price.interval !== "one_time") {
+          allIntervals.add(price.interval);
+        }
+      }
+    }
+    return allIntervals.has("month") && allIntervals.has("year");
+  }, [plans]);
+
+  return (
+    <>
+      <style>{`
+        /* =================================================================
+           CUSTOMIZE YOUR THEME
+           Change these variables to match your brand colors and style.
+           ================================================================= */
+        .snw-pricing-container {
+          --snw-primary: #3b82f6;
+          --snw-primary-hover: #2563eb;
+          --snw-text: #111;
+          --snw-text-muted: #666;
+          --snw-text-secondary: #374151;
+          --snw-border: #e5e7eb;
+          --snw-background: white;
+          --snw-background-secondary: #f3f4f6;
+          --snw-success: #16a34a;
+          --snw-success-bg: #f0fdf4;
+          --snw-success-border: #bbf7d0;
+          --snw-error: #dc2626;
+          --snw-error-bg: #fef2f2;
+          --snw-error-border: #fecaca;
+          --snw-radius: 12px;
+          --snw-radius-sm: 8px;
+          --snw-font: system-ui, -apple-system, sans-serif;
+        }
+        /* ================================================================= */
+
+        .snw-pricing-container {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 2rem 1rem;
+          font-family: var(--snw-font);
+        }
+        .snw-pricing-header {
+          text-align: center;
+          margin-bottom: 2rem;
+        }
+        .snw-pricing-title {
+          font-size: 2rem;
+          font-weight: 700;
+          color: var(--snw-text);
+          margin: 0 0 0.5rem 0;
+        }
+        .snw-pricing-subtitle {
+          color: var(--snw-text-muted);
+          font-size: 1.1rem;
+          margin: 0;
+        }
+        .snw-interval-toggle {
+          display: flex;
+          justify-content: center;
+          gap: 0.5rem;
+          margin-bottom: 2rem;
+        }
+        .snw-interval-btn {
+          padding: 0.5rem 1rem;
+          border: 1px solid var(--snw-border);
+          background: var(--snw-background);
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 0.9rem;
+          transition: all 0.15s;
+        }
+        .snw-interval-btn:hover {
+          border-color: var(--snw-primary);
+        }
+        .snw-interval-btn.active {
+          background: var(--snw-primary);
+          border-color: var(--snw-primary);
+          color: white;
+        }
+        .snw-pricing-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          gap: 1.5rem;
+        }
+        .snw-pricing-card {
+          border: 1px solid var(--snw-border);
+          border-radius: var(--snw-radius);
+          padding: 1.5rem;
+          background: var(--snw-background);
+          transition: all 0.2s;
+          display: flex;
+          flex-direction: column;
+          position: relative;
+        }
+        .snw-pricing-card:hover {
+          border-color: var(--snw-primary);
+          box-shadow: 0 4px 12px color-mix(in srgb, var(--snw-primary) 10%, transparent);
+        }
+        .snw-pricing-card.current {
+          border-color: var(--snw-primary);
+          border-width: 2px;
+        }
+        .snw-plan-name {
+          font-size: 1.25rem;
+          font-weight: 600;
+          color: var(--snw-text);
+          margin: 0 0 0.25rem 0;
+        }
+        .snw-plan-description {
+          color: var(--snw-text-muted);
+          font-size: 0.9rem;
+          margin: 0 0 1rem 0;
+        }
+        .snw-plan-price {
+          font-size: 2.5rem;
+          font-weight: 700;
+          color: var(--snw-text);
+          margin: 0;
+        }
+        .snw-plan-interval {
+          color: var(--snw-text-muted);
+          font-size: 0.9rem;
+        }
+        .snw-plan-features {
+          list-style: none;
+          padding: 0;
+          margin: 1.5rem 0;
+          flex-grow: 1;
+        }
+        .snw-plan-feature {
+          padding: 0.4rem 0;
+          color: var(--snw-text-secondary);
+          font-size: 0.95rem;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+        .snw-plan-feature::before {
+          content: "✓";
+          color: var(--snw-primary);
+          font-weight: bold;
+        }
+        .snw-plan-btn {
+          width: 100%;
+          padding: 0.75rem 1rem;
+          border: none;
+          border-radius: var(--snw-radius-sm);
+          font-size: 1rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .snw-plan-btn:disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
+        }
+        .snw-plan-btn.primary {
+          background: var(--snw-primary);
+          color: white;
+        }
+        .snw-plan-btn.primary:hover:not(:disabled) {
+          background: var(--snw-primary-hover);
+        }
+        .snw-plan-btn.secondary {
+          background: var(--snw-background-secondary);
+          color: var(--snw-text-secondary);
+        }
+        .snw-plan-btn.secondary:hover:not(:disabled) {
+          background: var(--snw-border);
+        }
+        .snw-current-badge {
+          position: absolute;
+          top: -0.65rem;
+          left: 1.25rem;
+          background: var(--snw-primary);
+          color: white;
+          font-size: 0.7rem;
+          font-weight: 600;
+          padding: 0.25rem 0.75rem;
+          border-radius: 9999px;
+          text-transform: uppercase;
+          letter-spacing: 0.025em;
+        }
+        .snw-error {
+          background: var(--snw-error-bg);
+          border: 1px solid var(--snw-error-border);
+          color: var(--snw-error);
+          padding: 0.75rem 1rem;
+          border-radius: var(--snw-radius-sm);
+          margin-bottom: 1rem;
+          text-align: center;
+        }
+        .snw-success {
+          background: var(--snw-success-bg);
+          border: 1px solid var(--snw-success-border);
+          color: var(--snw-success);
+          padding: 0.75rem 1rem;
+          border-radius: var(--snw-radius-sm);
+          margin-bottom: 1rem;
+          text-align: center;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+          animation: snw-fade-in 0.3s ease-out;
+        }
+        .snw-success-icon {
+          width: 20px;
+          height: 20px;
+          background: var(--snw-success);
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+          font-size: 12px;
+          flex-shrink: 0;
+        }
+        @keyframes snw-fade-in {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .snw-loading-spinner {
+          display: inline-block;
+          width: 16px;
+          height: 16px;
+          border: 2px solid currentColor;
+          border-right-color: transparent;
+          border-radius: 50%;
+          animation: snw-spin 0.6s linear infinite;
+          margin-right: 0.5rem;
+        }
+        @keyframes snw-spin {
+          to { transform: rotate(360deg); }
+        }
+        @media (max-width: 768px) {
+          .snw-pricing-grid {
+            grid-template-columns: 1fr;
+          }
+          .snw-pricing-title {
+            font-size: 1.5rem;
+          }
+          .snw-plan-price {
+            font-size: 2rem;
+          }
+        }
+      `}</style>
+
+      <div className="snw-pricing-container">
+        <div className="snw-pricing-header">
+          <h1 className="snw-pricing-title">Choose your plan</h1>
+          <p className="snw-pricing-subtitle">
+            Start free, upgrade when you need more
+          </p>
+        </div>
+
+        {hasMultipleIntervals && (
+          <div className="snw-interval-toggle">
+            <button
+              className={`snw-interval-btn ${interval === "month" ? "active" : ""}`}
+              onClick={() => setInterval("month")}
+            >
+              Monthly
+            </button>
+            <button
+              className={`snw-interval-btn ${interval === "year" ? "active" : ""}`}
+              onClick={() => setInterval("year")}
+            >
+              Yearly
+            </button>
+          </div>
+        )}
+
+        {countdown !== null && (
+          <div className="snw-success">
+            <span className="snw-success-icon">✓</span>
+            <span>Plan updated! Redirecting in {countdown}...</span>
+          </div>
+        )}
+
+        {error && <div className="snw-error">{error}</div>}
+
+        <div className="snw-pricing-grid">
+          {plans.map((plan) => {
+            const planId = getPlanId(plan);
+            const price = getPrice(plan, interval);
+            const isCurrent = currentPlanId === planId;
+            const isLoading = loadingPlanId === planId;
+            const isManageLoading = loadingPlanId === "manage";
+            const isFree = !price || price.amount === 0;
+
+            return (
+              <div
+                key={planId}
+                className={`snw-pricing-card ${isCurrent ? "current" : ""}`}
+              >
+                {isCurrent && <span className="snw-current-badge">Current Plan</span>}
+                <h2 className="snw-plan-name">{plan.name}</h2>
+                {plan.description && (
+                  <p className="snw-plan-description">{plan.description}</p>
+                )}
+                <p className="snw-plan-price">
+                  {isFree || !price
+                    ? "Free"
+                    : formatPrice(price.amount, price.currency)}
+                  {price && !isFree && price.interval !== "one_time" && (
+                    <span className="snw-plan-interval">/{price.interval}</span>
+                  )}
+                </p>
+
+                {plan.credits && (
+                  <ul className="snw-plan-features">
+                    {Object.entries(plan.credits).map(([type, config]) => (
+                      <li key={type} className="snw-plan-feature">
+                        {config.allocation.toLocaleString()} {config.displayName || type}
+                        {config.onRenewal === "add"
+                          ? " (accumulates)"
+                          : `/${interval === "year" ? "year" : "month"}`}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {isCurrent ? (
+                  <button
+                    className="snw-plan-btn secondary"
+                    onClick={handleManage}
+                    disabled={isManageLoading}
+                  >
+                    {isManageLoading && <span className="snw-loading-spinner" />}
+                    Manage Subscription
+                  </button>
+                ) : (
+                  <button
+                    className="snw-plan-btn primary"
+                    onClick={() => handleCheckout(plan)}
+                    disabled={isLoading || !!loadingPlanId}
+                  >
+                    {isLoading && <span className="snw-loading-spinner" />}
+                    {isFree ? "Get Started" : currentPlanId ? "Switch Plan" : "Subscribe"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
