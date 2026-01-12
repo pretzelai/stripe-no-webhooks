@@ -1,38 +1,12 @@
 import type Stripe from "stripe";
 import type { BillingConfig } from "../BillingConfig";
-import type {
-  HandlerContext,
-  CheckoutRequestBody,
-  CustomerPortalRequestBody,
-} from "./types";
+import type { HandlerContext, CheckoutRequestBody } from "./types";
+import { jsonResponse, errorResponse, successResponse } from "./utils";
 import {
   planHasCredits,
   findPlanByPriceId,
   getActiveSubscription,
 } from "../helpers";
-
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function errorResponse(message: string, status = 500): Response {
-  return jsonResponse({ error: message }, status);
-}
-
-function successResponse(
-  request: Request,
-  data: Record<string, unknown>,
-  redirectUrl: string
-): Response {
-  const acceptHeader = request.headers.get("accept") || "";
-  if (acceptHeader.includes("application/json")) {
-    return jsonResponse({ ...data, redirectUrl });
-  }
-  return Response.redirect(redirectUrl, 303);
-}
 
 async function hasPaymentMethod(
   stripe: Stripe,
@@ -40,7 +14,8 @@ async function hasPaymentMethod(
 ): Promise<boolean> {
   const customer = await stripe.customers.retrieve(customerId);
   if ("deleted" in customer && customer.deleted) return false;
-  return !!(customer as Stripe.Customer).invoice_settings?.default_payment_method;
+  return !!(customer as Stripe.Customer).invoice_settings
+    ?.default_payment_method;
 }
 
 function resolvePriceId(
@@ -169,7 +144,10 @@ export async function handleCheckout(
 
         const targetPrice = await ctx.stripe.prices.retrieve(priceId);
         const targetAmount = targetPrice.unit_amount ?? 0;
-        const customerHasPaymentMethod = await hasPaymentMethod(ctx.stripe, customerId);
+        const customerHasPaymentMethod = await hasPaymentMethod(
+          ctx.stripe,
+          customerId
+        );
 
         const isUpgrade = targetAmount > currentAmount;
         const isDowngrade = targetAmount < currentAmount;
@@ -186,13 +164,19 @@ export async function handleCheckout(
           });
 
           const periodEnd = currentSub.current_period_end;
-          return successResponse(request, {
-            success: true,
-            scheduled: true,
-            message: "Downgrade scheduled for end of current billing period",
-            ...(periodEnd && { effectiveAt: new Date(periodEnd * 1000).toISOString() }),
-            url: successUrl,
-          }, successUrl);
+          return successResponse(
+            request,
+            {
+              success: true,
+              scheduled: true,
+              message: "Downgrade scheduled for end of current billing period",
+              ...(periodEnd && {
+                effectiveAt: new Date(periodEnd * 1000).toISOString(),
+              }),
+              url: successUrl,
+            },
+            successUrl
+          );
         }
 
         // Upgrade: apply immediately
@@ -207,7 +191,9 @@ export async function handleCheckout(
           try {
             await ctx.stripe.subscriptions.update(currentSub.id, {
               items: [{ id: currentSub.items.data[0].id, price: priceId }],
-              proration_behavior: disableProration ? "none" : "create_prorations",
+              proration_behavior: disableProration
+                ? "none"
+                : "create_prorations",
               ...(disableProration && { billing_cycle_anchor: "now" }),
               metadata: {
                 upgrade_from_price_id: currentPriceId,
@@ -221,17 +207,25 @@ export async function handleCheckout(
               customer: customerId,
               return_url: cancelUrl,
             });
-            return successResponse(request, {
-              error: "Payment issue",
-              portalUrl: portal.url,
-            }, portal.url);
+            return successResponse(
+              request,
+              {
+                error: "Payment issue",
+                portalUrl: portal.url,
+              },
+              portal.url
+            );
           }
 
-          return successResponse(request, {
-            success: true,
-            upgraded: true,
-            url: successUrl,
-          }, successUrl);
+          return successResponse(
+            request,
+            {
+              success: true,
+              upgraded: true,
+              url: successUrl,
+            },
+            successUrl
+          );
         }
 
         // No payment method - collect via setup mode checkout
@@ -299,51 +293,6 @@ export async function handleCheckout(
     return successResponse(request, { url: session.url }, session.url);
   } catch (err) {
     console.error("Checkout error:", err);
-    const message = err instanceof Error ? err.message : "Unknown error";
-    const status =
-      err && typeof err === "object" && "statusCode" in err
-        ? (err.statusCode as number)
-        : 500;
-    return errorResponse(message, status);
-  }
-}
-
-export async function handleCustomerPortal(
-  request: Request,
-  ctx: HandlerContext
-): Promise<Response> {
-  try {
-    const body: CustomerPortalRequestBody = await request.json().catch(() => ({}));
-
-    const user = ctx.resolveUser ? await ctx.resolveUser(request) : null;
-    if (!user) {
-      return errorResponse(
-        "Unauthorized. Configure resolveUser to extract authenticated user.",
-        401
-      );
-    }
-
-    const orgId = ctx.resolveOrg ? await ctx.resolveOrg(request) : null;
-
-    const customerId = await ctx.resolveStripeCustomerId({
-      user: orgId ? { id: orgId } : user,
-      createIfNotFound: false,
-    });
-
-    if (!customerId) {
-      return errorResponse("No billing account found for this user.", 404);
-    }
-
-    const origin = request.headers.get("origin") || "";
-    const returnUrl = body.returnUrl || `${origin}/`;
-
-    const session = await ctx.stripe.billingPortal.sessions.create({
-      customer: customerId,
-      return_url: returnUrl,
-    });
-    return successResponse(request, { url: session.url }, session.url);
-  } catch (err) {
-    console.error("Customer portal error:", err);
     const message = err instanceof Error ? err.message : "Unknown error";
     const status =
       err && typeof err === "object" && "statusCode" in err
