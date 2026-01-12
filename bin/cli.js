@@ -48,6 +48,8 @@ async function main() {
 
     case "generate":
       await generate(positional[0], { output: options.output });
+      break;
+
     case "backfill":
       await backfill(args[1]);
       break;

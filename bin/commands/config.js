@@ -7,8 +7,6 @@ const {
   saveToEnvFiles,
   getTemplatesDir,
   detectRouterType,
-  createLibStripe,
-  createApiRoute,
   isValidStripeKey,
   loadStripe,
 } = require("./helpers/utils");
@@ -20,27 +18,22 @@ async function config(options = {}) {
     cwd = process.cwd(),
     logger = console,
     exitOnError = true,
-    // For testing: inject Stripe class
     StripeClass = null,
   } = options;
 
-  let Stripe = StripeClass;
+  let Stripe = StripeClass || loadStripe();
   if (!Stripe) {
-    Stripe = loadStripe();
-    if (!Stripe) {
-      logger.error("❌ Stripe package not found.");
-      logger.log("Please install it first: npm install stripe");
-      if (exitOnError) process.exit(1);
-      return { success: false, error: "Stripe package not found" };
-    }
+    logger.error("❌ Stripe package not found.");
+    logger.log("Please install it first: npm install stripe");
+    if (exitOnError) process.exit(1);
+    return { success: false, error: "Stripe package not found" };
   }
 
   logger.log("\n🔧 Stripe Webhook Configuration\n");
 
   const { type: routerType, useSrc } = detectRouterType(cwd);
   const routerLabel = routerType === "app" ? "App Router" : "Pages Router";
-  const srcLabel = useSrc ? " (src/)" : "";
-  logger.log(`📂 Detected: ${routerLabel}${srcLabel}\n`);
+  logger.log(`📂 Detected: ${routerLabel}${useSrc ? " (src/)" : ""}\n`);
 
   // Check for existing valid Stripe key
   const existingStripeKey = env.STRIPE_SECRET_KEY || "";
@@ -55,7 +48,6 @@ async function config(options = {}) {
       "Enter your Stripe Secret Key (sk_...)",
       existingStripeKey
     );
-
     if (!isValidStripeKey(stripeSecretKey)) {
       logger.error(
         "❌ Invalid Stripe Secret Key. It should start with 'sk_' or 'rk_'"
@@ -75,7 +67,6 @@ async function config(options = {}) {
       logger.log("✓ NEXT_PUBLIC_SITE_URL already set in environment");
       siteUrl = existingSiteUrl;
     } catch {
-      // Invalid URL, prompt for new one
       const rl = createPrompt();
       siteUrl = await question(rl, "Enter your site URL", "");
       rl.close();
@@ -94,9 +85,8 @@ async function config(options = {}) {
 
   let webhookUrl;
   try {
-    const url = new URL(siteUrl);
-    webhookUrl = `${url.origin}/api/stripe/webhook`;
-  } catch (e) {
+    webhookUrl = `${new URL(siteUrl).origin}/api/stripe/webhook`;
+  } catch {
     logger.error("❌ Invalid URL format");
     if (exitOnError) process.exit(1);
     return { success: false, error: "Invalid URL format" };
@@ -117,14 +107,24 @@ async function config(options = {}) {
     rl.close();
   }
 
+  const templatesDir = getTemplatesDir();
+  const baseDir = path.join(cwd, useSrc ? "src" : "");
+  const prefix = useSrc ? "src/" : "";
+
   // Create lib/stripe.ts (idempotent)
   logger.log(`\n📁 Setting up lib/stripe.ts...`);
   try {
-    const result = createLibStripe(useSrc, cwd);
-    if (result.created) {
-      logger.log(`✅ Created ${result.path}`);
+    const libStripePath = path.join(baseDir, "lib", "stripe.ts");
+    const libStripeRelative = `${prefix}lib/stripe.ts`;
+    if (fs.existsSync(libStripePath)) {
+      logger.log(`✓ ${libStripeRelative} already exists`);
     } else {
-      logger.log(`✓ ${result.path} already exists`);
+      fs.mkdirSync(path.dirname(libStripePath), { recursive: true });
+      fs.writeFileSync(
+        libStripePath,
+        fs.readFileSync(path.join(templatesDir, "lib-stripe.ts"), "utf8")
+      );
+      logger.log(`✅ Created ${libStripeRelative}`);
     }
   } catch (error) {
     logger.error("❌ Failed to create lib/stripe.ts:", error.message);
@@ -135,11 +135,25 @@ async function config(options = {}) {
   // Create API route (idempotent)
   logger.log(`📁 Setting up API route...`);
   try {
-    const result = createApiRoute(routerType, useSrc, cwd);
-    if (result.created) {
-      logger.log(`✅ Created ${result.path}`);
+    const isApp = routerType === "app";
+    const routeRelPath = isApp
+      ? "app/api/stripe/[...all]/route.ts"
+      : "pages/api/stripe/[...all].ts";
+    const routePath = path.join(baseDir, routeRelPath);
+    const routeRelative = `${prefix}${routeRelPath}`;
+    if (fs.existsSync(routePath)) {
+      logger.log(`✓ ${routeRelative} already exists`);
     } else {
-      logger.log(`✓ ${result.path} already exists`);
+      const templateName = isApp ? "app-router.ts" : "pages-router.ts";
+      const commentPattern = isApp
+        ? /^\/\/ app\/api\/stripe\/\[\.\.\.all\]\/route\.ts\n/
+        : /^\/\/ pages\/api\/stripe\/\[\.\.\.all\]\.ts\n/;
+      const template = fs
+        .readFileSync(path.join(templatesDir, templateName), "utf8")
+        .replace(commentPattern, "");
+      fs.mkdirSync(path.dirname(routePath), { recursive: true });
+      fs.writeFileSync(routePath, template);
+      logger.log(`✅ Created ${routeRelative}`);
     }
   } catch (error) {
     logger.error("❌ Failed to create API route:", error.message);
@@ -151,13 +165,14 @@ async function config(options = {}) {
   logger.log(`📁 Setting up billing.config.ts...`);
   try {
     const billingConfigPath = path.join(cwd, "billing.config.ts");
-    if (!fs.existsSync(billingConfigPath)) {
-      const templatePath = path.join(getTemplatesDir(), "billing.config.ts");
-      const template = fs.readFileSync(templatePath, "utf8");
-      fs.writeFileSync(billingConfigPath, template);
-      logger.log(`✅ Created billing.config.ts`);
-    } else {
+    if (fs.existsSync(billingConfigPath)) {
       logger.log(`✓ billing.config.ts already exists`);
+    } else {
+      fs.writeFileSync(
+        billingConfigPath,
+        fs.readFileSync(path.join(templatesDir, "billing.config.ts"), "utf8")
+      );
+      logger.log(`✅ Created billing.config.ts`);
     }
   } catch (error) {
     logger.error("❌ Failed to create billing.config.ts:", error.message);
@@ -182,7 +197,6 @@ async function config(options = {}) {
       logger.log(`✓ Webhook endpoint already exists (${existingWebhook.id})`);
       webhook = existingWebhook;
     } else if (existingWebhook && !webhookSecret) {
-      // Webhook exists but we don't have the secret - need to recreate
       logger.log(`🔄 Webhook exists but secret not found, recreating...`);
       await stripe.webhookEndpoints.del(existingWebhook.id);
       webhook = await stripe.webhookEndpoints.create({
@@ -205,18 +219,14 @@ async function config(options = {}) {
 
     // Build env vars to save (only if values changed)
     const envVars = [];
-    if (env.STRIPE_SECRET_KEY !== stripeSecretKey) {
+    if (env.STRIPE_SECRET_KEY !== stripeSecretKey)
       envVars.push({ key: "STRIPE_SECRET_KEY", value: stripeSecretKey });
-    }
-    if (env.STRIPE_WEBHOOK_SECRET !== webhookSecret) {
+    if (env.STRIPE_WEBHOOK_SECRET !== webhookSecret)
       envVars.push({ key: "STRIPE_WEBHOOK_SECRET", value: webhookSecret });
-    }
-    if (env.NEXT_PUBLIC_SITE_URL !== siteUrl) {
+    if (env.NEXT_PUBLIC_SITE_URL !== siteUrl)
       envVars.push({ key: "NEXT_PUBLIC_SITE_URL", value: siteUrl });
-    }
-    if (databaseUrlInput && env.DATABASE_URL !== databaseUrlInput) {
+    if (databaseUrlInput && env.DATABASE_URL !== databaseUrlInput)
       envVars.push({ key: "DATABASE_URL", value: databaseUrlInput });
-    }
 
     if (envVars.length > 0) {
       const updatedFiles = saveToEnvFiles(envVars, cwd);
@@ -228,14 +238,10 @@ async function config(options = {}) {
         logger.log(
           "\nREMEMBER: Update the environment variables in Vercel too:"
         );
-        for (const { key, value } of envVars) {
-          logger.log(`${key}=${value}`);
-        }
+        for (const { key, value } of envVars) logger.log(`${key}=${value}`);
       } else {
         logger.log("\nAdd these to your environment variables:\n");
-        for (const { key, value } of envVars) {
-          logger.log(`${key}=${value}`);
-        }
+        for (const { key, value } of envVars) logger.log(`${key}=${value}`);
       }
     } else {
       logger.log("\n✓ All environment variables already configured");
