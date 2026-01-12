@@ -87,13 +87,15 @@ Run sync:
 npx stripe-no-webhooks sync
 ```
 
-### 6. Generate a pricing page
+### 6. (optional) Generate a pricing page
 
 ```bash
 npx stripe-no-webhooks generate pricing-page
 ```
 
-This creates a ready-to-use React component with loading states, error handling, and styling:
+This will create a `PricingPage` component in `@/components`. Feel free to edit styling manually or with AI.
+
+It is ready-to-use with loading states, error handling, and styling. Import it whenever you want:
 
 ```tsx
 import { PricingPage } from "@/components/PricingPage";
