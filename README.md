@@ -104,15 +104,16 @@ npx stripe-no-webhooks sync
 
 ### 6. (optional) Write custom logic for subscriptions
 
-You probably want something to happen when a new user subscribes or a subscription cancels:
+You probably want something to happen when a new user subscribes or a subscription cancels. Define callbacks when creating the `Billing` instance:
 
 ```typescript
-// app/api/stripe/[...all]/route.ts
-import { billing } from "@/lib/billing";
+// lib/billing.ts
+import { Billing } from "stripe-no-webhooks";
+import billingConfig from "../billing.config";
 import type { Stripe } from "stripe";
 
-export const POST = billing.createHandler({
-  // ...
+export const billing = new Billing({
+  billingConfig,
   callbacks: {
     onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
       console.log("New subscription:", subscription.id);

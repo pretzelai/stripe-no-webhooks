@@ -109,14 +109,15 @@ Auto top-up triggers automatically when using `billing.credits.consume()`.
 
 ## Callbacks
 
-Callbacks are passed when creating the handler:
+Define callbacks when creating the `Billing` instance:
 
 ```typescript
-// app/api/stripe/[...all]/route.ts
-import { billing } from "@/lib/billing";
+// lib/billing.ts
+import { Billing } from "stripe-no-webhooks";
+import billingConfig from "../billing.config";
 
-export const POST = billing.createHandler({
-  resolveUser: async () => { /* ... */ },
+export const billing = new Billing({
+  billingConfig,
   callbacks: {
     onCreditsGranted: ({ userId, creditType, amount }) => {},
     onCreditsRevoked: ({ userId, creditType, amount }) => {},

@@ -78,6 +78,16 @@ export const billing = new Billing({
   // - STRIPE_SECRET_KEY
   // - STRIPE_WEBHOOK_SECRET
   // - DATABASE_URL
+
+  // Optional: Add callbacks for subscription/credit events
+  callbacks: {
+    onSubscriptionCreated: (subscription) => {
+      console.log("New subscription:", subscription.id);
+    },
+    onCreditsGranted: ({ userId, creditType, amount }) => {
+      console.log(`Granted ${amount} ${creditType} to ${userId}`);
+    },
+  },
 });
 ```
 

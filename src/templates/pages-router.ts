@@ -1,7 +1,6 @@
 // pages/api/stripe/[...all].ts
 import { billing } from "@/lib/billing";
 import type { NextApiRequest, NextApiResponse } from "next";
-import type { Stripe } from "stripe";
 
 // TODO: Import your auth library
 // import { getAuth } from "@clerk/nextjs/server";
@@ -26,15 +25,6 @@ const handler = billing.createHandler({
   //   const session = await getSession(req);
   //   return session.currentOrgId ?? null;
   // },
-
-  callbacks: {
-    onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
-      console.log("New subscription:", subscription.id);
-    },
-    onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
-      console.log("Subscription cancelled:", subscription.id);
-    },
-  },
 });
 
 // Disable body parsing, we need the raw body for webhook verification

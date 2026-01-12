@@ -137,6 +137,7 @@ export interface StripeConfig {
   successUrl?: string;
   cancelUrl?: string;
   credits?: CreditsConfig;
+  callbacks?: StripeWebhookCallbacks;
 
   mapUserIdToStripeCustomerId?: (
     userId: string

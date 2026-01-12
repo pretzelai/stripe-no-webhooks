@@ -79,6 +79,7 @@ export class Billing {
   private readonly sync: StripeSync | null;
   private readonly mapUserIdToStripeCustomerId?: StripeConfig["mapUserIdToStripeCustomerId"];
   private readonly creditsConfig?: StripeConfig["credits"];
+  private readonly callbacks?: StripeConfig["callbacks"];
 
   constructor(config: StripeConfig = {}) {
     const {
@@ -90,6 +91,7 @@ export class Billing {
       successUrl,
       cancelUrl,
       credits: creditsConfig,
+      callbacks,
       mapUserIdToStripeCustomerId,
     } = config;
 
@@ -106,6 +108,7 @@ export class Billing {
     this.stripeWebhookSecret = stripeWebhookSecret;
     this.mapUserIdToStripeCustomerId = mapUserIdToStripeCustomerId;
     this.creditsConfig = creditsConfig;
+    this.callbacks = callbacks;
 
     initCredits(this.pool, this.schema);
 
@@ -125,11 +128,14 @@ export class Billing {
       mode: this.mode,
     });
 
-    this.credits = this.createCreditsApi({
-      onTopUpCompleted: creditsConfig?.onTopUpCompleted,
-      onAutoTopUpFailed: creditsConfig?.onAutoTopUpFailed,
-      onCreditsLow: creditsConfig?.onCreditsLow,
-    });
+    // Merge callbacks: top-level callbacks override creditsConfig callbacks
+    const mergedCallbacks = {
+      onTopUpCompleted: callbacks?.onTopUpCompleted ?? creditsConfig?.onTopUpCompleted,
+      onAutoTopUpFailed: callbacks?.onAutoTopUpFailed ?? creditsConfig?.onAutoTopUpFailed,
+      onCreditsLow: callbacks?.onCreditsLow ?? creditsConfig?.onCreditsLow,
+    };
+
+    this.credits = this.createCreditsApi(mergedCallbacks);
 
     this.seats = createSeatsApi({
       stripe: this.stripe,
@@ -139,8 +145,8 @@ export class Billing {
       mode: this.mode,
       grantTo: this.grantTo,
       callbacks: {
-        onCreditsGranted: creditsConfig?.onCreditsGranted,
-        onCreditsRevoked: creditsConfig?.onCreditsRevoked,
+        onCreditsGranted: callbacks?.onCreditsGranted ?? creditsConfig?.onCreditsGranted,
+        onCreditsRevoked: callbacks?.onCreditsRevoked ?? creditsConfig?.onCreditsRevoked,
       },
     });
   }
@@ -281,9 +287,12 @@ export class Billing {
     const {
       resolveUser,
       resolveOrg,
-      callbacks,
+      callbacks: handlerCallbacks,
       automaticTax = false,
     } = handlerConfig;
+
+    // Merge callbacks: handler-level overrides instance-level
+    const callbacks = { ...this.callbacks, ...handlerCallbacks };
 
     const creditLifecycle = createCreditLifecycle({
       pool: this.pool,

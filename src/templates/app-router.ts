@@ -1,6 +1,5 @@
 // app/api/stripe/[...all]/route.ts
 import { billing } from "@/lib/billing";
-import type { Stripe } from "stripe";
 
 // TODO: Import your auth library
 // import { auth } from "@clerk/nextjs/server";
@@ -25,13 +24,4 @@ export const POST = billing.createHandler({
   //   const session = await getSession();
   //   return session.currentOrgId ?? null;
   // },
-
-  callbacks: {
-    onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
-      console.log("New subscription:", subscription.id);
-    },
-    onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
-      console.log("Subscription cancelled:", subscription.id);
-    },
-  },
 });

@@ -20,6 +20,9 @@ const billing = new Billing({
     grantTo: "subscriber" | "organization" | "seat-users" | "manual",
   },
 
+  // Callbacks for subscription and credit events
+  callbacks: StripeWebhookCallbacks,
+
   // Map user ID to existing Stripe customer ID (for migrations)
   mapUserIdToStripeCustomerId: (userId: string) =>
     string | null | Promise<string | null>,
@@ -37,7 +40,7 @@ export const POST = billing.createHandler({
   // OPTIONAL: Resolve org for team/org billing
   resolveOrg: (request: Request) => string | null | Promise<string | null>,
 
-  // OPTIONAL: Callbacks for subscription events
+  // OPTIONAL: Override instance-level callbacks (prefer defining on Billing instance)
   callbacks: StripeWebhookCallbacks,
 
   // OPTIONAL: Enable automatic tax calculation
@@ -51,6 +54,8 @@ type User = {
   email?: string;
 };
 ```
+
+Callbacks can be defined either on the `Billing` instance (recommended) or in `createHandler()`. Handler-level callbacks override instance-level ones.
 
 ## Routes
 
@@ -230,54 +235,60 @@ await billing.seats.remove({
 
 ## Callbacks
 
+Define callbacks when creating the `Billing` instance:
+
 ```typescript
-callbacks: {
-  onSubscriptionCreated?: (subscription: Stripe.Subscription) => void,
-  onSubscriptionCancelled?: (subscription: Stripe.Subscription) => void,
-  onSubscriptionRenewed?: (subscription: Stripe.Subscription) => void,
+// lib/billing.ts
+const billing = new Billing({
+  billingConfig,
+  callbacks: {
+    onSubscriptionCreated?: (subscription: Stripe.Subscription) => void,
+    onSubscriptionCancelled?: (subscription: Stripe.Subscription) => void,
+    onSubscriptionRenewed?: (subscription: Stripe.Subscription) => void,
 
-  onCreditsGranted?: (params: {
-    userId: string,
-    creditType: string,
-    amount: number,
-    newBalance: number,
-    source: TransactionSource,
-    sourceId?: string,
-  }) => void,
+    onCreditsGranted?: (params: {
+      userId: string,
+      creditType: string,
+      amount: number,
+      newBalance: number,
+      source: TransactionSource,
+      sourceId?: string,
+    }) => void,
 
-  onCreditsRevoked?: (params: {
-    userId: string,
-    creditType: string,
-    amount: number,
-    previousBalance: number,
-    newBalance: number,
-    source: "cancellation" | "manual" | "seat_revoke",
-  }) => void,
+    onCreditsRevoked?: (params: {
+      userId: string,
+      creditType: string,
+      amount: number,
+      previousBalance: number,
+      newBalance: number,
+      source: "cancellation" | "manual" | "seat_revoke",
+    }) => void,
 
-  onCreditsLow?: (params: {
-    userId: string,
-    creditType: string,
-    balance: number,
-    threshold: number,
-  }) => void,
+    onCreditsLow?: (params: {
+      userId: string,
+      creditType: string,
+      balance: number,
+      threshold: number,
+    }) => void,
 
-  onTopUpCompleted?: (params: {
-    userId: string,
-    creditType: string,
-    creditsAdded: number,
-    amountCharged: number,
-    currency: string,
-    newBalance: number,
-    paymentIntentId: string,
-  }) => void,
+    onTopUpCompleted?: (params: {
+      userId: string,
+      creditType: string,
+      creditsAdded: number,
+      amountCharged: number,
+      currency: string,
+      newBalance: number,
+      paymentIntentId: string,
+    }) => void,
 
-  onAutoTopUpFailed?: (params: {
-    userId: string,
-    creditType: string,
-    reason: "no_payment_method" | "payment_failed" | "monthly_limit_reached" | "unexpected_error",
-    error?: string,
-  }) => void,
-}
+    onAutoTopUpFailed?: (params: {
+      userId: string,
+      creditType: string,
+      reason: "no_payment_method" | "payment_failed" | "monthly_limit_reached" | "unexpected_error",
+      error?: string,
+    }) => void,
+  },
+});
 ```
 
 ## BillingConfig
