@@ -8,9 +8,9 @@ Add `resolveOrg` to your handler to enable org billing:
 
 ```typescript
 // app/api/stripe/[...all]/route.ts
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 
-export const POST = stripe.createHandler({
+export const POST = billing.createHandler({
   resolveUser: async () => {
     const { userId } = await auth();
     return userId ? { id: userId } : null;
@@ -27,6 +27,7 @@ export const POST = stripe.createHandler({
 ```
 
 When `resolveOrg` returns an org ID:
+
 - The org becomes the Stripe customer (billing entity)
 - In `seat-users` mode, the user (from `resolveUser`) becomes the first seat
 
@@ -55,18 +56,18 @@ Two modes via `grantTo` config:
 ### Shared Pool
 
 ```typescript
-// lib/stripe.ts - credits go to subscriber (org) by default
-import { createStripeHandler } from "stripe-no-webhooks";
+// lib/billing.ts - credits go to subscriber (org) by default
+import { Billing } from "stripe-no-webhooks";
 
-export const stripe = createStripeHandler({ billingConfig });
+export const billing = new Billing({ billingConfig });
 ```
 
 ```typescript
 // Anywhere in your app
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 
 // All team members consume from org's balance
-await stripe.credits.consume({
+await billing.credits.consume({
   userId: "org_456", // org ID
   creditType: "api_calls",
   amount: 1,
@@ -76,10 +77,10 @@ await stripe.credits.consume({
 ### Per-Seat Credits
 
 ```typescript
-// lib/stripe.ts
-import { createStripeHandler } from "stripe-no-webhooks";
+// lib/billing.ts
+import { Billing } from "stripe-no-webhooks";
 
-export const stripe = createStripeHandler({
+export const billing = new Billing({
   billingConfig,
   credits: { grantTo: "seat-users" },
 });
@@ -88,16 +89,16 @@ export const stripe = createStripeHandler({
 Each team member gets their own credit allocation automatically when you add seats:
 
 ```typescript
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 
 // Add members
-await stripe.seats.add({ userId: "user_123", orgId: "org_456" });
+await billing.seats.add({ userId: "user_123", orgId: "org_456" });
 
 // Remove members
-await stripe.seats.remove({ userId: "user_123", orgId: "org_456" });
+await billing.seats.remove({ userId: "user_123", orgId: "org_456" });
 
 // Consume individual credits
-await stripe.credits.consume({
+await billing.credits.consume({
   userId: "user_123", // individual user
   creditType: "api_calls",
   amount: 1,

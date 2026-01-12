@@ -1,12 +1,12 @@
 // app/api/stripe/[...all]/route.ts
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 import type { Stripe } from "stripe";
 
 // TODO: Import your auth library
 // import { auth } from "@clerk/nextjs/server";
 // import { getServerSession } from "next-auth";
 
-export const POST = stripe.createHandler({
+export const POST = billing.createHandler({
   // REQUIRED: Resolve the authenticated user from the request
   resolveUser: async () => {
     // Clerk:

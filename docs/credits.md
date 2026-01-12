@@ -29,9 +29,9 @@ credits: {
 ## Consume Credits
 
 ```typescript
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 
-const result = await stripe.credits.consume({
+const result = await billing.credits.consume({
   userId: "user_123",
   creditType: "api_calls",
   amount: 1,
@@ -46,9 +46,9 @@ if (!result.success) {
 ## Check Balance
 
 ```typescript
-const balance = await stripe.credits.getBalance("user_123", "api_calls");
-const allBalances = await stripe.credits.getAllBalances("user_123");
-const hasEnough = await stripe.credits.hasCredits("user_123", "api_calls", 10);
+const balance = await billing.credits.getBalance("user_123", "api_calls");
+const allBalances = await billing.credits.getAllBalances("user_123");
+const hasEnough = await billing.credits.hasCredits("user_123", "api_calls", 10);
 ```
 
 ## Top-Ups
@@ -73,7 +73,7 @@ credits: {
 
 ```typescript
 // In your API route
-const result = await stripe.credits.topUp({
+const result = await billing.credits.topUp({
   userId: "user_123",
   creditType: "api_calls",
   amount: 500,
@@ -105,7 +105,7 @@ credits: {
 }
 ```
 
-Auto top-up triggers automatically when using `stripe.credits.consume()`.
+Auto top-up triggers automatically when using `billing.credits.consume()`.
 
 ## Callbacks
 
@@ -113,9 +113,9 @@ Callbacks are passed when creating the handler:
 
 ```typescript
 // app/api/stripe/[...all]/route.ts
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 
-export const POST = stripe.createHandler({
+export const POST = billing.createHandler({
   resolveUser: async () => { /* ... */ },
   callbacks: {
     onCreditsGranted: ({ userId, creditType, amount }) => {},

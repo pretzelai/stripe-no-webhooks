@@ -35,7 +35,7 @@ npx stripe-no-webhooks config
 
 This creates:
 
-- `lib/stripe.ts` - Initialize the client once
+- `lib/billing.ts` - Billing instance (optional, for credits/subscriptions API)
 - `app/api/stripe/[...all]/route.ts` - HTTP handler
 - `billing.config.ts` - Your plans
 
@@ -44,10 +44,25 @@ This creates:
 Open `app/api/stripe/[...all]/route.ts` and add your auth:
 
 ```typescript
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 import { auth } from "@clerk/nextjs/server"; // or your auth library
 
-export const POST = stripe.createHandler({
+export const POST = billing.createHandler({
+  resolveUser: async () => {
+    const { userId } = await auth();
+    return userId ? { id: userId } : null;
+  },
+});
+```
+
+**Simple alternative**: If you don't need credits/subscriptions API, skip `lib/billing.ts`:
+
+```typescript
+import { createHandler } from "stripe-no-webhooks";
+import billingConfig from "@/billing.config";
+
+export const POST = createHandler({
+  billingConfig,
   resolveUser: async () => {
     const { userId } = await auth();
     return userId ? { id: userId } : null;
@@ -93,10 +108,10 @@ You probably want something to happen when a new user subscribes or a subscripti
 
 ```typescript
 // app/api/stripe/[...all]/route.ts
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 import type { Stripe } from "stripe";
 
-export const POST = stripe.createHandler({
+export const POST = billing.createHandler({
   // ...
   callbacks: {
     onSubscriptionCreated: async (subscription: Stripe.Subscription) => {

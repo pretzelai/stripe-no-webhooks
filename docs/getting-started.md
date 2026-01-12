@@ -24,8 +24,9 @@ npx stripe-no-webhooks config
 ```
 
 Creates:
+
 - `billing.config.ts` - Your plans
-- `lib/stripe.ts` - Initialize the client once
+- `lib/billing.ts` - Initialize the client once
 - `app/api/stripe/[...all]/route.ts` - HTTP handler
 
 Also sets up webhook and adds secrets to `.env`.
@@ -65,13 +66,13 @@ npx stripe-no-webhooks sync
 
 ## 6. Initialize the Client
 
-Create once in `lib/stripe.ts`:
+Create once in `lib/billing.ts`:
 
 ```typescript
-import { createStripeHandler } from "stripe-no-webhooks";
+import { Billing } from "stripe-no-webhooks";
 import billingConfig from "../billing.config";
 
-export const stripe = createStripeHandler({
+export const billing = new Billing({
   billingConfig,
   // Keys and database URL are read from environment variables by default:
   // - STRIPE_SECRET_KEY
@@ -85,10 +86,10 @@ export const stripe = createStripeHandler({
 **Next.js App Router** (`app/api/stripe/[...all]/route.ts`):
 
 ```typescript
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 import { auth } from "@clerk/nextjs/server"; // or your auth library
 
-export const POST = stripe.createHandler({
+export const POST = billing.createHandler({
   // REQUIRED: Resolve the authenticated user from the request
   resolveUser: async () => {
     const { userId } = await auth();
@@ -106,6 +107,7 @@ npx stripe-no-webhooks generate pricing-page
 ```
 
 This creates `components/PricingPage.tsx` with:
+
 - Loading spinners on buttons
 - Error display
 - Monthly/yearly interval toggle

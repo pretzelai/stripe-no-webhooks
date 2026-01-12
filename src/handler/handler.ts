@@ -62,52 +62,99 @@ export type {
   CustomerPortalRequestBody,
 } from "./types";
 
-export function createStripeHandler(config: StripeConfig = {}) {
-  const {
-    stripeSecretKey = process.env.STRIPE_SECRET_KEY!,
-    stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET!,
-    databaseUrl = process.env.DATABASE_URL,
-    schema = "stripe",
-    billingConfig,
-    successUrl: defaultSuccessUrl,
-    cancelUrl: defaultCancelUrl,
-    credits: creditsConfig,
-    mapUserIdToStripeCustomerId,
-  } = config;
+export class Billing {
+  readonly subscriptions: ReturnType<typeof createSubscriptionsApi>;
+  readonly credits: ReturnType<typeof Billing.prototype.createCreditsApi>;
+  readonly seats: ReturnType<typeof createSeatsApi>;
 
-  const stripe = new Stripe(stripeSecretKey);
-  const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
-  const mode = getMode(stripeSecretKey);
-  const grantTo = creditsConfig?.grantTo ?? "subscriber";
+  private readonly stripe: Stripe;
+  private readonly pool: Pool | null;
+  private readonly schema: string;
+  private readonly billingConfig: StripeConfig["billingConfig"];
+  private readonly mode: "test" | "production";
+  private readonly grantTo: CreditsGrantTo;
+  private readonly defaultSuccessUrl?: string;
+  private readonly defaultCancelUrl?: string;
+  private readonly stripeWebhookSecret: string;
+  private readonly sync: StripeSync | null;
+  private readonly mapUserIdToStripeCustomerId?: StripeConfig["mapUserIdToStripeCustomerId"];
+  private readonly creditsConfig?: StripeConfig["credits"];
 
-  initCredits(pool, schema);
+  constructor(config: StripeConfig = {}) {
+    const {
+      stripeSecretKey = process.env.STRIPE_SECRET_KEY!,
+      stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET!,
+      databaseUrl = process.env.DATABASE_URL,
+      schema = "stripe",
+      billingConfig,
+      successUrl,
+      cancelUrl,
+      credits: creditsConfig,
+      mapUserIdToStripeCustomerId,
+    } = config;
 
-  const sync = databaseUrl
-    ? new StripeSync({
-        poolConfig: { connectionString: databaseUrl },
-        schema,
-        stripeSecretKey,
-        stripeWebhookSecret,
-      })
-    : null;
+    this.stripe = new Stripe(stripeSecretKey);
+    this.pool = databaseUrl
+      ? new Pool({ connectionString: databaseUrl })
+      : null;
+    this.schema = schema;
+    this.billingConfig = billingConfig;
+    this.mode = getMode(stripeSecretKey);
+    this.grantTo = creditsConfig?.grantTo ?? "subscriber";
+    this.defaultSuccessUrl = successUrl;
+    this.defaultCancelUrl = cancelUrl;
+    this.stripeWebhookSecret = stripeWebhookSecret;
+    this.mapUserIdToStripeCustomerId = mapUserIdToStripeCustomerId;
+    this.creditsConfig = creditsConfig;
 
-  const subscriptionsApi = createSubscriptionsApi({
-    pool,
-    schema,
-    billingConfig,
-    mode,
-  });
+    initCredits(this.pool, this.schema);
 
-  async function resolveStripeCustomerId(options: {
+    this.sync = databaseUrl
+      ? new StripeSync({
+          poolConfig: { connectionString: databaseUrl },
+          schema: this.schema,
+          stripeSecretKey,
+          stripeWebhookSecret,
+        })
+      : null;
+
+    this.subscriptions = createSubscriptionsApi({
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+    });
+
+    this.credits = this.createCreditsApi({
+      onTopUpCompleted: creditsConfig?.onTopUpCompleted,
+      onAutoTopUpFailed: creditsConfig?.onAutoTopUpFailed,
+      onCreditsLow: creditsConfig?.onCreditsLow,
+    });
+
+    this.seats = createSeatsApi({
+      stripe: this.stripe,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+      grantTo: this.grantTo,
+      callbacks: {
+        onCreditsGranted: creditsConfig?.onCreditsGranted,
+        onCreditsRevoked: creditsConfig?.onCreditsRevoked,
+      },
+    });
+  }
+
+  private resolveStripeCustomerId = async (options: {
     user: User;
     createIfNotFound?: boolean;
-  }): Promise<string | null> {
+  }): Promise<string | null> => {
     const { user, createIfNotFound } = options;
     const { id: userId, name, email } = user;
 
-    if (pool) {
-      const result = await pool.query(
-        `SELECT stripe_customer_id FROM ${schema}.user_stripe_customer_map WHERE user_id = $1`,
+    if (this.pool) {
+      const result = await this.pool.query(
+        `SELECT stripe_customer_id FROM ${this.schema}.user_stripe_customer_map WHERE user_id = $1`,
         [userId]
       );
       if (result.rows.length > 0) {
@@ -115,8 +162,8 @@ export function createStripeHandler(config: StripeConfig = {}) {
       }
     }
 
-    if (mapUserIdToStripeCustomerId) {
-      const customerId = await mapUserIdToStripeCustomerId(userId);
+    if (this.mapUserIdToStripeCustomerId) {
+      const customerId = await this.mapUserIdToStripeCustomerId(userId);
       if (customerId) {
         return customerId;
       }
@@ -129,11 +176,11 @@ export function createStripeHandler(config: StripeConfig = {}) {
       if (name) customerParams.name = name;
       if (email) customerParams.email = email;
 
-      const customer = await stripe.customers.create(customerParams);
+      const customer = await this.stripe.customers.create(customerParams);
 
-      if (pool) {
-        await pool.query(
-          `INSERT INTO ${schema}.user_stripe_customer_map (user_id, stripe_customer_id)
+      if (this.pool) {
+        await this.pool.query(
+          `INSERT INTO ${this.schema}.user_stripe_customer_map (user_id, stripe_customer_id)
            VALUES ($1, $2)
            ON CONFLICT (user_id) DO UPDATE SET stripe_customer_id = $2, updated_at = now()`,
           [userId, customer.id]
@@ -144,9 +191,9 @@ export function createStripeHandler(config: StripeConfig = {}) {
     }
 
     return null;
-  }
+  };
 
-  function createCreditsApi(callbacks?: {
+  private createCreditsApi(callbacks?: {
     onAutoTopUpFailed?: (params: {
       userId: string;
       creditType: string;
@@ -170,26 +217,26 @@ export function createStripeHandler(config: StripeConfig = {}) {
     }) => void | Promise<void>;
   }) {
     const topUpHandler = createTopUpHandler({
-      stripe,
-      pool,
-      schema,
-      billingConfig,
-      mode,
-      successUrl: defaultSuccessUrl || "",
-      cancelUrl: defaultCancelUrl || "",
+      stripe: this.stripe,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+      successUrl: this.defaultSuccessUrl || "",
+      cancelUrl: this.defaultCancelUrl || "",
       onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,
       onTopUpCompleted: callbacks?.onTopUpCompleted,
       onCreditsLow: callbacks?.onCreditsLow,
     });
 
-    async function consumeCredits(params: {
+    const consumeCredits = async (params: {
       userId: string;
       creditType: string;
       amount: number;
       description?: string;
       metadata?: Record<string, unknown>;
       idempotencyKey?: string;
-    }): Promise<ConsumeResult> {
+    }): Promise<ConsumeResult> => {
       const result = await credits.consume(params);
 
       if (result.success) {
@@ -213,7 +260,7 @@ export function createStripeHandler(config: StripeConfig = {}) {
       }
 
       return result;
-    }
+    };
 
     return {
       consume: consumeCredits,
@@ -230,26 +277,7 @@ export function createStripeHandler(config: StripeConfig = {}) {
     };
   }
 
-  const creditsApi = createCreditsApi({
-    onTopUpCompleted: creditsConfig?.onTopUpCompleted,
-    onAutoTopUpFailed: creditsConfig?.onAutoTopUpFailed,
-    onCreditsLow: creditsConfig?.onCreditsLow,
-  });
-
-  const seatsApi = createSeatsApi({
-    stripe,
-    pool,
-    schema,
-    billingConfig,
-    mode,
-    grantTo,
-    callbacks: {
-      onCreditsGranted: creditsConfig?.onCreditsGranted,
-      onCreditsRevoked: creditsConfig?.onCreditsRevoked,
-    },
-  });
-
-  function createHandler(handlerConfig: HandlerConfig = {}) {
+  createHandler(handlerConfig: HandlerConfig = {}) {
     const {
       resolveUser,
       resolveOrg,
@@ -258,22 +286,22 @@ export function createStripeHandler(config: StripeConfig = {}) {
     } = handlerConfig;
 
     const creditLifecycle = createCreditLifecycle({
-      pool,
-      schema,
-      billingConfig,
-      mode,
-      grantTo,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+      grantTo: this.grantTo,
       callbacks,
     });
 
     const topUpHandler = createTopUpHandler({
-      stripe,
-      pool,
-      schema,
-      billingConfig,
-      mode,
-      successUrl: defaultSuccessUrl || "",
-      cancelUrl: defaultCancelUrl || "",
+      stripe: this.stripe,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+      successUrl: this.defaultSuccessUrl || "",
+      cancelUrl: this.defaultCancelUrl || "",
       onCreditsGranted: callbacks?.onCreditsGranted,
       onTopUpCompleted: callbacks?.onTopUpCompleted,
       onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,
@@ -281,30 +309,30 @@ export function createStripeHandler(config: StripeConfig = {}) {
     });
 
     const routeContext: HandlerContext = {
-      stripe,
-      pool,
-      schema,
-      billingConfig,
-      mode,
-      grantTo,
-      defaultSuccessUrl,
-      defaultCancelUrl,
+      stripe: this.stripe,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+      grantTo: this.grantTo,
+      defaultSuccessUrl: this.defaultSuccessUrl,
+      defaultCancelUrl: this.defaultCancelUrl,
       automaticTax,
       resolveUser,
       resolveOrg,
-      resolveStripeCustomerId,
+      resolveStripeCustomerId: this.resolveStripeCustomerId,
     };
 
     const webhookContext = {
-      stripe,
-      stripeWebhookSecret,
-      sync,
+      stripe: this.stripe,
+      stripeWebhookSecret: this.stripeWebhookSecret,
+      sync: this.sync,
       creditLifecycle,
       topUpHandler,
       callbacks,
     };
 
-    async function handler(request: Request): Promise<Response> {
+    return async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       const action = url.pathname.split("/").filter(Boolean).pop();
 
@@ -330,15 +358,14 @@ export function createStripeHandler(config: StripeConfig = {}) {
             { status: 404, headers: { "Content-Type": "application/json" } }
           );
       }
-    }
-
-    return handler;
+    };
   }
+}
 
-  return {
-    createHandler,
-    subscriptions: subscriptionsApi,
-    credits: creditsApi,
-    seats: seatsApi,
-  };
+/**
+ * Simple handler for cases where you don't need credits/subscriptions APIs.
+ * Combines initialization and handler creation in one step.
+ */
+export function createHandler(config: StripeConfig & HandlerConfig) {
+  return new Billing(config).createHandler(config);
 }

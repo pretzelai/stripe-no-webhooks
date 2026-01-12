@@ -5,23 +5,24 @@ Quick lookup for all APIs.
 ## Client
 
 ```typescript
-import { createStripeHandler } from "stripe-no-webhooks";
+import { Billing } from "stripe-no-webhooks";
 
-// Create once in lib/stripe.ts
-const stripe = createStripeHandler({
-  stripeSecretKey?: string,          // Default: STRIPE_SECRET_KEY env
-  stripeWebhookSecret?: string,      // Default: STRIPE_WEBHOOK_SECRET env
-  databaseUrl?: string,              // Default: DATABASE_URL env
-  schema?: string,                   // Default: "stripe"
-  billingConfig?: BillingConfig,
-  successUrl?: string,
-  cancelUrl?: string,
-  credits?: {
-    grantTo?: "subscriber" | "organization" | "seat-users" | "manual",
+// Create once in lib/billing.ts
+const billing = new Billing({
+  stripeSecretKey: string, // Default: STRIPE_SECRET_KEY env
+  stripeWebhookSecret: string, // Default: STRIPE_WEBHOOK_SECRET env
+  databaseUrl: string, // Default: DATABASE_URL env
+  schema: string, // Default: "stripe"
+  billingConfig: BillingConfig,
+  successUrl: string,
+  cancelUrl: string,
+  credits: {
+    grantTo: "subscriber" | "organization" | "seat-users" | "manual",
   },
 
   // Map user ID to existing Stripe customer ID (for migrations)
-  mapUserIdToStripeCustomerId?: (userId: string) => string | null | Promise<string | null>,
+  mapUserIdToStripeCustomerId: (userId: string) =>
+    string | null | Promise<string | null>,
 });
 ```
 
@@ -29,18 +30,18 @@ const stripe = createStripeHandler({
 
 ```typescript
 // Create HTTP handler with request-specific config
-export const POST = stripe.createHandler({
+export const POST = billing.createHandler({
   // REQUIRED: Resolve authenticated user from request
-  resolveUser?: (request: Request) => User | null | Promise<User | null>,
+  resolveUser: (request: Request) => User | null | Promise<User | null>,
 
   // OPTIONAL: Resolve org for team/org billing
-  resolveOrg?: (request: Request) => string | null | Promise<string | null>,
+  resolveOrg: (request: Request) => string | null | Promise<string | null>,
 
   // OPTIONAL: Callbacks for subscription events
-  callbacks?: StripeWebhookCallbacks,
+  callbacks: StripeWebhookCallbacks,
 
   // OPTIONAL: Enable automatic tax calculation
-  automaticTax?: boolean,            // Default: false
+  automaticTax: boolean, // Default: false
 });
 
 // User type
@@ -55,11 +56,11 @@ type User = {
 
 The handler responds to POST requests:
 
-| Endpoint | Description |
-|----------|-------------|
-| `/checkout` | Create checkout session |
-| `/webhook` | Handle Stripe webhooks |
-| `/customer_portal` | Open billing portal |
+| Endpoint           | Description             |
+| ------------------ | ----------------------- |
+| `/checkout`        | Create checkout session |
+| `/webhook`         | Handle Stripe webhooks  |
+| `/customer_portal` | Open billing portal     |
 
 ### Calling from the browser
 
@@ -71,7 +72,7 @@ const res = await fetch("/api/stripe/checkout", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    "Accept": "application/json",
+    Accept: "application/json",
   },
   body: JSON.stringify({ planName: "Pro", interval: "month" }),
 });
@@ -83,7 +84,7 @@ const res = await fetch("/api/stripe/customer_portal", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    "Accept": "application/json",
+    Accept: "application/json",
   },
 });
 const { url } = await res.json();
@@ -94,13 +95,13 @@ window.location.href = url;
 
 ```typescript
 // Check if user has active subscription
-await stripe.subscriptions.isActive(userId: string): Promise<boolean>
+await billing.subscriptions.isActive(userId: string): Promise<boolean>
 
 // Get current subscription
-await stripe.subscriptions.get(userId: string): Promise<Subscription | null>
+await billing.subscriptions.get(userId: string): Promise<Subscription | null>
 
 // List all subscriptions
-await stripe.subscriptions.list(userId: string): Promise<Subscription[]>
+await billing.subscriptions.list(userId: string): Promise<Subscription[]>
 ```
 
 ```typescript
@@ -114,51 +115,51 @@ type SubscriptionStatus =
   | "paused";
 
 type Subscription = {
-  id: string,
-  status: SubscriptionStatus,
+  id: string;
+  status: SubscriptionStatus;
   plan: {
-    id: string,
-    name: string,
-    priceId: string,
-  } | null,
-  currentPeriodStart: Date,
-  currentPeriodEnd: Date,
-  cancelAtPeriodEnd: boolean,
-}
+    id: string;
+    name: string;
+    priceId: string;
+  } | null;
+  currentPeriodStart: Date;
+  currentPeriodEnd: Date;
+  cancelAtPeriodEnd: boolean;
+};
 ```
 
 ## Credits API
 
-All methods on `stripe.credits`:
+All methods on `billing.credits`:
 
 ### Read
 
 ```typescript
 // Get balance for one credit type
-await stripe.credits.getBalance(userId: string, creditType: string): Promise<number>
+await billing.credits.getBalance(userId: string, creditType: string): Promise<number>
 
 // Get all balances
-await stripe.credits.getAllBalances(userId: string): Promise<Record<string, number>>
+await billing.credits.getAllBalances(userId: string): Promise<Record<string, number>>
 
 // Check if user has enough
-await stripe.credits.hasCredits(userId: string, creditType: string, amount: number): Promise<boolean>
+await billing.credits.hasCredits(userId: string, creditType: string, amount: number): Promise<boolean>
 
 // Get transaction history
-await stripe.credits.getHistory(userId: string, options?: {
+await billing.credits.getHistory(userId: string, options?: {
   creditType?: string,
   limit?: number,
   offset?: number,
 }): Promise<CreditTransaction[]>
 
 // Check for saved payment method
-await stripe.credits.hasPaymentMethod(userId: string): Promise<boolean>
+await billing.credits.hasPaymentMethod(userId: string): Promise<boolean>
 ```
 
 ### Write
 
 ```typescript
 // Consume credits (with auto top-up if configured)
-await stripe.credits.consume({
+await billing.credits.consume({
   userId: string,
   creditType: string,
   amount: number,
@@ -168,7 +169,7 @@ await stripe.credits.consume({
 }): Promise<{ success: true, balance: number } | { success: false, balance: number }>
 
 // Grant credits
-await stripe.credits.grant({
+await billing.credits.grant({
   userId: string,
   creditType: string,
   amount: number,
@@ -179,7 +180,7 @@ await stripe.credits.grant({
 }): Promise<number>  // Returns new balance
 
 // Revoke specific amount
-await stripe.credits.revoke({
+await billing.credits.revoke({
   userId: string,
   creditType: string,
   amount: number,
@@ -188,13 +189,13 @@ await stripe.credits.revoke({
 }): Promise<{ balance: number, amountRevoked: number }>
 
 // Revoke all of a credit type
-await stripe.credits.revokeAll({
+await billing.credits.revokeAll({
   userId: string,
   creditType: string,
 }): Promise<{ amountRevoked: number }>
 
 // Set exact balance
-await stripe.credits.setBalance({
+await billing.credits.setBalance({
   userId: string,
   creditType: string,
   balance: number,
@@ -202,7 +203,7 @@ await stripe.credits.setBalance({
 }): Promise<{ previousBalance: number }>
 
 // Purchase credits
-await stripe.credits.topUp({
+await billing.credits.topUp({
   userId: string,
   creditType: string,
   amount: number,
@@ -213,14 +214,14 @@ await stripe.credits.topUp({
 
 ```typescript
 // Add user as seat
-await stripe.seats.add({
+await billing.seats.add({
   userId: string,
   orgId: string,
 }): Promise<{ success: true, creditsGranted: Record<string, number> }
             | { success: false, error: string }>
 
 // Remove user as seat
-await stripe.seats.remove({
+await billing.seats.remove({
   userId: string,
   orgId: string,
 }): Promise<{ success: true, creditsRevoked: Record<string, number> }
@@ -283,46 +284,46 @@ callbacks: {
 
 ```typescript
 type BillingConfig = {
-  test?: { plans?: Plan[] },
-  production?: { plans?: Plan[] },
+  test?: { plans?: Plan[] };
+  production?: { plans?: Plan[] };
 };
 
 type Plan = {
-  id?: string,
-  name: string,
-  description?: string,
-  price: Price[],
-  credits?: Record<string, CreditConfig>,
-  perSeat?: boolean,
+  id?: string;
+  name: string;
+  description?: string;
+  price: Price[];
+  credits?: Record<string, CreditConfig>;
+  perSeat?: boolean;
 };
 
 type Price = {
-  id?: string,                    // Set by sync command
-  amount: number,                 // In cents
-  currency: string,
-  interval: "month" | "year" | "week" | "one_time",
+  id?: string; // Set by sync command
+  amount: number; // In cents
+  currency: string;
+  interval: "month" | "year" | "week" | "one_time";
 };
 
 type CreditConfig = {
-  allocation: number,
-  displayName?: string,
-  onRenewal?: "reset" | "add",    // Default: "reset"
-  topUp?: OnDemandTopUp | AutoTopUp,
+  allocation: number;
+  displayName?: string;
+  onRenewal?: "reset" | "add"; // Default: "reset"
+  topUp?: OnDemandTopUp | AutoTopUp;
 };
 
 type OnDemandTopUp = {
-  mode: "on_demand",
-  pricePerCreditCents: number,
-  minPerPurchase?: number,        // Default: 1
-  maxPerPurchase?: number,
+  mode: "on_demand";
+  pricePerCreditCents: number;
+  minPerPurchase?: number; // Default: 1
+  maxPerPurchase?: number;
 };
 
 type AutoTopUp = {
-  mode: "auto",
-  pricePerCreditCents: number,
-  balanceThreshold: number,
-  purchaseAmount: number,
-  maxPerMonth?: number,           // Default: 10
+  mode: "auto";
+  pricePerCreditCents: number;
+  balanceThreshold: number;
+  purchaseAmount: number;
+  maxPerMonth?: number; // Default: 10
 };
 ```
 
@@ -346,10 +347,10 @@ const plans = billingConfig.test?.plans || [];
 
 <PricingPage
   plans={plans}
-  currentPlanId="free"           // Highlights current plan
-  currentInterval="month"        // Default interval selection
-  onError={(err) => {}}          // Optional error callback
-/>
+  currentPlanId="free" // Highlights current plan
+  currentInterval="month" // Default interval selection
+  onError={(err) => {}} // Optional error callback
+/>;
 ```
 
 ### Manual Implementation
@@ -414,14 +415,14 @@ export function CheckoutButton({ planName }: { planName: string }) {
 
 ```typescript
 checkout({
-  planName?: string,             // Plan name from billing config
-  planId?: string,               // Plan ID from billing config
-  interval?: "month" | "year" | "week" | "one_time",
-  priceId?: string,              // Direct Stripe price ID (bypasses config)
-  quantity?: number,             // Default: 1
-  successUrl?: string,           // Override success redirect
-  cancelUrl?: string,            // Override cancel redirect
-  metadata?: Record<string, string>,
+  planName: string, // Plan name from billing config
+  planId: string, // Plan ID from billing config
+  interval: "month" | "year" | "week" | "one_time",
+  priceId: string, // Direct Stripe price ID (bypasses config)
+  quantity: number, // Default: 1
+  successUrl: string, // Override success redirect
+  cancelUrl: string, // Override cancel redirect
+  metadata: Record<string, string>,
 });
 
 // Customer Portal - redirects to Stripe billing portal
@@ -457,17 +458,17 @@ type TransactionSource =
   | "seat_revoke";
 
 type CreditTransaction = {
-  id: string,
-  userId: string,
-  creditType: string,
-  amount: number,
-  balanceAfter: number,
-  transactionType: TransactionType,
-  source: TransactionSource,
-  sourceId?: string,
-  description?: string,
-  metadata?: Record<string, unknown>,
-  createdAt: Date,
+  id: string;
+  userId: string;
+  creditType: string;
+  amount: number;
+  balanceAfter: number;
+  transactionType: TransactionType;
+  source: TransactionSource;
+  sourceId?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: Date;
 };
 
 class CreditError extends Error {

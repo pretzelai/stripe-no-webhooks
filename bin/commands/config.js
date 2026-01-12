@@ -108,12 +108,12 @@ async function config(options = {}) {
     rl.close();
   }
 
-  // Create lib/stripe.ts
-  logger.log(`\n📁 Setting up lib/stripe.ts...`);
+  // Create lib/billing.ts
+  logger.log(`\n📁 Setting up lib/billing.ts...`);
   try {
     const result = writeTemplate({
-      templateName: "lib-stripe.ts",
-      destPath: "lib/stripe.ts",
+      templateName: "lib-billing.ts",
+      destPath: "lib/billing.ts",
       cwd,
     });
     logger.log(
@@ -122,7 +122,7 @@ async function config(options = {}) {
         : `✓ ${result.path} already exists`
     );
   } catch (error) {
-    logger.error("❌ Failed to create lib/stripe.ts:", error.message);
+    logger.error("❌ Failed to create lib/billing.ts:", error.message);
     if (exitOnError) process.exit(1);
     return { success: false, error: error.message };
   }

@@ -1,5 +1,5 @@
 // pages/api/stripe/[...all].ts
-import { stripe } from "@/lib/stripe";
+import { billing } from "@/lib/billing";
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { Stripe } from "stripe";
 
@@ -7,7 +7,7 @@ import type { Stripe } from "stripe";
 // import { getAuth } from "@clerk/nextjs/server";
 // import { getServerSession } from "next-auth";
 
-const handler = stripe.createHandler({
+const handler = billing.createHandler({
   // REQUIRED: Resolve the authenticated user from the request
   resolveUser: async () => {
     // Clerk:
