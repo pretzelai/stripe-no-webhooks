@@ -13,7 +13,7 @@ This library is a wrapper on Stripe SDK (with some bells and whistles). It gives
 
 ## Quick Start
 
-This guide assumes you have a Next.js app and a PostgreSQL database. We start with a _test mode_ Stripe API key so you can test your setup locally. Then, we can move to a _live mode_ Stripe API key for your production environment.
+This guide assumes you have a Next.js app and a PostgreSQL database. We start with a `test mode` Stripe API key so you can test your setup locally. Then, the guide covers how to set up your app for production.
 
 ```bash
 npm install stripe-no-webhooks stripe
@@ -99,53 +99,150 @@ export const POST = billing.createHandler({
 
 There are many other options you can specify for the createHandler function. See [API Reference](./docs/reference.md) for more details.
 
-### 6. Test locally
+### 6. Test your setup
 
-Start your app and use [Stripe CLI](https://stripe.com/docs/stripe-cli) to forward webhooks:
+Start your Next.js app, then in another terminal, forward Stripe webhooks:
 
 ```bash
 stripe listen --forward-to localhost:3000/api/stripe/webhook
 ```
 
-That's it! Your billing is ready to test.
+Your setup is complete! Now let's use it.
+
+---
+
+## Using the Library
+
+### Trigger a checkout
+
+From your frontend, redirect users to Stripe Checkout:
+
+```typescript
+import { checkout } from "stripe-no-webhooks/client";
+
+// In a button click handler
+<button onClick={() => checkout({ planName: "Pro", interval: "month" })}>
+  Upgrade to Pro
+</button>;
+```
+
+Use `planName` (matches your billing config) and `interval` (month/year). No need to deal with Stripe price IDs directly.
+
+You can test the checkout flow by running by using a stripe test card number:
+
+- Card number: `4242 4242 4242 4242`
+- Expiry date: Any future date
+- CVC: Any 3 digits
+
+**Note:** We recommend using our pre-built Pricing Table component instead of manually building your own checkout flow. See [Generate a pricing table](#option-a-generate-a-pricing-page) below.
+
+### Check subscription status and usage credits
+
+On the server, check if a user has an active subscription and how many credits (if enabled) they have:
+
+```typescript
+import { billing } from "@/lib/billing";
+
+// Get the subscription
+const subscription = await billing.subscriptions.get(userId);
+
+if (subscription?.status === "active") {
+  // User has an active subscription
+  console.log("Plan:", subscription.plan.name);
+
+  // Check credits for a specific type (if enabled in your config)
+  const apiCredits = await billing.credits.getBalance(userId, "api_calls");
+  console.log("API credits remaining:", apiCredits);
+
+  // Or get all credit balances at once
+  const allCredits = await billing.credits.getAllBalances(userId);
+  console.log("All credits:", allCredits); // { api_calls: 100, ... }
+}
+```
+
+### What happens behind the scenes
+
+When a user completes checkout:
+
+1. Stripe sends a webhook to your app
+2. The library receives it and syncs the data to your database. If credits are enabled, it will also update the credits balance
+3. `billing.subscriptions.get(userId)` now returns the subscription
+
+You can verify this by checking your database's `stripe.subscriptions` table.
+
+---
+
+## Build Your UI
+
+### Option A: Generate a pricing page
+
+```bash
+npx stripe-no-webhooks generate pricing-page
+```
+
+This creates a ready-to-use component at `components/PricingPage.tsx`:
+
+```tsx
+import { PricingPage } from "@/components/PricingPage";
+import billingConfig from "@/billing.config";
+
+export default function Pricing() {
+  return <PricingPage plans={billingConfig.test.plans} />;
+}
+```
+
+### Option B: Build your own
+
+Use the `checkout` function with any UI:
+
+```tsx
+import { checkout } from "stripe-no-webhooks/client";
+import billingConfig from "@/billing.config";
+
+export default function Pricing() {
+  const plans = billingConfig.test.plans;
+
+  return (
+    <div>
+      {plans.map((plan) => (
+        <div key={plan.name}>
+          <h3>{plan.name}</h3>
+          <button
+            onClick={() => checkout({ planName: plan.name, interval: "month" })}
+          >
+            Subscribe
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
 
 ---
 
 ## Going to Production
 
-The `sync` command handles staging and production setup interactively. No need to edit `.env` files.
+When you're ready to deploy, you need to:
 
-### Staging (test mode, public URL)
+1. Add a `production` section to your billing config
+2. Sync with your live Stripe key
+3. Add the webhook secret to your production environment
 
-```bash
-npx stripe-no-webhooks sync
-# Choose "Set up for staging"
-# Enter your staging URL (e.g., https://staging.myapp.com)
-```
+### 1. Add production plans
 
-Uses your existing test key. Add the displayed webhook secret to your staging environment.
-
-### Production (live mode)
-
-```bash
-npx stripe-no-webhooks sync
-# Choose "Set up for production"
-# Enter your live Stripe key (sk_live_...)
-# Enter your production URL
-```
-
-This syncs the `production` section of your billing.config.ts:
+Update `billing.config.ts`:
 
 ```typescript
 const billingConfig: BillingConfig = {
   test: {
     plans: [
-      /* ... */
+      /* your test plans */
     ],
   },
   production: {
     plans: [
-      // Copy your plans here - IDs get filled in automatically when you sync
+      // Same structure as test - IDs get filled in when you sync
       {
         name: "Free",
         price: [{ amount: 0, currency: "usd", interval: "month" }],
@@ -159,37 +256,38 @@ const billingConfig: BillingConfig = {
 };
 ```
 
-Add the displayed webhook secret to your production environment.
+### 2. Sync and create webhook
 
-> Webhook secrets are saved to `.stripe-webhook-secrets` (gitignored) for reference.
-
----
-
-## Optional: Generate a Pricing Page
+Run sync and choose "Set up for production":
 
 ```bash
-npx stripe-no-webhooks generate pricing-page
+npx stripe-no-webhooks sync
 ```
 
-Creates a ready-to-use `PricingPage` component:
+You'll be prompted for:
 
-```tsx
-import { PricingPage } from "@/components/PricingPage";
-import billingConfig from "@/billing.config";
+- Your **live** Stripe key (`sk_live_...`)
+- Your production URL
 
-export default function Pricing() {
-  return <PricingPage plans={billingConfig.test.plans} />;
-}
+This creates the products in Stripe and sets up the webhook endpoint.
+
+### 3. Add webhook secret
+
+The CLI displays your webhook secret. Add it to your production environment:
+
 ```
+STRIPE_WEBHOOK_SECRET=whsec_...
+```
+
+> Secrets are also saved to `.stripe-webhook-secrets` (gitignored) for reference.
 
 ---
 
 ## Callbacks
 
-React to subscription events:
+React to subscription events in `lib/billing.ts`:
 
 ```typescript
-// lib/billing.ts
 export const billing = new Billing({
   billingConfig,
   callbacks: {
