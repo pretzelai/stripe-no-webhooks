@@ -51,8 +51,9 @@ function questionHidden(rl, query, defaultValue = "") {
           stdout.write("\b \b");
         }
       } else {
+        // Handle paste (multiple chars at once) by writing a star for each
         input += char;
-        stdout.write("*");
+        stdout.write("*".repeat(char.length));
       }
     };
     stdin.on("data", onData);
@@ -153,6 +154,121 @@ function loadStripe() {
   }
 }
 
+/**
+ * Check if a URL is localhost
+ */
+function isLocalhost(url) {
+  try {
+    const parsed = new URL(url);
+    return ["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Add an entry to .gitignore if not already present
+ */
+function addToGitignore(entry, cwd = process.cwd()) {
+  const gitignorePath = path.join(cwd, ".gitignore");
+
+  if (fs.existsSync(gitignorePath)) {
+    const content = fs.readFileSync(gitignorePath, "utf8");
+    if (!content.includes(entry)) {
+      const newContent =
+        content.endsWith("\n")
+          ? `${content}\n# Stripe webhook secrets\n${entry}\n`
+          : `${content}\n\n# Stripe webhook secrets\n${entry}\n`;
+      fs.writeFileSync(gitignorePath, newContent);
+      return true;
+    }
+    return false; // Already in gitignore
+  }
+
+  // Create .gitignore if it doesn't exist
+  fs.writeFileSync(gitignorePath, `# Stripe webhook secrets\n${entry}\n`);
+  return true;
+}
+
+/**
+ * Save webhook secret to .stripe-webhook-secrets file
+ */
+function saveWebhookSecret({ environment, url, secret }, cwd = process.cwd()) {
+  const secretsPath = path.join(cwd, ".stripe-webhook-secrets");
+  const timestamp = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+
+  const entry = `
+# ${environment} - Created ${timestamp}
+# URL: ${url}
+STRIPE_WEBHOOK_SECRET_${environment.toUpperCase()}=${secret}
+`;
+
+  if (fs.existsSync(secretsPath)) {
+    fs.appendFileSync(secretsPath, entry);
+  } else {
+    const header = `# Stripe Webhook Secrets
+# DO NOT COMMIT THIS FILE
+# Add these to your deployment platform's environment variables
+`;
+    fs.writeFileSync(secretsPath, header + entry);
+  }
+
+  // Ensure it's in .gitignore
+  addToGitignore(".stripe-webhook-secrets", cwd);
+
+  return secretsPath;
+}
+
+/**
+ * Interactive menu selection
+ */
+function selectOption(rl, options) {
+  const CYAN = "\x1b[36m";
+  const DIM = "\x1b[2m";
+  const RESET = "\x1b[0m";
+
+  return new Promise((resolve) => {
+    console.log();
+    options.forEach((opt, i) => {
+      const num = `${CYAN}${i + 1}${RESET}`;
+      console.log(`  ${num}  ${opt.label}`);
+    });
+    console.log();
+
+    rl.question(`  ${DIM}Enter choice:${RESET} `, (answer) => {
+      const index = parseInt(answer, 10) - 1;
+      if (index >= 0 && index < options.length) {
+        resolve(options[index]);
+      } else {
+        resolve(options[0]); // Default to first option
+      }
+    });
+  });
+}
+
+/**
+ * Get port from Next.js dev script in package.json
+ */
+function getDevPort(cwd = process.cwd()) {
+  try {
+    const pkgPath = path.join(cwd, "package.json");
+    if (!fs.existsSync(pkgPath)) return 3000;
+
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    const devScript = pkg.scripts?.dev || "";
+
+    // Check for -p or --port flag
+    const portMatch = devScript.match(/-p\s*(\d+)|--port\s*(\d+)/);
+    if (portMatch) {
+      return parseInt(portMatch[1] || portMatch[2], 10);
+    }
+
+    return 3000;
+  } catch {
+    return 3000;
+  }
+}
+
 module.exports = {
   createPrompt,
   question,
@@ -165,4 +281,9 @@ module.exports = {
   isValidStripeKey,
   getMode,
   loadStripe,
+  isLocalhost,
+  addToGitignore,
+  saveWebhookSecret,
+  selectOption,
+  getDevPort,
 };

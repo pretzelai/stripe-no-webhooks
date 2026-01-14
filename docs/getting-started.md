@@ -1,40 +1,56 @@
 # Getting Started
 
+This guide walks you through setting up stripe-no-webhooks from scratch.
+
 ## Prerequisites
 
-- PostgreSQL database
-- Stripe account with API keys
+- **Next.js app** (App Router recommended)
+- **PostgreSQL database** (Neon, Supabase, or any Postgres)
+- **Stripe account** with API keys
 
-## 1. Install
+## Installation
 
 ```bash
 npm install stripe-no-webhooks stripe
 ```
 
-## 2. Create Database Tables
+## Step 1: Initialize
+
+Run the setup wizard:
 
 ```bash
-npx stripe-no-webhooks migrate postgresql://user:pass@host/db
+npx stripe-no-webhooks init
 ```
 
-## 3. Generate Config Files
+You'll be asked for three things:
+
+| Prompt | What to enter |
+|--------|---------------|
+| **Stripe Secret Key** | Your test key (`sk_test_...`) from [Stripe Dashboard](https://dashboard.stripe.com/apikeys) |
+| **Database URL** | PostgreSQL connection string |
+| **Site URL** | `http://localhost:3000` for local development |
+
+The wizard creates three files:
+
+```
+billing.config.ts      # Define your plans here
+lib/billing.ts         # Billing client instance
+app/api/stripe/[...all]/route.ts  # Webhook & API handler
+```
+
+## Step 2: Create Database Tables
 
 ```bash
-npx stripe-no-webhooks config
+npx stripe-no-webhooks migrate
 ```
 
-Creates:
+This creates the `stripe` schema with tables for syncing Stripe data and tracking credits.
 
-- `billing.config.ts` - Your plans
-- `lib/billing.ts` - Initialize the client once
-- `app/api/stripe/[...all]/route.ts` - HTTP handler
+## Step 3: Define Your Plans
 
-Also sets up webhook and adds secrets to `.env`.
-
-## 4. Define Your Plans
+Open `billing.config.ts` and define your subscription plans:
 
 ```typescript
-// billing.config.ts
 import type { BillingConfig } from "stripe-no-webhooks";
 
 const billingConfig: BillingConfig = {
@@ -47,8 +63,14 @@ const billingConfig: BillingConfig = {
       {
         name: "Pro",
         price: [
-          { amount: 2000, currency: "usd", interval: "month" },
-          { amount: 20000, currency: "usd", interval: "year" },
+          { amount: 2000, currency: "usd", interval: "month" },  // $20/month
+          { amount: 20000, currency: "usd", interval: "year" },  // $200/year (save $40)
+        ],
+      },
+      {
+        name: "Enterprise",
+        price: [
+          { amount: 10000, currency: "usd", interval: "month" }, // $100/month
         ],
       },
     ],
@@ -58,49 +80,45 @@ const billingConfig: BillingConfig = {
 export default billingConfig;
 ```
 
-## 5. Sync to Stripe
+**Notes:**
+- `amount` is in cents (2000 = $20.00)
+- Each plan can have multiple prices (e.g., monthly + yearly)
+- Plan names should be unique
+- Plans can include [credits](./credits.md) with monthly allocations and top-ups
+
+## Step 4: Sync to Stripe
 
 ```bash
 npx stripe-no-webhooks sync
 ```
 
-## 6. Initialize the Client
+This does two things:
+1. Creates products and prices in your Stripe account
+2. Updates `billing.config.ts` with the Stripe IDs
 
-Create once in `lib/billing.ts`:
+After syncing, your config will have IDs filled in:
 
 ```typescript
-import { Billing } from "stripe-no-webhooks";
-import billingConfig from "../billing.config";
-
-export const billing = new Billing({
-  billingConfig,
-  // Keys and database URL are read from environment variables by default:
-  // - STRIPE_SECRET_KEY
-  // - STRIPE_WEBHOOK_SECRET
-  // - DATABASE_URL
-
-  // Optional: Add callbacks for subscription/credit events
-  callbacks: {
-    onSubscriptionCreated: (subscription) => {
-      console.log("New subscription:", subscription.id);
-    },
-    onCreditsGranted: ({ userId, creditType, amount }) => {
-      console.log(`Granted ${amount} ${creditType} to ${userId}`);
-    },
-  },
-});
+{
+  name: "Pro",
+  id: "prod_ABC123",  // ← Added automatically
+  price: [
+    { id: "price_XYZ789", amount: 2000, currency: "usd", interval: "month" },
+  ],
+}
 ```
 
-## 7. Create the API Route
+**Commit this file** - the IDs ensure your code references the correct Stripe objects.
 
-**Next.js App Router** (`app/api/stripe/[...all]/route.ts`):
+## Step 5: Connect Your Auth
+
+Open `app/api/stripe/[...all]/route.ts` and connect your authentication:
 
 ```typescript
 import { billing } from "@/lib/billing";
-import { auth } from "@clerk/nextjs/server"; // or your auth library
+import { auth } from "@clerk/nextjs/server"; // Example: Clerk
 
 export const POST = billing.createHandler({
-  // REQUIRED: Resolve the authenticated user from the request
   resolveUser: async () => {
     const { userId } = await auth();
     return userId ? { id: userId } : null;
@@ -108,50 +126,136 @@ export const POST = billing.createHandler({
 });
 ```
 
-The `resolveUser` function securely extracts the authenticated user from the request. This is required for checkout and customer portal to work.
+The `resolveUser` function tells the library who the current user is. This is used to:
+- Create Stripe customers linked to your users
+- Ensure checkout sessions are for the authenticated user
+- Look up subscriptions by user ID
 
-## 8. Generate a Pricing Page
+**Other auth examples:**
+
+```typescript
+// NextAuth.js
+import { getServerSession } from "next-auth";
+resolveUser: async () => {
+  const session = await getServerSession();
+  return session?.user?.id ? { id: session.user.id } : null;
+}
+
+// Supabase Auth
+import { createClient } from "@/utils/supabase/server";
+resolveUser: async () => {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  return user ? { id: user.id } : null;
+}
+```
+
+## Step 6: Test Locally
+
+Start your Next.js app:
+
+```bash
+npm run dev
+```
+
+In another terminal, forward Stripe webhooks using the [Stripe CLI](https://stripe.com/docs/stripe-cli):
+
+```bash
+stripe listen --forward-to localhost:3000/api/stripe/webhook
+```
+
+> **No webhook secret needed!** The library automatically skips signature verification on localhost for easier development.
+
+Now you can:
+- Create test checkouts
+- Receive webhook events
+- See data sync to your database
+
+## Next: Build Your UI
+
+You have two options:
+
+### Option A: Generate a Pricing Page
 
 ```bash
 npx stripe-no-webhooks generate pricing-page
 ```
 
-This creates `components/PricingPage.tsx` with:
+This creates a ready-to-use component at `components/PricingPage.tsx`.
 
-- Loading spinners on buttons
-- Error display
-- Monthly/yearly interval toggle
-- Current plan highlighting
+### Option B: Use the Client APIs
 
-Use it in your page:
+```typescript
+// Client-side: trigger checkout
+import { checkout } from "stripe-no-webhooks/client";
 
-```tsx
-import { PricingPage } from "@/components/PricingPage";
-import billingConfig from "@/billing.config";
+<button onClick={() => checkout({ priceId: "price_XYZ789" })}>
+  Subscribe to Pro
+</button>
 
-export default function Pricing() {
-  const plans = billingConfig.test?.plans || [];
+// Server-side: check subscription status
+import { billing } from "@/lib/billing";
 
-  // Pass the user's current plan ID to highlight it
-  return <PricingPage plans={plans} currentPlanId="free" />;
+const subscription = await billing.subscriptions.get(userId);
+if (subscription?.status === "active") {
+  // User has active subscription
 }
 ```
 
-The component handles checkout and customer portal automatically. Users on a plan see "Manage Subscription" which opens Stripe's billing portal.
+---
 
-> For manual implementation with custom UI, see [Frontend Client Reference](./reference.md#frontend-client).
+## Going to Production
 
-## How User Mapping Works
+When you're ready to deploy, the `sync` command handles everything interactively.
 
-The `resolveUser` function you provide is called on every checkout and portal request. The library then:
+### Staging Environment
 
-1. Uses your resolver to get the authenticated user
-2. Looks up or creates a Stripe customer for that user
-3. Stores the mapping in the `user_stripe_customer_map` table
+Run `sync` and choose **"Set up for staging"**:
 
-No user info is read from the request body—it all comes from your resolver, ensuring requests can't be spoofed.
+```bash
+npx stripe-no-webhooks sync
+```
 
-## Next Steps
+- Enter your staging URL
+- Uses your existing test key (Stripe test mode)
+- Creates a webhook endpoint
+- Displays the webhook secret → add to staging env vars
 
-- [Credits](./credits.md) - Give users consumable credits
-- [Team Billing](./team-billing.md) - Org subscriptions with seats
+### Production Environment
+
+Run `sync` and choose **"Set up for production"**:
+
+```bash
+npx stripe-no-webhooks sync
+```
+
+- Enter your **live** Stripe key (`sk_live_...`)
+- Enter your production URL
+- Syncs the `production` section of billing.config.ts
+- Creates a webhook endpoint
+- Displays the webhook secret → add to production env vars
+
+Before going live, add a `production` section to your config:
+
+```typescript
+const billingConfig: BillingConfig = {
+  test: {
+    plans: [/* your test plans */],
+  },
+  production: {
+    plans: [
+      // Same structure as test - IDs filled in when you sync
+      { name: "Free", price: [{ amount: 0, currency: "usd", interval: "month" }] },
+      { name: "Pro", price: [{ amount: 2000, currency: "usd", interval: "month" }] },
+    ],
+  },
+};
+```
+
+---
+
+## What's Next?
+
+- [Credits System](./credits.md) - Add consumable credits to plans
+- [Team Billing](./team-billing.md) - Organization subscriptions with seats
+- [API Reference](./reference.md) - Full API documentation

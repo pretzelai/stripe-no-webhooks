@@ -1,4 +1,4 @@
-export const SYNC_OBJECTS = [
+const SYNC_OBJECTS = [
   "all",
   "charge",
   "checkout_session",
@@ -18,7 +18,7 @@ export const SYNC_OBJECTS = [
   "subscription_schedule",
 ];
 
-export const SYNC_ORDER = [
+const SYNC_ORDER = [
   {
     key: "product",
     table: "products",
@@ -107,7 +107,7 @@ export const SYNC_ORDER = [
   },
 ];
 
-export const REQUIRED_TABLES = [
+const REQUIRED_TABLES = [
   "customers",
   "products",
   "prices",
@@ -117,7 +117,7 @@ export const REQUIRED_TABLES = [
 
 // Field definitions: [stripeField, dbField?, isRef?, isJson?]
 // If dbField is omitted, uses stripeField. If isRef=true, extracts .id from objects
-export const FIELD_MAPS = {
+const FIELD_MAPS = {
   products: [
     ["name"],
     ["description"],
@@ -276,4 +276,11 @@ export const FIELD_MAPS = {
     ["currency"],
     ["url"],
   ],
+};
+
+module.exports = {
+  SYNC_OBJECTS,
+  SYNC_ORDER,
+  REQUIRED_TABLES,
+  FIELD_MAPS,
 };

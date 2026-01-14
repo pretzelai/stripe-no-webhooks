@@ -7,7 +7,7 @@ require("dotenv").config({ path: path.join(process.cwd(), ".env.local") });
 require("dotenv").config({ path: path.join(process.cwd(), ".env") });
 
 const { migrate } = require("./commands/migrate");
-const { config } = require("./commands/config");
+const { init } = require("./commands/init");
 const { sync } = require("./commands/sync");
 const { generate } = require("./commands/generate");
 const { backfill } = require("./commands/backfill");
@@ -38,8 +38,8 @@ async function main() {
       await migrate(positional[0], { schema: options.schema });
       break;
 
-    case "config":
-      await config();
+    case "init":
+      await init();
       break;
 
     case "sync":
@@ -56,15 +56,20 @@ async function main() {
 
     default:
       console.log("Usage:");
-      console.log(
-        "  npx stripe-no-webhooks migrate <connection_string> [--schema <name>]"
-      );
-      console.log("  npx stripe-no-webhooks config");
+      console.log("  npx stripe-no-webhooks init");
+      console.log("  npx stripe-no-webhooks migrate <connection_string>");
       console.log("  npx stripe-no-webhooks sync");
       console.log(
         "  npx stripe-no-webhooks generate <component> [--output <path>]"
       );
       console.log("  npx stripe-no-webhooks backfill [object_type]");
+      console.log("");
+      console.log("Commands:");
+      console.log("  init      Set up project files and environment variables");
+      console.log("  migrate   Run database migrations");
+      console.log("  sync      Sync plans to Stripe + webhook setup");
+      console.log("  generate  Generate components (e.g., PricingTable)");
+      console.log("  backfill  Backfill Stripe data to database");
       console.log("");
       console.log("Backfill object types:");
       console.log("  all (default), customer, product, price, subscription,");

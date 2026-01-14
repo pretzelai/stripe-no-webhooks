@@ -8,13 +8,12 @@ const {
   createPrompt,
   question,
 } = require("./helpers/utils");
-
-import {
+const {
   SYNC_ORDER,
   REQUIRED_TABLES,
   FIELD_MAPS,
   SYNC_OBJECTS,
-} from "./helpers/backfill-maps";
+} = require("./helpers/backfill-maps");
 
 // Rate limiting - Stripe allows 100 req/s live, 25 req/s test - we use 20 to be safe
 const REQUESTS_PER_SECOND = 20;
