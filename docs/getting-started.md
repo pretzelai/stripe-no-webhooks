@@ -181,7 +181,17 @@ You have two options:
 npx stripe-no-webhooks generate pricing-page
 ```
 
-This creates a ready-to-use component at `components/PricingPage.tsx`.
+This creates a ready-to-use component at `components/PricingPage.tsx`:
+
+```tsx
+import { PricingPage } from "@/components/PricingPage";
+
+export default function Pricing() {
+  return <PricingPage />;
+}
+```
+
+That's it! The component automatically fetches plans and detects the user's current subscription.
 
 ### Option B: Use the Client APIs
 
@@ -189,7 +199,7 @@ This creates a ready-to-use component at `components/PricingPage.tsx`.
 // Client-side: trigger checkout
 import { checkout } from "stripe-no-webhooks/client";
 
-<button onClick={() => checkout({ priceId: "price_XYZ789" })}>
+<button onClick={() => checkout({ planName: "Pro", interval: "month" })}>
   Subscribe to Pro
 </button>
 
@@ -199,6 +209,7 @@ import { billing } from "@/lib/billing";
 const subscription = await billing.subscriptions.get(userId);
 if (subscription?.status === "active") {
   // User has active subscription
+  console.log("Plan:", subscription.plan.name);
 }
 ```
 

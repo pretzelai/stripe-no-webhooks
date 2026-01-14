@@ -172,36 +172,39 @@ You can verify this by checking your database's `stripe.subscriptions` table.
 
 ---
 
-## Build Your UI
+## Build Your Pricing Page UI
 
-### Option A: Generate a pricing page
+### Option A: Generate a pricing page (recommended)
 
 ```bash
 npx stripe-no-webhooks generate pricing-page
 ```
 
-This creates a ready-to-use component at `components/PricingPage.tsx`:
+This creates a fully customizable pricing page component at `components/PricingPage.tsx`:
 
 ```tsx
 import { PricingPage } from "@/components/PricingPage";
-import billingConfig from "@/billing.config";
 
 export default function Pricing() {
-  return <PricingPage plans={billingConfig.test.plans} />;
+  return <PricingPage />;
 }
 ```
+
+That's it! The component automatically:
+- Fetches plans from your server (based on your `STRIPE_SECRET_KEY` mode)
+- Detects the user's current subscription (if logged in)
+- Highlights their current plan and defaults the interval toggle
+- Shows a loading skeleton while fetching
 
 ### Option B: Build your own
 
 Use the `checkout` function with any UI:
 
 ```tsx
+"use client";
 import { checkout } from "stripe-no-webhooks/client";
-import billingConfig from "@/billing.config";
 
-export default function Pricing() {
-  const plans = billingConfig.test.plans;
-
+export default function Pricing({ plans }) {
   return (
     <div>
       {plans.map((plan) => (

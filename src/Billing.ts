@@ -37,6 +37,7 @@ import type {
 import { handleCheckout } from "./handlers/checkout";
 import { handleCustomerPortal } from "./handlers/customer-portal";
 import { handleWebhook } from "./handlers/webhook";
+import { handleBilling } from "./handlers/billing";
 
 export type { CreditsGrantTo };
 export type {
@@ -71,7 +72,8 @@ export class Billing {
   private readonly pool: Pool | null;
   private readonly schema: string;
   private readonly billingConfig: StripeConfig["billingConfig"];
-  private readonly mode: "test" | "production";
+  /** Current mode based on STRIPE_SECRET_KEY ("test" or "production") */
+  readonly mode: "test" | "production";
   private readonly grantTo: CreditsGrantTo;
   private readonly defaultSuccessUrl?: string;
   private readonly defaultCancelUrl?: string;
@@ -149,6 +151,14 @@ export class Billing {
         onCreditsRevoked: callbacks?.onCreditsRevoked ?? creditsConfig?.onCreditsRevoked,
       },
     });
+  }
+
+  /**
+   * Get plans for the current mode (based on STRIPE_SECRET_KEY).
+   * Use this to pass plans to your pricing page component.
+   */
+  getPlans() {
+    return this.billingConfig?.[this.mode]?.plans || [];
   }
 
   private resolveStripeCustomerId = async (options: {
@@ -359,10 +369,12 @@ export class Billing {
           return handleWebhook(request, webhookContext);
         case "customer_portal":
           return handleCustomerPortal(request, routeContext);
+        case "billing":
+          return handleBilling(request, routeContext);
         default:
           return new Response(
             JSON.stringify({
-              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal`,
+              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing`,
             }),
             { status: 404, headers: { "Content-Type": "application/json" } }
           );

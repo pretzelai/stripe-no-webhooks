@@ -27,6 +27,10 @@ const billing = new Billing({
   mapUserIdToStripeCustomerId: (userId: string) =>
     string | null | Promise<string | null>,
 });
+
+// Properties and methods
+billing.mode        // "test" | "production" - based on STRIPE_SECRET_KEY
+billing.getPlans()  // Returns plans for current mode
 ```
 
 ## Handler
@@ -61,11 +65,12 @@ Callbacks can be defined either on the `Billing` instance (recommended) or in `c
 
 The handler responds to POST requests:
 
-| Endpoint           | Description             |
-| ------------------ | ----------------------- |
-| `/checkout`        | Create checkout session |
-| `/webhook`         | Handle Stripe webhooks  |
-| `/customer_portal` | Open billing portal     |
+| Endpoint           | Description                                    |
+| ------------------ | ---------------------------------------------- |
+| `/checkout`        | Create checkout session                        |
+| `/webhook`         | Handle Stripe webhooks                         |
+| `/customer_portal` | Open billing portal                            |
+| `/billing`         | Get plans and current subscription (for UI)    |
 
 ### Calling from the browser
 
@@ -352,17 +357,25 @@ Creates `components/PricingPage.tsx` with loading states, error handling, and st
 
 ```tsx
 import { PricingPage } from "@/components/PricingPage";
-import billingConfig from "@/billing.config";
 
-const plans = billingConfig.test?.plans || [];
+// Basic usage - fetches plans and subscription automatically
+<PricingPage />
 
+// With optional overrides
 <PricingPage
-  plans={plans}
-  currentPlanId="free" // Highlights current plan
-  currentInterval="month" // Default interval selection
-  onError={(err) => {}} // Optional error callback
-/>;
+  currentPlanId="pro"             // Override auto-detected current plan
+  currentInterval="year"          // Override auto-detected interval
+  onError={(err) => {}}           // Error callback
+  redirectCountdown={3}           // Countdown seconds after plan switch (default: 5)
+  endpoint="/api/stripe/billing"  // Custom billing endpoint (default shown)
+/>
 ```
+
+The component automatically:
+- Fetches plans from `/api/stripe/billing` (based on your `STRIPE_SECRET_KEY` mode)
+- Detects the user's current subscription if they're logged in
+- Highlights their current plan with a "Current Plan" badge
+- Defaults the interval toggle to match their subscription
 
 ### Manual Implementation
 
@@ -448,7 +461,7 @@ For simple usage without callbacks:
 import { checkout, customerPortal } from "stripe-no-webhooks/client";
 
 // These use default /api/stripe endpoints with no callbacks
-<button onClick={() => checkout({ planName: "Pro" })}>Subscribe</button>
+<button onClick={() => checkout({ planName: "Pro", interval: "month" })}>Subscribe</button>
 <button onClick={() => customerPortal()}>Manage Billing</button>
 ```
 

@@ -80,6 +80,23 @@ async function checkTablesExist(connectionString) {
   }
 }
 
+// Tables that have an updated_at column
+const TABLES_WITH_UPDATED_AT = [
+  "customers",
+  "products",
+  "prices",
+  "subscriptions",
+  "invoices",
+  "charges",
+  "coupons",
+  "plans",
+  "refunds",
+  "disputes",
+  "subscription_schedules",
+  "credit_notes",
+  "checkout_sessions",
+];
+
 async function upsertRecord(pool, table, record, logger) {
   const columns = Object.keys(record);
   const values = Object.values(record);
@@ -89,11 +106,16 @@ async function upsertRecord(pool, table, record, logger) {
     .map((c) => `${c} = EXCLUDED.${c}`)
     .join(", ");
 
+  // Only add updated_at for tables that have the column
+  const updatedAtClause = TABLES_WITH_UPDATED_AT.includes(table)
+    ? ", updated_at = NOW()"
+    : "";
+
   try {
     await pool.query(
       `INSERT INTO stripe.${table} (${columns.join(
         ", "
-      )}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}, updated_at = NOW()`,
+      )}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}${updatedAtClause}`,
       values
     );
     return true;
@@ -103,12 +125,18 @@ async function upsertRecord(pool, table, record, logger) {
   }
 }
 
+// Tables that DON'T have a livemode column
+const TABLES_WITHOUT_LIVEMODE = ["setup_intents", "payment_methods"];
+
 function transformStripeObject(obj, table) {
   const record = { id: obj.id };
 
   // Common fields
-  for (const f of ["object", "created", "livemode"])
-    if (obj[f] !== undefined) record[f] = obj[f];
+  for (const f of ["object", "created"]) if (obj[f] !== undefined) record[f] = obj[f];
+  // livemode only for tables that have the column
+  if (!TABLES_WITHOUT_LIVEMODE.includes(table) && obj.livemode !== undefined) {
+    record.livemode = obj.livemode;
+  }
   if (obj.metadata !== undefined)
     record.metadata = JSON.stringify(obj.metadata);
 
