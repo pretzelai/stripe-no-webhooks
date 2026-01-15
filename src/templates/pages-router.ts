@@ -2,20 +2,23 @@
 import { billing } from "@/lib/billing";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-// TODO: Import your auth library
-// import { getAuth } from "@clerk/nextjs/server";
-// import { getServerSession } from "next-auth";
+// TODO: Import your auth library - see some examples below
+// import { currentUser } from "@clerk/nextjs/server";
+// import { auth } from "@/lib/auth";
 
 const handler = billing.createHandler({
-  // REQUIRED: Resolve the authenticated user from the request
-  resolveUser: async () => {
-    // Clerk:
-    // const { userId } = getAuth(req);
-    // return userId ? { id: userId } : null;
+  // REQUIRED: Return { id, email?, name? } or null if not authenticated
+  // Email/name are used when creating a new Stripe customer
+  resolveUser: async (request) => {
+    // Clerk (Pages Router - requires clerkMiddleware):
+    // const user = await currentUser();
+    // if (!user) return null;
+    // return { id: user.id, email: user.emailAddresses[0]?.emailAddress, name: user.fullName ?? undefined };
 
-    // NextAuth:
-    // const session = await getServerSession(req, res);
-    // return session?.user?.id ? { id: session.user.id } : null;
+    // Better Auth:
+    // const session = await auth.api.getSession({ headers: request.headers });
+    // if (!session?.user) return null;
+    // return { id: session.user.id, email: session.user.email, name: session.user.name };
 
     return null; // TODO: Replace with your auth
   },

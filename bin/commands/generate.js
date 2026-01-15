@@ -80,29 +80,28 @@ async function generate(component, options = {}) {
   fs.writeFileSync(outputPath, template);
 
   const relativePath = path.relative(cwd, outputPath);
-  logger.log(`\n✅ Created ${relativePath}\n`);
 
-  // Print usage instructions
-  logger.log("Usage:");
-  logger.log("─".repeat(50));
-  logger.log(`
-import { PricingPage } from "./${path.relative(path.join(cwd, useSrc ? "src" : ""), outputPath).replace(/\\/g, "/").replace(/\.tsx$/, "")}";
-import billingConfig from "@/billing.config";
+  // Calculate import path
+  const importPath = "./" + path.relative(
+    path.join(cwd, useSrc ? "src" : ""),
+    outputPath
+  ).replace(/\\/g, "/").replace(/\.tsx$/, "");
 
-// Get plans for your environment
-const plans = billingConfig.test?.plans || [];
-
-// In your page:
-export default function PricingRoute() {
-  return (
-    <PricingPage
-      plans={plans}
-      currentPlanId="free"  // Pass the user's current plan
-    />
-  );
-}
-`);
-  logger.log("─".repeat(50));
+  // Clean, formatted output
+  logger.log("");
+  logger.log(`  ✅ Created ${relativePath}`);
+  logger.log("");
+  logger.log("  \x1b[2mUsage:\x1b[0m");
+  logger.log("");
+  logger.log(`    import { PricingPage } from "${importPath}";`);
+  logger.log("");
+  logger.log("    export default function Pricing() {");
+  logger.log("      return <PricingPage />;");
+  logger.log("    }");
+  logger.log("");
+  logger.log("  \x1b[2mThe component auto-fetches plans and detects the current subscription.\x1b[0m");
+  logger.log("  \x1b[2mSee docs for optional props: https://github.com/...\x1b[0m");
+  logger.log("");
 
   return { success: true, path: outputPath };
 }

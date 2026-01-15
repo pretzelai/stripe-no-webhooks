@@ -413,6 +413,120 @@ class StripeMock {
         }
         return invoice;
       },
+      async create(params, options) {
+        // Handle idempotency
+        if (options?.idempotencyKey) {
+          const existing = self._idempotencyKeys?.[options.idempotencyKey];
+          if (existing) {
+            return existing;
+          }
+        }
+
+        const invoice = {
+          id: self._generateId("in"),
+          object: "invoice",
+          customer: params.customer,
+          subscription: params.subscription || null,
+          status: "draft",
+          paid: false,
+          amount_paid: 0,
+          amount_due: 0,
+          currency: "usd",
+          auto_advance: params.auto_advance ?? true,
+          collection_method: params.collection_method || "charge_automatically",
+          days_until_due: params.days_until_due || null,
+          metadata: params.metadata || {},
+          automatic_tax: params.automatic_tax || null,
+          lines: { object: "list", data: [] },
+          created: self._now(),
+          hosted_invoice_url: null,
+        };
+        self._invoices.push(invoice);
+
+        self._idempotencyKeys = self._idempotencyKeys || {};
+        if (options?.idempotencyKey) {
+          self._idempotencyKeys[options.idempotencyKey] = invoice;
+        }
+
+        return invoice;
+      },
+      async pay(id, params, options) {
+        const invoice = self._invoices.find((i) => i.id === id);
+        if (!invoice) {
+          const error = new Error(`No such invoice: ${id}`);
+          error.type = "StripeInvalidRequestError";
+          throw error;
+        }
+
+        // Calculate amount from line items
+        let total = 0;
+        for (const item of invoice.lines.data) {
+          total += (item.unit_amount || item.amount || 0) * (item.quantity || 1);
+        }
+
+        invoice.status = "paid";
+        invoice.paid = true;
+        invoice.amount_paid = total;
+        invoice.amount_due = 0;
+        return invoice;
+      },
+      async voidInvoice(id) {
+        const invoice = self._invoices.find((i) => i.id === id);
+        if (!invoice) {
+          const error = new Error(`No such invoice: ${id}`);
+          error.type = "StripeInvalidRequestError";
+          throw error;
+        }
+        invoice.status = "void";
+        return invoice;
+      },
+      async finalizeInvoice(id) {
+        const invoice = self._invoices.find((i) => i.id === id);
+        if (!invoice) {
+          const error = new Error(`No such invoice: ${id}`);
+          error.type = "StripeInvalidRequestError";
+          throw error;
+        }
+        invoice.status = "open";
+        invoice.hosted_invoice_url = `https://invoice.stripe.com/i/mock_${self._idCounter++}`;
+        return invoice;
+      },
+    };
+  }
+
+  get invoiceItems() {
+    const self = this;
+    self._invoiceItems = self._invoiceItems || [];
+    return {
+      async create(params, options) {
+        const item = {
+          id: self._generateId("ii"),
+          object: "invoiceitem",
+          customer: params.customer,
+          invoice: params.invoice || null,
+          amount: params.amount || 0,
+          unit_amount: params.unit_amount_decimal ? parseInt(params.unit_amount_decimal) : (params.amount || 0),
+          quantity: params.quantity || 1,
+          currency: params.currency || "usd",
+          description: params.description || null,
+          price_data: params.price_data || null,
+          created: self._now(),
+        };
+
+        self._invoiceItems.push(item);
+
+        // If invoice is specified, add to that invoice's lines
+        if (params.invoice) {
+          const invoice = self._invoices.find((i) => i.id === params.invoice);
+          if (invoice) {
+            invoice.lines.data.push(item);
+            // Update currency from item
+            invoice.currency = params.currency || invoice.currency;
+          }
+        }
+
+        return item;
+      },
     };
   }
 

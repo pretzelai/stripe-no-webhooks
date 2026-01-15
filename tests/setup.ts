@@ -144,6 +144,7 @@ export type SeedCustomerParams = {
   metadata?: Record<string, string>;
   email?: string;
   invoiceSettings?: { default_payment_method?: string };
+  deleted?: boolean;
 };
 
 export type SeedPriceParams = {
@@ -175,12 +176,12 @@ export type SeedUserMapParams = {
  */
 export async function seedCustomer(params: SeedCustomerParams): Promise<void> {
   if (!pool) await setupTestDb();
-  const { id, metadata = {}, email, invoiceSettings } = params;
+  const { id, metadata = {}, email, invoiceSettings, deleted = false } = params;
   await pool!.query(`
-    INSERT INTO ${SCHEMA}.customers (id, object, metadata, email, invoice_settings, created, livemode)
-    VALUES ($1, 'customer', $2, $3, $4, extract(epoch from now())::bigint, false)
-    ON CONFLICT (id) DO UPDATE SET metadata = $2, email = $3, invoice_settings = $4
-  `, [id, JSON.stringify(metadata), email || null, JSON.stringify(invoiceSettings || {})]);
+    INSERT INTO ${SCHEMA}.customers (id, object, metadata, email, invoice_settings, created, livemode, deleted)
+    VALUES ($1, 'customer', $2, $3, $4, extract(epoch from now())::bigint, false, $5)
+    ON CONFLICT (id) DO UPDATE SET metadata = $2, email = $3, invoice_settings = $4, deleted = $5
+  `, [id, JSON.stringify(metadata), email || null, JSON.stringify(invoiceSettings || {}), deleted]);
 }
 
 /**

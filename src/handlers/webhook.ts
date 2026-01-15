@@ -306,6 +306,13 @@ async function handleEvent(
     case "invoice.paid": {
       const invoice = event.data.object as Stripe.Invoice;
 
+      // Handle top-up invoices (B2B mode)
+      // Credits are typically granted inline, but webhook handles edge cases
+      if (invoice.metadata?.top_up_credit_type) {
+        await ctx.topUpHandler.handleInvoicePaid(invoice);
+        break;
+      }
+
       // Handle both old and new Stripe API versions
       // Old: invoice.subscription
       // New (2025-12-15+): invoice.parent?.subscription_details?.subscription

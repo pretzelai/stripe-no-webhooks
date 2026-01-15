@@ -1,6 +1,16 @@
 const { runMigrations } = require("@pretzelai/stripe-sync-engine");
 const { Client } = require("pg");
 const { saveToEnvFiles } = require("./helpers/utils");
+const {
+  header,
+  success,
+  error,
+  step,
+  complete,
+  nextSteps,
+  DIM,
+  RESET,
+} = require("./helpers/output");
 
 async function migrate(dbUrl, options = {}) {
   const { env = process.env, logger = console, exitOnError = true } = options;
@@ -10,22 +20,25 @@ async function migrate(dbUrl, options = {}) {
   const databaseUrl = dbUrl || env.DATABASE_URL;
 
   if (!databaseUrl) {
-    logger.error("❌ Missing database URL.\n");
-    logger.log(
-      "Usage:\n  npx stripe-no-webhooks migrate <postgres_connection_string> [--schema <name>]"
+    error("Missing database URL.");
+    console.log();
+    console.log(
+      "Usage:\n  npx stripe-no-webhooks migrate <postgres_connection_string>"
     );
     if (exitOnError) process.exit(1);
     return { success: false, error: "Missing database URL" };
   }
 
-  logger.log(`🚀 Running Stripe migrations (schema: ${SCHEMA})...`);
+  header("stripe-no-webhooks", "Database Migrations");
+
+  step("Running Stripe schema migrations...");
 
   let client;
   try {
     await runMigrations({
       databaseUrl,
       schema: SCHEMA,
-      logger,
+      logger: { info: () => {}, error: logger.error }, // Suppress verbose output
     });
 
     client = new Client({ connectionString: databaseUrl });
@@ -39,6 +52,7 @@ async function migrate(dbUrl, options = {}) {
         updated_at timestamptz DEFAULT now()
       );
     `);
+    success("Created stripe.user_stripe_customer_map");
 
     // Credit system tables
     await client.query(`
@@ -50,6 +64,7 @@ async function migrate(dbUrl, options = {}) {
         PRIMARY KEY (user_id, credit_type_id)
       );
     `);
+    success("Created stripe.credit_balances");
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS ${SCHEMA}.credit_ledger (
@@ -67,6 +82,7 @@ async function migrate(dbUrl, options = {}) {
         created_at timestamptz DEFAULT now()
       );
     `);
+    success("Created stripe.credit_ledger");
 
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_credit_ledger_user_type_time
@@ -77,27 +93,37 @@ async function migrate(dbUrl, options = {}) {
       CREATE INDEX IF NOT EXISTS idx_credit_ledger_source_id
         ON ${SCHEMA}.credit_ledger(source_id);
     `);
+    success("Created indexes");
 
     await client.end();
-    logger.log("✅ Stripe schema migrations completed!");
 
     if (!env.DATABASE_URL) {
       const envVars = [{ key: "DATABASE_URL", value: databaseUrl }];
       const updatedFiles = saveToEnvFiles(envVars);
       if (updatedFiles.length > 0) {
-        logger.log(`📝 Updated ${updatedFiles.join(", ")} with DATABASE_URL`);
+        success(`Saved DATABASE_URL to ${updatedFiles.join(", ")}`);
       }
     }
 
+    complete("MIGRATIONS COMPLETE", [
+      "Stripe schema and tables created successfully",
+    ]);
+
+    nextSteps([
+      "Edit billing.config.ts with your plans",
+      "",
+      "Sync plans to Stripe:",
+      `   ${DIM}npx stripe-no-webhooks sync${RESET}`,
+    ]);
+
     return { success: true };
-  } catch (error) {
+  } catch (err) {
     if (client) {
       await client.end().catch(() => {});
     }
-    logger.error("❌ Migration failed:");
-    logger.error(error);
+    error(`Migration failed: ${err.message}`);
     if (exitOnError) process.exit(1);
-    return { success: false, error: error.message };
+    return { success: false, error: err.message };
   }
 }
 

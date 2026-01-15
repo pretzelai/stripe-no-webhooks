@@ -1,10 +1,16 @@
 const fs = require("fs");
 const path = require("path");
 const {
+  createPrompt,
+  question,
   questionHidden,
   isValidStripeKey,
   getMode,
   loadStripe,
+  isLocalhost,
+  saveWebhookSecret,
+  selectOption,
+  getDevPort,
 } = require("./helpers/utils");
 const {
   buildProductsByNameMap,
@@ -13,6 +19,19 @@ const {
   findMatchingPrice,
   generatePriceKey,
 } = require("./helpers/sync-helpers");
+const {
+  modeBox,
+  webhookSecretBox,
+  localDevNotice,
+  success,
+  error,
+  info,
+  divider,
+  complete,
+  BOLD,
+  RESET,
+  DIM,
+} = require("./helpers/output");
 
 // --- TypeScript Config Parsing (for billing.config.ts) ---
 
@@ -165,7 +184,9 @@ async function sync(options = {}) {
   }
 
   const stripe = new Stripe(stripeSecretKey);
-  logger.log(`\n🔄 Syncing billing plans with Stripe (${mode} mode)...\n`);
+
+  // Show mode indicator
+  modeBox(mode, stripeSecretKey, `${mode}.plans`);
 
   let content = fs.readFileSync(billingConfigPath, "utf8");
   const { config, extracted } = parseBillingConfig(content, mode, logger);
@@ -217,6 +238,7 @@ async function sync(options = {}) {
     for (const product of stripeProducts.data) {
       const productPrices = pricesByProduct[product.id] || [];
 
+      // First, check if we have a plan with this exact ID
       if (existingProductIds.has(product.id)) {
         const plan = config[mode].plans.find((p) => p.id === product.id);
         for (const stripePrice of productPrices) {
@@ -242,6 +264,57 @@ async function sync(options = {}) {
         continue;
       }
 
+      // Check if we have a plan with matching NAME but no ID (IDs were lost)
+      const planByName = config[mode].plans.find(
+        (p) => !p.id && p.name.toLowerCase().trim() === product.name.toLowerCase().trim()
+      );
+
+      if (planByName) {
+        // Update existing plan with ID instead of creating duplicate
+        planByName.id = product.id;
+        existingProductIds.add(product.id);
+        stats.productsSynced++;
+        configModified = true;
+        logger.log(`🔗 Matched existing plan "${product.name}" with Stripe product (${product.id})`);
+
+        // Add any missing prices
+        planByName.price = planByName.price || [];
+        for (const stripePrice of productPrices) {
+          const priceExists = planByName.price.some(
+            (p) => p.id === stripePrice.id ||
+              (p.amount === stripePrice.unit_amount &&
+               p.currency === stripePrice.currency &&
+               (p.interval || "one_time") === (stripePrice.recurring?.interval || "one_time"))
+          );
+          if (!priceExists) {
+            planByName.price.push({
+              id: stripePrice.id,
+              amount: stripePrice.unit_amount,
+              currency: stripePrice.currency,
+              interval: stripePrice.recurring?.interval || "one_time",
+            });
+            stats.pricesPulled++;
+            configModified = true;
+          } else {
+            // Update existing price with ID if it doesn't have one
+            const existingPrice = planByName.price.find(
+              (p) => !p.id &&
+                p.amount === stripePrice.unit_amount &&
+                p.currency === stripePrice.currency &&
+                (p.interval || "one_time") === (stripePrice.recurring?.interval || "one_time")
+            );
+            if (existingPrice) {
+              existingPrice.id = stripePrice.id;
+              stats.pricesSynced++;
+              configModified = true;
+            }
+          }
+          existingPriceIds.add(stripePrice.id);
+        }
+        continue;
+      }
+
+      // No match by ID or name - add as new plan
       const newPlan = {
         id: product.id,
         name: product.name,
@@ -403,20 +476,253 @@ async function sync(options = {}) {
       formatConfigToTs(config) +
       content.substring(extracted.end);
     fs.writeFileSync(billingConfigPath, newContent);
-    logger.log(`\n📝 Updated billing.config.ts`);
+    success("Updated billing.config.ts");
   }
 
-  logger.log(`\n✅ Done!`);
-  logger.log(
-    `   Pulled from Stripe: ${stats.productsPulled} product(s), ${stats.pricesPulled} price(s)`
-  );
-  logger.log(
-    `   Matched existing: ${stats.productsSynced} product(s), ${stats.pricesSynced} price(s)`
-  );
-  logger.log(
-    `   Created new: ${stats.productsCreated} product(s), ${stats.pricesCreated} price(s)`
+  console.log();
+  success(
+    `Synced ${stats.productsPulled + stats.productsSynced + stats.productsCreated} products, ${stats.pricesPulled + stats.pricesSynced + stats.pricesCreated} prices`
   );
 
+  // --- Webhook Setup Menu ---
+  const siteUrl = env.NEXT_PUBLIC_SITE_URL || "";
+  const isLocal = !siteUrl || isLocalhost(siteUrl);
+
+  divider();
+
+  // If localhost, show local dev notice first
+  if (isLocal) {
+    const port = getDevPort(cwd);
+    localDevNotice(port);
+  }
+
+  // Always show webhook menu
+  console.log(`  ${BOLD}What would you like to do next?${RESET}`);
+
+  const rl = createPrompt();
+  const menuOptions = isLocal
+    ? [
+        { label: "Continue with local development", action: "skip" },
+        { label: "Set up for staging (test mode, public URL)", action: "staging" },
+        { label: "Set up for production (live mode)", action: "production" },
+      ]
+    : [
+        { label: "Skip webhook setup", action: "skip" },
+        { label: "Set up for staging (test mode, public URL)", action: "staging" },
+        { label: "Set up for production (live mode)", action: "production" },
+      ];
+  const choice = await selectOption(rl, menuOptions);
+
+  if (choice.action === "skip") {
+    rl.close();
+    info("Skipped webhook setup");
+    return { success: true, stats };
+  }
+
+  if (choice.action === "staging") {
+    // Staging: use current test key, ask for URL
+    const defaultUrl = isLocal ? "" : siteUrl;
+    const stagingUrl = await question(rl, "Enter your staging URL", defaultUrl);
+    rl.close();
+
+    const webhookUrl = `${new URL(stagingUrl).origin}/api/stripe/webhook`;
+    info(`Creating webhook for ${webhookUrl}...`);
+
+    try {
+      // Check for existing webhook and delete it to get new secret
+      const existingWebhooks = await stripe.webhookEndpoints.list({ limit: 100 });
+      const existing = existingWebhooks.data.find((wh) => wh.url === webhookUrl);
+      if (existing) {
+        await stripe.webhookEndpoints.del(existing.id);
+      }
+
+      const webhook = await stripe.webhookEndpoints.create({
+        url: webhookUrl,
+        enabled_events: ["*"],
+        description: "Created by stripe-no-webhooks CLI (staging)",
+      });
+
+      webhookSecretBox(webhook.secret, "staging");
+
+      saveWebhookSecret(
+        { environment: "staging", url: webhookUrl, secret: webhook.secret },
+        cwd
+      );
+      success("Saved to .stripe-webhook-secrets");
+      success("Added .stripe-webhook-secrets to .gitignore");
+    } catch (err) {
+      error(`Failed to create webhook: ${err.message}`);
+    }
+
+    return { success: true, stats };
+  }
+
+  if (choice.action === "production") {
+    // Production: need live key
+    console.log();
+    const liveKey = await questionHidden(
+      null,
+      "Enter your LIVE Stripe Secret Key (sk_live_...)"
+    );
+
+    if (!liveKey.includes("_live_")) {
+      rl.close();
+      error("Production setup requires a live key (sk_live_...)");
+      return { success: true, stats };
+    }
+
+    const prodUrl = await question(rl, "Enter your production URL");
+    rl.close();
+
+    if (!prodUrl) {
+      error("Production URL is required");
+      return { success: true, stats };
+    }
+
+    const liveStripe = new Stripe(liveKey);
+
+    // Show production mode indicator
+    modeBox("production", liveKey, "production.plans");
+
+    // Sync production plans
+    info("Syncing production.plans...");
+
+    // Re-read config and sync production mode
+    const prodContent = fs.readFileSync(billingConfigPath, "utf8");
+    const { config: prodConfig, extracted: prodExtracted } = parseBillingConfig(
+      prodContent,
+      "production",
+      logger
+    );
+
+    if (prodConfig) {
+      prodConfig.production = prodConfig.production || { plans: [] };
+      prodConfig.production.plans = prodConfig.production.plans || [];
+
+      let prodConfigModified = false;
+
+      // Fetch existing Stripe data
+      let prodProductsByName = {},
+        prodPricesByKey = {};
+      try {
+        const [prodProducts, prodPrices] = await Promise.all([
+          liveStripe.products.list({ active: true, limit: 100 }),
+          liveStripe.prices.list({ active: true, limit: 100 }),
+        ]);
+        prodProductsByName = buildProductsByNameMap(prodProducts.data);
+        prodPricesByKey = buildPricesByKeyMap(prodPrices.data);
+      } catch (err) {
+        error(`Could not fetch production Stripe data: ${err.message}`);
+      }
+
+      // Sync each plan
+      for (let i = 0; i < prodConfig.production.plans.length; i++) {
+        const plan = prodConfig.production.plans[i];
+        let productId = plan.id;
+
+        if (!productId) {
+          const existing = findMatchingProduct(prodProductsByName, plan.name);
+          if (existing) {
+            productId = existing.id;
+            success(`Matched "${plan.name}" (${productId})`);
+            prodConfig.production.plans[i].id = productId;
+            prodConfigModified = true;
+          } else {
+            try {
+              const product = await liveStripe.products.create({
+                name: plan.name,
+                description: plan.description || undefined,
+              });
+              productId = product.id;
+              success(`Created "${plan.name}" (${productId})`);
+              prodProductsByName[plan.name.toLowerCase().trim()] = product;
+              prodConfig.production.plans[i].id = productId;
+              prodConfigModified = true;
+            } catch (err) {
+              error(`Failed to create "${plan.name}": ${err.message}`);
+              continue;
+            }
+          }
+        }
+
+        if (!plan.price?.length) continue;
+
+        for (let j = 0; j < plan.price.length; j++) {
+          const price = plan.price[j];
+          if (price.id) continue;
+
+          const existing = findMatchingPrice(prodPricesByKey, productId, price);
+          const interval = price.interval || "one_time";
+
+          if (existing) {
+            prodConfig.production.plans[i].price[j].id = existing.id;
+            prodConfigModified = true;
+          } else {
+            try {
+              const priceParams = {
+                product: productId,
+                unit_amount: price.amount,
+                currency: price.currency.toLowerCase(),
+              };
+              if (interval !== "one_time") priceParams.recurring = { interval };
+
+              const stripePrice = await liveStripe.prices.create(priceParams);
+              success(`Created price ${price.amount / 100} ${price.currency}/${interval}`);
+              prodConfig.production.plans[i].price[j].id = stripePrice.id;
+              prodConfigModified = true;
+            } catch (err) {
+              error(`Failed to create price: ${err.message}`);
+            }
+          }
+        }
+      }
+
+      if (prodConfigModified) {
+        const newProdContent =
+          prodContent.substring(0, prodExtracted.start) +
+          formatConfigToTs(prodConfig) +
+          prodContent.substring(prodExtracted.end);
+        fs.writeFileSync(billingConfigPath, newProdContent);
+        success("Updated billing.config.ts with production IDs");
+      }
+    }
+
+    // Create production webhook
+    const webhookUrl = `${new URL(prodUrl).origin}/api/stripe/webhook`;
+    info(`Creating webhook for ${webhookUrl}...`);
+
+    try {
+      const existingWebhooks = await liveStripe.webhookEndpoints.list({ limit: 100 });
+      const existing = existingWebhooks.data.find((wh) => wh.url === webhookUrl);
+      if (existing) {
+        await liveStripe.webhookEndpoints.del(existing.id);
+      }
+
+      const webhook = await liveStripe.webhookEndpoints.create({
+        url: webhookUrl,
+        enabled_events: ["*"],
+        description: "Created by stripe-no-webhooks CLI (production)",
+      });
+
+      webhookSecretBox(webhook.secret, "production");
+
+      saveWebhookSecret(
+        { environment: "production", url: webhookUrl, secret: webhook.secret },
+        cwd
+      );
+      success("Saved to .stripe-webhook-secrets");
+      success("Added .stripe-webhook-secrets to .gitignore");
+
+      console.log();
+      info(`${BOLD}Don't forget to commit billing.config.ts!${RESET}`);
+    } catch (err) {
+      error(`Failed to create webhook: ${err.message}`);
+    }
+
+    return { success: true, stats };
+  }
+
+  rl.close();
   return { success: true, stats };
 }
 

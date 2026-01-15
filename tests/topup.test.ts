@@ -808,6 +808,860 @@ describe("TopUp: hasPaymentMethod", () => {
 });
 
 // =============================================================================
+// Tests: B2B Mode (Invoice-based Top-Ups)
+// =============================================================================
+
+describe("TopUp: B2B Mode (with tax config)", () => {
+  test("uses invoices when automaticTax is enabled", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    let completedParams: any = null;
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+      onTopUpCompleted: (params) => {
+        completedParams = params;
+      },
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success && "balance" in result) {
+      expect(result.balance).toBe(500);
+      // sourceId should be an invoice ID (starts with "in_")
+      expect(result.sourceId).toMatch(/^in_/);
+    }
+
+    // Callback should receive invoice ID as sourceId
+    expect(completedParams).not.toBeNull();
+    expect(completedParams.sourceId).toMatch(/^in_/);
+  });
+
+  test("uses invoices when taxIdCollection is enabled", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { taxIdCollection: true },
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success && "balance" in result) {
+      // sourceId should be an invoice ID
+      expect(result.sourceId).toMatch(/^in_/);
+    }
+  });
+
+  test("uses PaymentIntent when no tax config", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      // No tax config
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success && "balance" in result) {
+      // sourceId should be a PaymentIntent ID (starts with "pi_")
+      expect(result.sourceId).toMatch(/^pi_/);
+    }
+  });
+
+  test("B2B auto top-up uses invoices", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+    });
+
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "api_calls",
+      currentBalance: 100,
+    });
+
+    expect(result.triggered).toBe(true);
+    if (result.triggered) {
+      expect(result.status).toBe("succeeded");
+      // sourceId should be an invoice ID
+      expect(result.sourceId).toMatch(/^in_/);
+    }
+  });
+
+  test("B2B recovery returns hosted invoice URL", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly"); // No payment method
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("NO_PAYMENT_METHOD");
+      expect(result.error.recoveryUrl).toBeDefined();
+      // B2B recovery URL should be hosted invoice URL
+      expect(result.error.recoveryUrl).toContain("invoice.stripe.com");
+    }
+  });
+
+  test("B2C recovery returns checkout session URL", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly"); // No payment method
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      // No tax config = B2C mode
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("NO_PAYMENT_METHOD");
+      expect(result.error.recoveryUrl).toBeDefined();
+      // B2C recovery URL should be checkout session
+      expect(result.error.recoveryUrl).toContain("checkout.stripe.com");
+    }
+  });
+});
+
+// =============================================================================
+// Tests: Invoice Webhook Handler
+// =============================================================================
+
+describe("TopUp: Invoice Paid Webhook (B2B)", () => {
+  test("grants credits on invoice.paid with top-up metadata", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+    });
+
+    // Simulate invoice.paid webhook
+    const invoice = {
+      id: "in_test_123",
+      object: "invoice",
+      customer: "cus_user_1",
+      status: "paid",
+      paid: true,
+      amount_paid: 500,
+      currency: "usd",
+      metadata: {
+        top_up_credit_type: "api_calls",
+        top_up_amount: "500",
+        user_id: "user_1",
+      },
+    };
+
+    await topUpHandler.handleInvoicePaid(invoice as any);
+
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+  });
+
+  test("idempotent: duplicate invoice.paid does not double-grant", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+    });
+
+    const invoice = {
+      id: "in_test_456",
+      object: "invoice",
+      customer: "cus_user_1",
+      status: "paid",
+      paid: true,
+      amount_paid: 500,
+      currency: "usd",
+      metadata: {
+        top_up_credit_type: "api_calls",
+        top_up_amount: "500",
+        user_id: "user_1",
+      },
+    };
+
+    // Process same webhook twice
+    await topUpHandler.handleInvoicePaid(invoice as any);
+    await topUpHandler.handleInvoicePaid(invoice as any);
+
+    // Should only have 500 credits
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+  });
+
+  test("ignores invoices without top-up metadata", async () => {
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+    });
+
+    const invoice = {
+      id: "in_test_789",
+      object: "invoice",
+      customer: "cus_user_1",
+      status: "paid",
+      paid: true,
+      amount_paid: 1000,
+      currency: "usd",
+      metadata: {}, // No top-up metadata (regular subscription invoice)
+    };
+
+    // Should not throw
+    await topUpHandler.handleInvoicePaid(invoice as any);
+  });
+
+  test("handles auto top-up invoices correctly", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    let grantedParams: any = null;
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+      onCreditsGranted: (params) => {
+        grantedParams = params;
+      },
+    });
+
+    const invoice = {
+      id: "in_auto_123",
+      object: "invoice",
+      customer: "cus_user_1",
+      status: "paid",
+      paid: true,
+      amount_paid: 1000,
+      currency: "usd",
+      metadata: {
+        top_up_credit_type: "api_calls",
+        top_up_amount: "1000",
+        user_id: "user_1",
+        top_up_auto: "true",
+      },
+    };
+
+    await topUpHandler.handleInvoicePaid(invoice as any);
+
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(grantedParams).not.toBeNull();
+    expect(grantedParams.source).toBe("auto_topup");
+  });
+});
+
+// =============================================================================
+// Tests: Payment Failure and Error Handling
+// =============================================================================
+
+describe("TopUp: Payment Failure Handling", () => {
+  test("B2B mode voids invoice on payment failure", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    // Create a custom mock object with the methods we need
+    let voidCalled = false;
+    const failingStripe = {
+      invoices: {
+        create: async (params: any) => ({
+          id: `in_fail_${Date.now()}`,
+          object: "invoice",
+          customer: params.customer,
+          status: "draft",
+          metadata: params.metadata || {},
+        }),
+        pay: async () => {
+          throw { type: "card_error", code: "card_declined", message: "Card declined" };
+        },
+        voidInvoice: async (id: string) => {
+          voidCalled = true;
+          return { id, status: "void" };
+        },
+        finalizeInvoice: async (id: string) => ({
+          id,
+          status: "open",
+          hosted_invoice_url: "https://invoice.stripe.com/test",
+        }),
+      },
+      invoiceItems: {
+        create: async (params: any) => ({
+          id: `ii_${Date.now()}`,
+          object: "invoiceitem",
+          invoice: params.invoice,
+        }),
+      },
+      checkout: {
+        sessions: {
+          create: async () => ({
+            id: `cs_${Date.now()}`,
+            url: "https://checkout.stripe.com/test",
+          }),
+        },
+      },
+    };
+
+    const topUpHandler = createTopUpHandler({
+      stripe: failingStripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("PAYMENT_FAILED");
+      expect(result.error.recoveryUrl).toBeDefined();
+    }
+    expect(voidCalled).toBe(true);
+  });
+
+  test("B2C mode returns pending status when payment is processing", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    // Create a custom mock that returns processing status
+    const processingStripe = {
+      paymentIntents: {
+        create: async (params: any) => ({
+          id: `pi_processing_${Date.now()}`,
+          object: "payment_intent",
+          amount: params.amount,
+          currency: params.currency,
+          status: "processing",
+          metadata: params.metadata,
+        }),
+      },
+      checkout: {
+        sessions: {
+          create: async () => ({
+            id: `cs_${Date.now()}`,
+            url: "https://checkout.stripe.com/test",
+          }),
+        },
+      },
+    };
+
+    const topUpHandler = createTopUpHandler({
+      stripe: processingStripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      // No tax config = B2C mode
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success && "status" in result) {
+      expect(result.status).toBe("pending");
+      expect(result.message).toContain("processing");
+    }
+  });
+
+  test("returns PAYMENT_FAILED for card errors with recovery URL", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const failingStripe = {
+      paymentIntents: {
+        create: async () => {
+          throw { type: "card_error", code: "insufficient_funds", message: "Insufficient funds" };
+        },
+      },
+      checkout: {
+        sessions: {
+          create: async () => ({
+            id: `cs_${Date.now()}`,
+            url: "https://checkout.stripe.com/test",
+          }),
+        },
+      },
+    };
+
+    const topUpHandler = createTopUpHandler({
+      stripe: failingStripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("PAYMENT_FAILED");
+      expect(result.error.message).toContain("Insufficient funds");
+      expect(result.error.recoveryUrl).toBeDefined();
+    }
+  });
+
+  test("returns INVALID_AMOUNT for invalid_request_error", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const failingStripe = {
+      paymentIntents: {
+        create: async () => {
+          throw { type: "invalid_request_error", code: "amount_too_small", message: "Amount too small" };
+        },
+      },
+      checkout: {
+        sessions: {
+          create: async () => ({
+            id: `cs_${Date.now()}`,
+            url: "https://checkout.stripe.com/test",
+          }),
+        },
+      },
+    };
+
+    const topUpHandler = createTopUpHandler({
+      stripe: failingStripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 100,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("INVALID_AMOUNT");
+    }
+  });
+});
+
+// =============================================================================
+// Tests: Stripe Minimum Charge
+// =============================================================================
+
+describe("TopUp: Stripe Minimum Charge", () => {
+  test("fails when total is below Stripe minimum (60 cents)", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    // Our basic plan has pricePerCreditCents = 1, so 50 credits = 50 cents < 60 cents
+    // But minPerPurchase is 100, so we need a config with lower minPerPurchase
+    const lowMinConfig: BillingConfig = {
+      test: {
+        plans: [
+          {
+            id: "basic",
+            name: "Basic",
+            price: [{ id: "price_basic_monthly", amount: 999, currency: "usd", interval: "month" }],
+            credits: {
+              api_calls: {
+                allocation: 1000,
+                onRenewal: "reset",
+                topUp: {
+                  mode: "on_demand",
+                  pricePerCreditCents: 1,
+                  minPerPurchase: 10, // Allow smaller purchases
+                  maxPerPurchase: 10000,
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: lowMinConfig,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 50, // 50 cents < 60 cents minimum
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("INVALID_AMOUNT");
+      expect(result.error.message).toContain("60 cents");
+    }
+  });
+});
+
+// =============================================================================
+// Tests: Deleted Customer
+// =============================================================================
+
+describe("TopUp: Deleted Customer", () => {
+  test("fails if customer is deleted", async () => {
+    // Seed a deleted customer
+    await seedPrice({ id: "price_basic_monthly", productId: "prod_test", unitAmount: 999 });
+    await seedCustomer({
+      id: "cus_deleted",
+      metadata: { user_id: "user_deleted" },
+      invoiceSettings: { default_payment_method: "pm_card_visa" },
+      deleted: true,
+    });
+    await seedUserMap({ userId: "user_deleted", stripeCustomerId: "cus_deleted" });
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_deleted",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("USER_NOT_FOUND");
+      expect(result.error.message).toContain("deleted");
+    }
+  });
+});
+
+// =============================================================================
+// Tests: Auto Top-Up Failure Scenarios
+// =============================================================================
+
+describe("TopUp: Auto Top-Up Failure Scenarios", () => {
+  test("B2B auto top-up voids invoice on payment failure", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    let voidCalled = false;
+    const failingStripe = {
+      invoices: {
+        create: async (params: any) => ({
+          id: `in_fail_${Date.now()}`,
+          object: "invoice",
+          customer: params.customer,
+          status: "draft",
+          metadata: params.metadata || {},
+        }),
+        pay: async () => {
+          throw { type: "card_error", code: "card_declined", message: "Card declined" };
+        },
+        voidInvoice: async () => {
+          voidCalled = true;
+          return { id: "in_voided", status: "void" };
+        },
+      },
+      invoiceItems: {
+        create: async (params: any) => ({
+          id: `ii_${Date.now()}`,
+          object: "invoiceitem",
+          invoice: params.invoice,
+        }),
+      },
+    };
+
+    let failedParams: any = null;
+
+    const topUpHandler = createTopUpHandler({
+      stripe: failingStripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      tax: { automaticTax: true },
+      onAutoTopUpFailed: (params) => {
+        failedParams = params;
+      },
+    });
+
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "api_calls",
+      currentBalance: 100,
+    });
+
+    expect(result.triggered).toBe(false);
+    if (!result.triggered && "error" in result) {
+      expect(result.reason).toBe("payment_failed");
+    }
+    expect(voidCalled).toBe(true);
+    expect(failedParams).not.toBeNull();
+    expect(failedParams.reason).toBe("payment_failed");
+  });
+
+  test("B2C auto top-up fails with requires_action status", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    const actionRequiredStripe = {
+      paymentIntents: {
+        create: async (params: any) => ({
+          id: `pi_action_${Date.now()}`,
+          object: "payment_intent",
+          amount: params.amount,
+          currency: params.currency,
+          status: "requires_action",
+          metadata: params.metadata,
+        }),
+      },
+    };
+
+    let failedParams: any = null;
+
+    const topUpHandler = createTopUpHandler({
+      stripe: actionRequiredStripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      onAutoTopUpFailed: (params) => {
+        failedParams = params;
+      },
+    });
+
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "api_calls",
+      currentBalance: 100,
+    });
+
+    expect(result.triggered).toBe(false);
+    if (!result.triggered) {
+      expect(result.reason).toBe("payment_requires_action");
+    }
+    expect(failedParams).not.toBeNull();
+    expect(failedParams.reason).toBe("payment_requires_action");
+  });
+
+  test("auto top-up returns user_not_found for non-existent user", async () => {
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "nonexistent_user",
+      creditType: "api_calls",
+      currentBalance: 100,
+    });
+
+    expect(result.triggered).toBe(false);
+    if (!result.triggered) {
+      expect(result.reason).toBe("user_not_found");
+    }
+  });
+
+  test("auto top-up returns not_configured for wrong top-up mode", async () => {
+    // Basic plan has on_demand mode, not auto
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "api_calls",
+      currentBalance: 100,
+    });
+
+    expect(result.triggered).toBe(false);
+    if (!result.triggered) {
+      expect(result.reason).toBe("not_configured");
+    }
+  });
+});
+
+// =============================================================================
+// Tests: Credit Type Without Top-Up
+// =============================================================================
+
+describe("TopUp: Credit Type Without Top-Up", () => {
+  test("auto top-up fails for credit type without top-up config", async () => {
+    // Pro plan has storage_gb without top-up configured
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "storage_gb",
+      currentBalance: 10,
+    });
+
+    expect(result.triggered).toBe(false);
+    if (!result.triggered) {
+      expect(result.reason).toBe("not_configured");
+    }
+  });
+
+  test("on-demand top-up fails for non-existent credit type", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "nonexistent_credits",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("TOPUP_NOT_CONFIGURED");
+    }
+  });
+});
+
+// =============================================================================
 // Tests: Boundary Cases
 // =============================================================================
 

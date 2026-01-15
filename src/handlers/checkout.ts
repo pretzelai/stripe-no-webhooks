@@ -235,6 +235,20 @@ export async function handleCheckout(
           currency: targetPrice.currency,
           success_url: successUrl,
           cancel_url: cancelUrl,
+
+          // Tax configuration (also in setup mode for address collection)
+          ...(ctx.tax.billingAddressCollection && {
+            billing_address_collection: ctx.tax.billingAddressCollection,
+          }),
+
+          ...(ctx.tax.taxIdCollection && {
+            tax_id_collection: { enabled: true },
+          }),
+
+          ...(ctx.tax.customerUpdate && {
+            customer_update: ctx.tax.customerUpdate,
+          }),
+
           metadata: {
             ...body.metadata,
             upgrade_subscription_id: currentSub.id,
@@ -259,8 +273,22 @@ export async function handleCheckout(
       mode: priceMode,
       success_url: successUrl,
       cancel_url: cancelUrl,
-      automatic_tax: { enabled: ctx.automaticTax },
       payment_method_collection: "if_required",
+
+      // Tax configuration
+      automatic_tax: { enabled: ctx.tax.automaticTax ?? false },
+
+      ...(ctx.tax.billingAddressCollection && {
+        billing_address_collection: ctx.tax.billingAddressCollection,
+      }),
+
+      ...(ctx.tax.taxIdCollection && {
+        tax_id_collection: { enabled: true },
+      }),
+
+      ...(ctx.tax.customerUpdate && {
+        customer_update: ctx.tax.customerUpdate,
+      }),
     };
 
     if (customerId) {

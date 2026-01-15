@@ -1,20 +1,24 @@
 // app/api/stripe/[...all]/route.ts
 import { billing } from "@/lib/billing";
 
-// TODO: Import your auth library
-// import { auth } from "@clerk/nextjs/server";
-// import { getServerSession } from "next-auth";
+// TODO: Import your auth library - see some examples below
+// import { auth, currentUser } from "@clerk/nextjs/server";
+// import { auth as betterAuth } from "@/lib/auth";
+// import { headers } from "next/headers";
 
 export const POST = billing.createHandler({
-  // REQUIRED: Resolve the authenticated user from the request
+  // REQUIRED: Return { id, email?, name? } or null if not authenticated
+  // Email/name are used when creating a new Stripe customer
   resolveUser: async () => {
-    // Clerk:
-    // const { userId } = await auth();
-    // return userId ? { id: userId } : null;
+    // Clerk (requires clerkMiddleware in middleware.ts):
+    // const user = await currentUser();
+    // if (!user) return null;
+    // return { id: user.id, email: user.emailAddresses[0]?.emailAddress, name: user.fullName ?? undefined };
 
-    // NextAuth:
-    // const session = await getServerSession();
-    // return session?.user?.id ? { id: session.user.id } : null;
+    // Better Auth:
+    // const session = await betterAuth.api.getSession({ headers: await headers() });
+    // if (!session?.user) return null;
+    // return { id: session.user.id, email: session.user.email, name: session.user.name };
 
     return null; // TODO: Replace with your auth
   },

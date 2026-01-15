@@ -33,10 +33,12 @@ import type {
   StripeConfig,
   HandlerConfig,
   HandlerContext,
+  TaxConfig,
 } from "./types";
 import { handleCheckout } from "./handlers/checkout";
 import { handleCustomerPortal } from "./handlers/customer-portal";
 import { handleWebhook } from "./handlers/webhook";
+import { handleBilling } from "./handlers/billing";
 
 export type { CreditsGrantTo };
 export type {
@@ -58,6 +60,7 @@ export type {
   HandlerConfig,
   StripeWebhookCallbacks,
   CreditsConfig,
+  TaxConfig,
   CheckoutRequestBody,
   CustomerPortalRequestBody,
 } from "./types";
@@ -71,7 +74,8 @@ export class Billing {
   private readonly pool: Pool | null;
   private readonly schema: string;
   private readonly billingConfig: StripeConfig["billingConfig"];
-  private readonly mode: "test" | "production";
+  /** Current mode based on STRIPE_SECRET_KEY ("test" or "production") */
+  readonly mode: "test" | "production";
   private readonly grantTo: CreditsGrantTo;
   private readonly defaultSuccessUrl?: string;
   private readonly defaultCancelUrl?: string;
@@ -80,6 +84,7 @@ export class Billing {
   private readonly mapUserIdToStripeCustomerId?: StripeConfig["mapUserIdToStripeCustomerId"];
   private readonly creditsConfig?: StripeConfig["credits"];
   private readonly callbacks?: StripeConfig["callbacks"];
+  private readonly tax: TaxConfig;
 
   constructor(config: StripeConfig = {}) {
     const {
@@ -93,6 +98,7 @@ export class Billing {
       credits: creditsConfig,
       callbacks,
       mapUserIdToStripeCustomerId,
+      tax,
     } = config;
 
     this.stripe = new Stripe(stripeSecretKey);
@@ -109,6 +115,7 @@ export class Billing {
     this.mapUserIdToStripeCustomerId = mapUserIdToStripeCustomerId;
     this.creditsConfig = creditsConfig;
     this.callbacks = callbacks;
+    this.tax = tax ?? {};
 
     initCredits(this.pool, this.schema);
 
@@ -149,6 +156,14 @@ export class Billing {
         onCreditsRevoked: callbacks?.onCreditsRevoked ?? creditsConfig?.onCreditsRevoked,
       },
     });
+  }
+
+  /**
+   * Get plans for the current mode (based on STRIPE_SECRET_KEY).
+   * Use this to pass plans to your pricing page component.
+   */
+  getPlans() {
+    return this.billingConfig?.[this.mode]?.plans || [];
   }
 
   private resolveStripeCustomerId = async (options: {
@@ -213,7 +228,7 @@ export class Billing {
       amountCharged: number;
       currency: string;
       newBalance: number;
-      paymentIntentId: string;
+      sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
     }) => void | Promise<void>;
     onCreditsLow?: (params: {
       userId: string;
@@ -230,6 +245,7 @@ export class Billing {
       mode: this.mode,
       successUrl: this.defaultSuccessUrl || "",
       cancelUrl: this.defaultCancelUrl || "",
+      tax: this.tax,
       onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,
       onTopUpCompleted: callbacks?.onTopUpCompleted,
       onCreditsLow: callbacks?.onCreditsLow,
@@ -288,11 +304,23 @@ export class Billing {
       resolveUser,
       resolveOrg,
       callbacks: handlerCallbacks,
-      automaticTax = false,
     } = handlerConfig;
 
     // Merge callbacks: handler-level overrides instance-level
     const callbacks = { ...this.callbacks, ...handlerCallbacks };
+
+    // Build tax config with sensible defaults
+    const taxConfig: TaxConfig = { ...this.tax };
+
+    // When automaticTax is enabled, default to collecting address
+    if (taxConfig.automaticTax) {
+      taxConfig.billingAddressCollection ??= "auto";
+    }
+
+    // When collecting address or tax IDs, save to customer
+    if (taxConfig.billingAddressCollection || taxConfig.taxIdCollection) {
+      taxConfig.customerUpdate ??= { address: "auto", name: "auto" };
+    }
 
     const creditLifecycle = createCreditLifecycle({
       pool: this.pool,
@@ -311,6 +339,7 @@ export class Billing {
       mode: this.mode,
       successUrl: this.defaultSuccessUrl || "",
       cancelUrl: this.defaultCancelUrl || "",
+      tax: taxConfig,
       onCreditsGranted: callbacks?.onCreditsGranted,
       onTopUpCompleted: callbacks?.onTopUpCompleted,
       onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,
@@ -326,7 +355,7 @@ export class Billing {
       grantTo: this.grantTo,
       defaultSuccessUrl: this.defaultSuccessUrl,
       defaultCancelUrl: this.defaultCancelUrl,
-      automaticTax,
+      tax: taxConfig,
       resolveUser,
       resolveOrg,
       resolveStripeCustomerId: this.resolveStripeCustomerId,
@@ -359,10 +388,12 @@ export class Billing {
           return handleWebhook(request, webhookContext);
         case "customer_portal":
           return handleCustomerPortal(request, routeContext);
+        case "billing":
+          return handleBilling(request, routeContext);
         default:
           return new Response(
             JSON.stringify({
-              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal`,
+              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing`,
             }),
             { status: 404, headers: { "Content-Type": "application/json" } }
           );

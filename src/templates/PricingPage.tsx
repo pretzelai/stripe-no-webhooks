@@ -1,16 +1,59 @@
 "use client";
 
+/**
+ * PricingPage - Auto-fetching pricing component
+ *
+ * This component fetches plans from your billing.config.ts and renders them.
+ * Customize plans in billing.config.ts:
+ *
+ * @example
+ * // billing.config.ts
+ * {
+ *   name: "Pro",
+ *   description: "For growing teams",
+ *   price: [{ amount: 2000, currency: "usd", interval: "month" }],
+ *
+ *   // Credit-based features (tracked automatically)
+ *   credits: {
+ *     api_calls: {
+ *       allocation: 1000,
+ *       displayName: "API Calls",  // Shows "1,000 API Calls/mo"
+ *     }
+ *   },
+ *
+ *   // Custom features (just text, no tracking)
+ *   features: [
+ *     "Priority support",
+ *     "Custom integrations",
+ *     "Unlimited exports"
+ *   ]
+ * }
+ *
+ * To customize styling, edit the CSS variables in the `styles` const at the bottom.
+ */
+
 import { useState, useMemo, useEffect } from "react";
 import { createCheckoutClient } from "stripe-no-webhooks/client";
 import type { Plan, PriceInterval } from "stripe-no-webhooks";
 
+interface SubscriptionInfo {
+  planId: string;
+  planName: string;
+  interval: PriceInterval;
+  status: string;
+}
+
 interface PricingPageProps {
-  plans: Plan[];
+  /** Override auto-detected current plan */
   currentPlanId?: string;
+  /** Override auto-detected interval */
   currentInterval?: PriceInterval;
+  /** Error callback */
   onError?: (error: Error) => void;
   /** Countdown duration in seconds before redirecting after plan switch (default: 5) */
   redirectCountdown?: number;
+  /** Custom billing endpoint (default: "/api/stripe/billing") */
+  endpoint?: string;
 }
 
 const getPlanId = (plan: Plan) =>
@@ -21,18 +64,95 @@ const getPrice = (plan: Plan, interval: PriceInterval) => {
   return plan.price.find((p) => p.interval === interval) || plan.price[0];
 };
 
+function LoadingSkeleton() {
+  return (
+    <div className="snw-pricing-container">
+      <div className="snw-pricing-header">
+        <div className="snw-skeleton snw-skeleton-title" />
+        <div className="snw-skeleton snw-skeleton-subtitle" />
+      </div>
+      <div className="snw-pricing-grid">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="snw-pricing-card">
+            <div className="snw-skeleton snw-skeleton-plan-name" />
+            <div className="snw-skeleton snw-skeleton-price" />
+            <div className="snw-skeleton snw-skeleton-features" />
+            <div className="snw-skeleton snw-skeleton-btn" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="snw-pricing-container">
+      <div className="snw-error-state">
+        <p className="snw-error-message">{message}</p>
+        <button className="snw-plan-btn primary" onClick={onRetry}>
+          Try Again
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function PricingPage({
-  plans,
-  currentPlanId,
-  currentInterval = "month",
+  currentPlanId: currentPlanIdProp,
+  currentInterval: currentIntervalProp,
   onError,
   redirectCountdown = 5,
+  endpoint = "/api/stripe/billing",
 }: PricingPageProps) {
+  // Data fetching state
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // UI state
   const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [interval, setInterval] = useState<PriceInterval>(currentInterval);
+  const [interval, setInterval] = useState<PriceInterval>(currentIntervalProp || "month");
   const [countdown, setCountdown] = useState<number | null>(null);
   const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
+
+  // Fetch billing data on mount
+  const fetchBilling = async () => {
+    setLoading(true);
+    setFetchError(null);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        throw new Error("Failed to fetch billing data");
+      }
+      const data = await res.json();
+      setPlans(data.plans || []);
+      setSubscription(data.subscription);
+      // Update interval from subscription if not overridden by prop
+      if (data.subscription?.interval && !currentIntervalProp) {
+        setInterval(data.subscription.interval);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      setFetchError(errorMessage);
+      onError?.(err instanceof Error ? err : new Error(errorMessage));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchBilling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endpoint]);
+
+  // Use prop override or auto-detected value
+  const currentPlanId = currentPlanIdProp ?? subscription?.planId;
 
   // Handle countdown and redirect
   useEffect(() => {
@@ -73,7 +193,7 @@ export function PricingPage({
     setError(null);
     setCountdown(null);
     setRedirectUrl(null);
-    await checkout({ planId: getPlanId(plan), interval });
+    await checkout({ planName: plan.name, interval });
   };
 
   const handleManage = async () => {
@@ -92,7 +212,7 @@ export function PricingPage({
     }).format(amount / 100);
   };
 
-  // Check if we should show interval toggle (must have both month AND year prices)
+  // Check if we should show interval toggle
   const hasMultipleIntervals = useMemo(() => {
     const allIntervals = new Set<PriceInterval>();
     for (const plan of plans) {
@@ -105,246 +225,29 @@ export function PricingPage({
     return allIntervals.has("month") && allIntervals.has("year");
   }, [plans]);
 
+  // Render loading skeleton
+  if (loading) {
+    return (
+      <>
+        <style>{styles}</style>
+        <LoadingSkeleton />
+      </>
+    );
+  }
+
+  // Render error state
+  if (fetchError) {
+    return (
+      <>
+        <style>{styles}</style>
+        <ErrorState message={fetchError} onRetry={fetchBilling} />
+      </>
+    );
+  }
+
   return (
     <>
-      <style>{`
-        /* =================================================================
-           CUSTOMIZE YOUR THEME
-           Change these variables to match your brand colors and style.
-           ================================================================= */
-        .snw-pricing-container {
-          --snw-primary: #3b82f6;
-          --snw-primary-hover: #2563eb;
-          --snw-text: #111;
-          --snw-text-muted: #666;
-          --snw-text-secondary: #374151;
-          --snw-border: #e5e7eb;
-          --snw-background: white;
-          --snw-background-secondary: #f3f4f6;
-          --snw-success: #16a34a;
-          --snw-success-bg: #f0fdf4;
-          --snw-success-border: #bbf7d0;
-          --snw-error: #dc2626;
-          --snw-error-bg: #fef2f2;
-          --snw-error-border: #fecaca;
-          --snw-radius: 12px;
-          --snw-radius-sm: 8px;
-          --snw-font: system-ui, -apple-system, sans-serif;
-        }
-        /* ================================================================= */
-
-        .snw-pricing-container {
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 2rem 1rem;
-          font-family: var(--snw-font);
-        }
-        .snw-pricing-header {
-          text-align: center;
-          margin-bottom: 2rem;
-        }
-        .snw-pricing-title {
-          font-size: 2rem;
-          font-weight: 700;
-          color: var(--snw-text);
-          margin: 0 0 0.5rem 0;
-        }
-        .snw-pricing-subtitle {
-          color: var(--snw-text-muted);
-          font-size: 1.1rem;
-          margin: 0;
-        }
-        .snw-interval-toggle {
-          display: flex;
-          justify-content: center;
-          gap: 0.5rem;
-          margin-bottom: 2rem;
-        }
-        .snw-interval-btn {
-          padding: 0.5rem 1rem;
-          border: 1px solid var(--snw-border);
-          background: var(--snw-background);
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 0.9rem;
-          transition: all 0.15s;
-        }
-        .snw-interval-btn:hover {
-          border-color: var(--snw-primary);
-        }
-        .snw-interval-btn.active {
-          background: var(--snw-primary);
-          border-color: var(--snw-primary);
-          color: white;
-        }
-        .snw-pricing-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-          gap: 1.5rem;
-        }
-        .snw-pricing-card {
-          border: 1px solid var(--snw-border);
-          border-radius: var(--snw-radius);
-          padding: 1.5rem;
-          background: var(--snw-background);
-          transition: all 0.2s;
-          display: flex;
-          flex-direction: column;
-          position: relative;
-        }
-        .snw-pricing-card:hover {
-          border-color: var(--snw-primary);
-          box-shadow: 0 4px 12px color-mix(in srgb, var(--snw-primary) 10%, transparent);
-        }
-        .snw-pricing-card.current {
-          border-color: var(--snw-primary);
-          border-width: 2px;
-        }
-        .snw-plan-name {
-          font-size: 1.25rem;
-          font-weight: 600;
-          color: var(--snw-text);
-          margin: 0 0 0.25rem 0;
-        }
-        .snw-plan-description {
-          color: var(--snw-text-muted);
-          font-size: 0.9rem;
-          margin: 0 0 1rem 0;
-        }
-        .snw-plan-price {
-          font-size: 2.5rem;
-          font-weight: 700;
-          color: var(--snw-text);
-          margin: 0;
-        }
-        .snw-plan-interval {
-          color: var(--snw-text-muted);
-          font-size: 0.9rem;
-        }
-        .snw-plan-features {
-          list-style: none;
-          padding: 0;
-          margin: 1.5rem 0;
-          flex-grow: 1;
-        }
-        .snw-plan-feature {
-          padding: 0.4rem 0;
-          color: var(--snw-text-secondary);
-          font-size: 0.95rem;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-        }
-        .snw-plan-feature::before {
-          content: "✓";
-          color: var(--snw-primary);
-          font-weight: bold;
-        }
-        .snw-plan-btn {
-          width: 100%;
-          padding: 0.75rem 1rem;
-          border: none;
-          border-radius: var(--snw-radius-sm);
-          font-size: 1rem;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .snw-plan-btn:disabled {
-          opacity: 0.7;
-          cursor: not-allowed;
-        }
-        .snw-plan-btn.primary {
-          background: var(--snw-primary);
-          color: white;
-        }
-        .snw-plan-btn.primary:hover:not(:disabled) {
-          background: var(--snw-primary-hover);
-        }
-        .snw-plan-btn.secondary {
-          background: var(--snw-background-secondary);
-          color: var(--snw-text-secondary);
-        }
-        .snw-plan-btn.secondary:hover:not(:disabled) {
-          background: var(--snw-border);
-        }
-        .snw-current-badge {
-          position: absolute;
-          top: -0.65rem;
-          left: 1.25rem;
-          background: var(--snw-primary);
-          color: white;
-          font-size: 0.7rem;
-          font-weight: 600;
-          padding: 0.25rem 0.75rem;
-          border-radius: 9999px;
-          text-transform: uppercase;
-          letter-spacing: 0.025em;
-        }
-        .snw-error {
-          background: var(--snw-error-bg);
-          border: 1px solid var(--snw-error-border);
-          color: var(--snw-error);
-          padding: 0.75rem 1rem;
-          border-radius: var(--snw-radius-sm);
-          margin-bottom: 1rem;
-          text-align: center;
-        }
-        .snw-success {
-          background: var(--snw-success-bg);
-          border: 1px solid var(--snw-success-border);
-          color: var(--snw-success);
-          padding: 0.75rem 1rem;
-          border-radius: var(--snw-radius-sm);
-          margin-bottom: 1rem;
-          text-align: center;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 0.5rem;
-          animation: snw-fade-in 0.3s ease-out;
-        }
-        .snw-success-icon {
-          width: 20px;
-          height: 20px;
-          background: var(--snw-success);
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-size: 12px;
-          flex-shrink: 0;
-        }
-        @keyframes snw-fade-in {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .snw-loading-spinner {
-          display: inline-block;
-          width: 16px;
-          height: 16px;
-          border: 2px solid currentColor;
-          border-right-color: transparent;
-          border-radius: 50%;
-          animation: snw-spin 0.6s linear infinite;
-          margin-right: 0.5rem;
-        }
-        @keyframes snw-spin {
-          to { transform: rotate(360deg); }
-        }
-        @media (max-width: 768px) {
-          .snw-pricing-grid {
-            grid-template-columns: 1fr;
-          }
-          .snw-pricing-title {
-            font-size: 1.5rem;
-          }
-          .snw-plan-price {
-            font-size: 2rem;
-          }
-        }
-      `}</style>
+      <style>{styles}</style>
 
       <div className="snw-pricing-container">
         <div className="snw-pricing-header">
@@ -408,14 +311,21 @@ export function PricingPage({
                   )}
                 </p>
 
-                {plan.credits && (
+                {(plan.credits || plan.features) && (
                   <ul className="snw-plan-features">
-                    {Object.entries(plan.credits).map(([type, config]) => (
+                    {/* Credit-based features with allocations */}
+                    {plan.credits && Object.entries(plan.credits).map(([type, config]) => (
                       <li key={type} className="snw-plan-feature">
                         {config.allocation.toLocaleString()} {config.displayName || type}
                         {config.onRenewal === "add"
                           ? " (accumulates)"
                           : `/${interval === "year" ? "year" : "month"}`}
+                      </li>
+                    ))}
+                    {/* Custom features */}
+                    {plan.features?.map((feature) => (
+                      <li key={feature} className="snw-plan-feature">
+                        {feature}
                       </li>
                     ))}
                   </ul>
@@ -448,3 +358,299 @@ export function PricingPage({
     </>
   );
 }
+
+const styles = `
+  /* =================================================================
+     CUSTOMIZE YOUR THEME
+     Change these variables to match your brand colors and style.
+     ================================================================= */
+  .snw-pricing-container {
+    --snw-primary: #3b82f6;
+    --snw-primary-hover: #2563eb;
+    --snw-text: #111;
+    --snw-text-muted: #666;
+    --snw-text-secondary: #374151;
+    --snw-border: #e5e7eb;
+    --snw-background: white;
+    --snw-background-secondary: #f3f4f6;
+    --snw-success: #16a34a;
+    --snw-success-bg: #f0fdf4;
+    --snw-success-border: #bbf7d0;
+    --snw-error: #dc2626;
+    --snw-error-bg: #fef2f2;
+    --snw-error-border: #fecaca;
+    --snw-radius: 12px;
+    --snw-radius-sm: 8px;
+    --snw-font: system-ui, -apple-system, sans-serif;
+  }
+  /* ================================================================= */
+
+  .snw-pricing-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem 1rem;
+    font-family: var(--snw-font);
+  }
+  .snw-pricing-header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+  .snw-pricing-title {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--snw-text);
+    margin: 0 0 0.5rem 0;
+  }
+  .snw-pricing-subtitle {
+    color: var(--snw-text-muted);
+    font-size: 1.1rem;
+    margin: 0;
+  }
+  .snw-interval-toggle {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 2rem;
+  }
+  .snw-interval-btn {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--snw-border);
+    background: var(--snw-background);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.15s;
+  }
+  .snw-interval-btn:hover {
+    border-color: var(--snw-primary);
+  }
+  .snw-interval-btn.active {
+    background: var(--snw-primary);
+    border-color: var(--snw-primary);
+    color: white;
+  }
+  .snw-pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+  }
+  .snw-pricing-card {
+    border: 1px solid var(--snw-border);
+    border-radius: var(--snw-radius);
+    padding: 1.5rem;
+    background: var(--snw-background);
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .snw-pricing-card:hover {
+    border-color: var(--snw-primary);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--snw-primary) 10%, transparent);
+  }
+  .snw-pricing-card.current {
+    border-color: var(--snw-primary);
+    border-width: 2px;
+  }
+  .snw-plan-name {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--snw-text);
+    margin: 0 0 0.25rem 0;
+  }
+  .snw-plan-description {
+    color: var(--snw-text-muted);
+    font-size: 0.9rem;
+    margin: 0 0 1rem 0;
+  }
+  .snw-plan-price {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--snw-text);
+    margin: 0;
+  }
+  .snw-plan-interval {
+    color: var(--snw-text-muted);
+    font-size: 0.9rem;
+  }
+  .snw-plan-features {
+    list-style: none;
+    padding: 0;
+    margin: 1.5rem 0;
+    flex-grow: 1;
+  }
+  .snw-plan-feature {
+    padding: 0.4rem 0;
+    color: var(--snw-text-secondary);
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .snw-plan-feature::before {
+    content: "✓";
+    color: var(--snw-primary);
+    font-weight: bold;
+  }
+  .snw-plan-btn {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: none;
+    border-radius: var(--snw-radius-sm);
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .snw-plan-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+  .snw-plan-btn.primary {
+    background: var(--snw-primary);
+    color: white;
+  }
+  .snw-plan-btn.primary:hover:not(:disabled) {
+    background: var(--snw-primary-hover);
+  }
+  .snw-plan-btn.secondary {
+    background: var(--snw-background-secondary);
+    color: var(--snw-text-secondary);
+  }
+  .snw-plan-btn.secondary:hover:not(:disabled) {
+    background: var(--snw-border);
+  }
+  .snw-current-badge {
+    position: absolute;
+    top: -0.65rem;
+    left: 1.25rem;
+    background: var(--snw-primary);
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+  }
+  .snw-error {
+    background: var(--snw-error-bg);
+    border: 1px solid var(--snw-error-border);
+    color: var(--snw-error);
+    padding: 0.75rem 1rem;
+    border-radius: var(--snw-radius-sm);
+    margin-bottom: 1rem;
+    text-align: center;
+  }
+  .snw-success {
+    background: var(--snw-success-bg);
+    border: 1px solid var(--snw-success-border);
+    color: var(--snw-success);
+    padding: 0.75rem 1rem;
+    border-radius: var(--snw-radius-sm);
+    margin-bottom: 1rem;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    animation: snw-fade-in 0.3s ease-out;
+  }
+  .snw-success-icon {
+    width: 20px;
+    height: 20px;
+    background: var(--snw-success);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  @keyframes snw-fade-in {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .snw-loading-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: snw-spin 0.6s linear infinite;
+    margin-right: 0.5rem;
+  }
+  @keyframes snw-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Skeleton loading styles */
+  .snw-skeleton {
+    background: linear-gradient(90deg, var(--snw-border) 25%, var(--snw-background-secondary) 50%, var(--snw-border) 75%);
+    background-size: 200% 100%;
+    animation: snw-shimmer 1.5s infinite;
+    border-radius: var(--snw-radius-sm);
+  }
+  .snw-skeleton-title {
+    height: 2rem;
+    width: 60%;
+    margin: 0 auto 0.5rem;
+  }
+  .snw-skeleton-subtitle {
+    height: 1.1rem;
+    width: 40%;
+    margin: 0 auto;
+  }
+  .snw-skeleton-plan-name {
+    height: 1.25rem;
+    width: 50%;
+    margin-bottom: 1rem;
+  }
+  .snw-skeleton-price {
+    height: 2.5rem;
+    width: 40%;
+    margin-bottom: 1rem;
+  }
+  .snw-skeleton-features {
+    height: 4rem;
+    width: 100%;
+    margin-bottom: 1rem;
+  }
+  .snw-skeleton-btn {
+    height: 2.75rem;
+    width: 100%;
+  }
+  @keyframes snw-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Error state styles */
+  .snw-error-state {
+    text-align: center;
+    padding: 3rem 1rem;
+  }
+  .snw-error-message {
+    color: var(--snw-error);
+    margin-bottom: 1rem;
+    font-size: 1rem;
+  }
+  .snw-error-state .snw-plan-btn {
+    width: auto;
+    padding: 0.75rem 2rem;
+  }
+
+  @media (max-width: 768px) {
+    .snw-pricing-grid {
+      grid-template-columns: 1fr;
+    }
+    .snw-pricing-title {
+      font-size: 1.5rem;
+    }
+    .snw-plan-price {
+      font-size: 2rem;
+    }
+  }
+`;
