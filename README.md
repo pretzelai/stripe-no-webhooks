@@ -7,7 +7,7 @@ This is an opinionated library to help you implement payments with Stripe.
 1. Define plans in code which sync to Stripe
 2. No manual webhook setup - the library handles webhooks and syncs Stripe data to your DB
 3. Simple APIs for subscriptions, credits and credit topups
-4. Support for seat based billing, smart tax collection, plan upgrades and downgrades (including sane handline of credits)
+4. Support for seat based billing, tax collection, plan upgrades and downgrades (including sane handling of credits)
 5. Optional callbacks (`onSubscriptionCreated`, etc.) for custom logic
 
 ## Quick Start
