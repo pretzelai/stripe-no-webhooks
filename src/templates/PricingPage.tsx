@@ -1,5 +1,37 @@
 "use client";
 
+/**
+ * PricingPage - Auto-fetching pricing component
+ *
+ * This component fetches plans from your billing.config.ts and renders them.
+ * Customize plans in billing.config.ts:
+ *
+ * @example
+ * // billing.config.ts
+ * {
+ *   name: "Pro",
+ *   description: "For growing teams",
+ *   price: [{ amount: 2000, currency: "usd", interval: "month" }],
+ *
+ *   // Credit-based features (tracked automatically)
+ *   credits: {
+ *     api_calls: {
+ *       allocation: 1000,
+ *       displayName: "API Calls",  // Shows "1,000 API Calls/mo"
+ *     }
+ *   },
+ *
+ *   // Custom features (just text, no tracking)
+ *   features: [
+ *     "Priority support",
+ *     "Custom integrations",
+ *     "Unlimited exports"
+ *   ]
+ * }
+ *
+ * To customize styling, edit the CSS variables in the `styles` const at the bottom.
+ */
+
 import { useState, useMemo, useEffect } from "react";
 import { createCheckoutClient } from "stripe-no-webhooks/client";
 import type { Plan, PriceInterval } from "stripe-no-webhooks";
@@ -279,14 +311,21 @@ export function PricingPage({
                   )}
                 </p>
 
-                {plan.credits && (
+                {(plan.credits || plan.features) && (
                   <ul className="snw-plan-features">
-                    {Object.entries(plan.credits).map(([type, config]) => (
+                    {/* Credit-based features with allocations */}
+                    {plan.credits && Object.entries(plan.credits).map(([type, config]) => (
                       <li key={type} className="snw-plan-feature">
                         {config.allocation.toLocaleString()} {config.displayName || type}
                         {config.onRenewal === "add"
                           ? " (accumulates)"
                           : `/${interval === "year" ? "year" : "month"}`}
+                      </li>
+                    ))}
+                    {/* Custom features */}
+                    {plan.features?.map((feature) => (
+                      <li key={feature} className="snw-plan-feature">
+                        {feature}
                       </li>
                     ))}
                   </ul>

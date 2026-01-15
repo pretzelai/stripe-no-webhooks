@@ -51,7 +51,10 @@ async function main() {
       break;
 
     case "backfill":
-      await backfill(args[1]);
+      await backfill(positional[0], {
+        since: options.since,
+        skip: options.skip,
+      });
       break;
 
     default:
@@ -71,11 +74,15 @@ async function main() {
       console.log("  generate  Generate components (e.g., PricingTable)");
       console.log("  backfill  Backfill Stripe data to database");
       console.log("");
-      console.log("Backfill object types:");
-      console.log("  all (default), customer, product, price, subscription,");
-      console.log(
-        "  invoice, charge, payment_intent, payment_method, and more"
-      );
+      console.log("Backfill options:");
+      console.log("  [object_type]       Object type to sync (default: all)");
+      console.log("  --since <date>      Only sync objects created after this date");
+      console.log("                      Format: YYYY-MM-DD (e.g., 2024-01-01)");
+      console.log("  --skip <types>      Skip specific object types (comma-separated)");
+      console.log("                      Example: --skip checkout_session,dispute");
+      console.log("");
+      console.log("Object types: all, customer, product, price, subscription,");
+      console.log("  invoice, charge, payment_intent, payment_method, and more");
       process.exit(1);
   }
 }

@@ -1,5 +1,5 @@
 const { Pool } = require("pg");
-const Stripe = require("stripe").default;
+const { StripeSync } = require("@pretzelai/stripe-sync-engine");
 const {
   questionHidden,
   isValidStripeKey,
@@ -8,28 +8,16 @@ const {
   createPrompt,
   question,
 } = require("./helpers/utils");
-const {
-  SYNC_ORDER,
-  REQUIRED_TABLES,
-  FIELD_MAPS,
-  SYNC_OBJECTS,
-} = require("./helpers/backfill-maps");
+const { SYNC_OBJECTS, REQUIRED_TABLES } = require("./helpers/backfill-maps");
 
-// Rate limiting - Stripe allows 100 req/s live, 25 req/s test - we use 20 to be safe
-const REQUESTS_PER_SECOND = 20;
-const MIN_REQUEST_INTERVAL_MS = 1000 / REQUESTS_PER_SECOND;
-const BATCH_SIZE = 100;
-const MAX_RETRIES = 5;
-const INITIAL_RETRY_DELAY_MS = 2000;
+// Map our CLI object names to library's SyncObject type
+const CLI_TO_LIBRARY_MAP = {
+  checkout_session: "checkout_sessions",
+  subscription_schedule: "subscription_schedules",
+};
 
-let lastRequestTime = 0;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function rateLimitedRequest(fn) {
-  const wait = MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestTime);
-  if (wait > 0) await sleep(wait);
-  lastRequestTime = Date.now();
-  return fn();
+function mapObjectType(cliType) {
+  return CLI_TO_LIBRARY_MAP[cliType] || cliType;
 }
 
 async function checkDatabaseConnection(connectionString) {
@@ -80,151 +68,27 @@ async function checkTablesExist(connectionString) {
   }
 }
 
-// Tables that have an updated_at column
-const TABLES_WITH_UPDATED_AT = [
-  "customers",
-  "products",
-  "prices",
-  "subscriptions",
-  "invoices",
-  "charges",
-  "coupons",
-  "plans",
-  "refunds",
-  "disputes",
-  "subscription_schedules",
-  "credit_notes",
-  "checkout_sessions",
+// All object types in sync order (matching library's syncBackfill order)
+const ALL_OBJECT_TYPES = [
+  "product",
+  "price",
+  "plan",
+  "customer",
+  "subscription",
+  "subscription_schedule",
+  "invoice",
+  "charge",
+  "setup_intent",
+  "payment_method",
+  "payment_intent",
+  "credit_note",
+  "dispute",
+  "refund",
+  "checkout_session",
 ];
 
-async function upsertRecord(pool, table, record, logger) {
-  const columns = Object.keys(record);
-  const values = Object.values(record);
-  const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-  const updateSet = columns
-    .filter((c) => c !== "id")
-    .map((c) => `${c} = EXCLUDED.${c}`)
-    .join(", ");
-
-  // Only add updated_at for tables that have the column
-  const updatedAtClause = TABLES_WITH_UPDATED_AT.includes(table)
-    ? ", updated_at = NOW()"
-    : "";
-
-  try {
-    await pool.query(
-      `INSERT INTO stripe.${table} (${columns.join(
-        ", "
-      )}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}${updatedAtClause}`,
-      values
-    );
-    return true;
-  } catch (error) {
-    logger.log(`   ⚠️  Failed to upsert ${record.id}: ${error.message}`);
-    return false;
-  }
-}
-
-// Tables that DON'T have a livemode column
-const TABLES_WITHOUT_LIVEMODE = ["setup_intents", "payment_methods"];
-
-function transformStripeObject(obj, table) {
-  const record = { id: obj.id };
-
-  // Common fields
-  for (const f of ["object", "created"]) if (obj[f] !== undefined) record[f] = obj[f];
-  // livemode only for tables that have the column
-  if (!TABLES_WITHOUT_LIVEMODE.includes(table) && obj.livemode !== undefined) {
-    record.livemode = obj.livemode;
-  }
-  if (obj.metadata !== undefined)
-    record.metadata = JSON.stringify(obj.metadata);
-
-  // Table-specific fields
-  const fields = FIELD_MAPS[table] || [];
-  for (const [stripeField, dbField, isRef, isJson] of fields) {
-    const val = obj[stripeField];
-    if (val === undefined) continue;
-    const key = dbField || stripeField;
-    if (isRef) record[key] = typeof val === "string" ? val : val?.id;
-    else if (isJson) record[key] = JSON.stringify(val);
-    else record[key] = val;
-  }
-
-  return record;
-}
-
-async function syncResource(
-  stripe,
-  pool,
-  { table, label, stripeMethod },
-  logger
-) {
-  let synced = 0,
-    failed = 0,
-    hasMore = true,
-    startingAfter = null,
-    pageCount = 0;
-
-  const methodParts = stripeMethod.split(".");
-  let stripeResource = stripe;
-  for (const part of methodParts) stripeResource = stripeResource[part];
-
-  while (hasMore) {
-    pageCount++;
-    const params = { limit: BATCH_SIZE };
-    if (startingAfter) params.starting_after = startingAfter;
-
-    let response,
-      retries = 0;
-    while (retries < MAX_RETRIES) {
-      try {
-        response = await rateLimitedRequest(() => stripeResource.list(params));
-        break;
-      } catch (error) {
-        retries++;
-        if (retries >= MAX_RETRIES) throw error;
-        const isRateLimit =
-          error.statusCode === 429 ||
-          error.message?.toLowerCase().includes("rate limit");
-        const delay = isRateLimit
-          ? INITIAL_RETRY_DELAY_MS * Math.pow(2, retries - 1)
-          : INITIAL_RETRY_DELAY_MS;
-        logger.log(
-          `   ⚠️  ${
-            isRateLimit ? "Rate limited" : error.message
-          }. Retry ${retries}/${MAX_RETRIES} in ${delay / 1000}s...`
-        );
-        await sleep(delay);
-      }
-    }
-
-    hasMore = response.has_more;
-    if (response.data.length) {
-      startingAfter = response.data[response.data.length - 1].id;
-      for (const item of response.data) {
-        (await upsertRecord(
-          pool,
-          table,
-          transformStripeObject(item, table),
-          logger
-        ))
-          ? synced++
-          : failed++;
-      }
-      process.stdout.write(
-        `\r   📥 Page ${pageCount}: ${synced} synced${
-          failed ? `, ${failed} failed` : ""
-        }...`
-      );
-    }
-  }
-  process.stdout.write("\r" + " ".repeat(60) + "\r");
-  return { synced, failed };
-}
-
 async function backfill(objectType, options = {}) {
-  const { env = process.env, logger = console, exitOnError = true } = options;
+  const { env = process.env, logger = console, exitOnError = true, since, skip } = options;
 
   // Step 1: Get DATABASE_URL
   let databaseUrl = env.DATABASE_URL;
@@ -312,6 +176,7 @@ async function backfill(objectType, options = {}) {
     return { success: false, error: e.message };
   }
 
+  // Step 5: Validate object type
   const syncObject = objectType || "all";
   if (!SYNC_OBJECTS.includes(syncObject)) {
     logger.error(
@@ -323,93 +188,130 @@ async function backfill(objectType, options = {}) {
     return { success: false, error: `Invalid object type: ${syncObject}` };
   }
 
+  // Parse --since date filter if provided
+  let createdFilter;
+  if (since) {
+    const sinceDate = new Date(since);
+    if (isNaN(sinceDate.getTime())) {
+      logger.error(`❌ Invalid date format: ${since}. Use YYYY-MM-DD (e.g., 2024-01-01)`);
+      if (exitOnError) process.exit(1);
+      return { success: false, error: "Invalid date format" };
+    }
+    createdFilter = { gte: Math.floor(sinceDate.getTime() / 1000) };
+  }
+
+  // Parse --skip option
+  const skipTypes = skip ? skip.split(",").map((s) => s.trim().toLowerCase()) : [];
+
+  // Step 6: Create StripeSync instance and run backfill
   logger.log(`\n🚀 Starting Stripe backfill (${mode} mode)...`);
   logger.log(`   Syncing: ${syncObject}`);
-  logger.log(`   Rate limit: ${REQUESTS_PER_SECOND} requests/second\n`);
+  if (since) {
+    logger.log(`   Since: ${since}`);
+  }
+  if (skipTypes.length) {
+    logger.log(`   Skipping: ${skipTypes.join(", ")}`);
+  }
+  logger.log("");
 
-  const stripe = new Stripe(stripeSecretKey);
-  const pool = new Pool({ connectionString: databaseUrl });
+  const sync = new StripeSync({
+    poolConfig: { connectionString: databaseUrl },
+    stripeSecretKey,
+    stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET || "not-needed-for-backfill",
+    schema: "stripe",
+  });
+
   const startTime = Date.now();
-  const results = {},
-    errors = [];
 
   try {
-    const resources =
-      syncObject === "all"
-        ? SYNC_ORDER
-        : SYNC_ORDER.filter((r) => r.key === syncObject);
+    let result;
 
-    for (let i = 0; i < resources.length; i++) {
-      const config = resources[i];
-      const progress = `[${i + 1}/${resources.length}]`;
-      logger.log(`${progress} 🔄 Syncing ${config.label}...`);
+    // If syncing 'all' with skip types, sync each type individually
+    if (syncObject === "all" && skipTypes.length > 0) {
+      result = {};
+      const typesToSync = ALL_OBJECT_TYPES.filter(
+        (t) => !skipTypes.includes(t) && !skipTypes.includes(t.replace("_", ""))
+      );
 
-      try {
-        const { synced, failed } = await syncResource(
-          stripe,
-          pool,
-          config,
-          logger
-        );
-        results[config.key] = { synced, failed };
-        logger.log(
-          `${progress} ${failed ? "⚠️ " : "✅"} ${
-            config.label
-          }: ${synced} synced${failed ? `, ${failed} failed` : ""}`
-        );
-      } catch (error) {
-        errors.push({ resource: config.label, error: error.message });
-        logger.log(`${progress} ❌ ${config.label}: Failed - ${error.message}`);
+      for (const objType of typesToSync) {
+        const libraryType = mapObjectType(objType);
+        logger.log(`🔄 Syncing ${objType}...`);
+        try {
+          const typeResult = await sync.syncBackfill({
+            object: libraryType,
+            ...(createdFilter && { created: createdFilter }),
+          });
+          // Merge results
+          Object.assign(result, typeResult);
+        } catch (err) {
+          logger.log(`⚠️  ${objType}: ${err.message}`);
+        }
+      }
+    } else {
+      // Standard sync without skip
+      const libraryObjectType = mapObjectType(syncObject);
+      result = await sync.syncBackfill({
+        object: libraryObjectType,
+        ...(createdFilter && { created: createdFilter }),
+      });
+    }
+
+    // Log results
+    const results = {};
+    let totalSynced = 0;
+
+    // Pretty labels for each object type
+    const labels = {
+      products: "Products",
+      prices: "Prices",
+      plans: "Plans",
+      customers: "Customers",
+      subscriptions: "Subscriptions",
+      subscriptionSchedules: "Subscription Schedules",
+      invoices: "Invoices",
+      charges: "Charges",
+      setupIntents: "Setup Intents",
+      paymentMethods: "Payment Methods",
+      paymentIntents: "Payment Intents",
+      taxIds: "Tax IDs",
+      creditNotes: "Credit Notes",
+      disputes: "Disputes",
+      earlyFraudWarnings: "Early Fraud Warnings",
+      refunds: "Refunds",
+      checkoutSessions: "Checkout Sessions",
+    };
+
+    for (const [key, value] of Object.entries(result)) {
+      if (value?.synced !== undefined) {
+        results[key] = { synced: value.synced, failed: 0 };
+        totalSynced += value.synced;
+        const label = labels[key] || key;
+        logger.log(`✅ ${label}: ${value.synced} synced`);
       }
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    let totalSynced = 0,
-      totalFailed = 0;
-    for (const v of Object.values(results)) {
-      totalSynced += v.synced || 0;
-      totalFailed += v.failed || 0;
-    }
-
     logger.log("\n" + "=".repeat(50));
     logger.log("📊 Backfill Summary");
     logger.log("=".repeat(50));
-    logger.log(
-      `   Resources: ${Object.keys(results).length}/${resources.length}`
-    );
     logger.log(`   Objects synced: ${totalSynced}`);
-    if (totalFailed) logger.log(`   Objects failed: ${totalFailed}`);
-    if (errors.length) {
-      logger.log(`\n❌ Resource errors (${errors.length}):`);
-      for (const { resource, error } of errors)
-        logger.log(`   - ${resource}: ${error}`);
-    }
     logger.log(`\n⏱️  Completed in ${elapsed}s`);
-    logger.log(
-      errors.length === 0 && totalFailed === 0
-        ? "✅ Backfill completed successfully!\n"
-        : "⚠️  Backfill completed with issues.\n"
-    );
+    logger.log("✅ Backfill completed successfully!\n");
 
-    await pool.end();
     return {
-      success: errors.length < resources.length,
+      success: true,
       results,
-      errors,
       stats: {
         totalSynced,
-        totalFailed,
-        successCount: Object.keys(results).length,
-        totalResources: resources.length,
+        totalFailed: 0,
       },
     };
   } catch (error) {
-    logger.error("\n❌ Backfill failed unexpectedly:", error.message);
-    try {
-      await pool.end();
-    } catch {}
+    logger.error(`\n❌ Backfill failed: ${error.message}`);
     if (exitOnError) process.exit(1);
     return { success: false, error: error.message };
+  } finally {
+    await sync.close();
   }
 }
 

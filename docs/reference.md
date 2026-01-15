@@ -310,6 +310,7 @@ type Plan = {
   description?: string;
   price: Price[];
   credits?: Record<string, CreditConfig>;
+  features?: string[]; // Custom feature bullet points for pricing page
   perSeat?: boolean;
 };
 
@@ -322,7 +323,7 @@ type Price = {
 
 type CreditConfig = {
   allocation: number;
-  displayName?: string;
+  displayName?: string; // Human-readable name for pricing page (e.g., "API Calls")
   onRenewal?: "reset" | "add"; // Default: "reset"
   topUp?: OnDemandTopUp | AutoTopUp;
 };

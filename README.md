@@ -63,10 +63,12 @@ const billingConfig: BillingConfig = {
           { amount: 2000, currency: "usd", interval: "month" }, // $20/mo
           { amount: 20000, currency: "usd", interval: "year" }, // $200/yr
         ],
-        // Optional: add credits to plans
+        // Optional: credits (tracked automatically)
         credits: {
-          api_calls: { allocation: 1000 },
+          api_calls: { allocation: 1000, displayName: "API Calls" },
         },
+        // Optional: custom features (just text for pricing page)
+        features: ["Priority support", "Custom integrations"],
       },
     ],
   },

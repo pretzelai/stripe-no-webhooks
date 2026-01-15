@@ -24,6 +24,10 @@ export type AutoTopUp = {
 
 export type CreditConfig = {
   allocation: number;
+  /**
+   * Human-readable name shown on pricing page.
+   * @example displayName: "API Calls" // Shows "100 API Calls/mo" instead of "100 api_calls/mo"
+   */
   displayName?: string;
   /**
    * What happens on renewal (default: 'reset')
@@ -40,6 +44,12 @@ export type Plan = {
   description?: string;
   price: Price[];
   credits?: Record<string, CreditConfig>;
+  /**
+   * Custom feature bullet points shown on pricing page.
+   * Use this for features that aren't credit-based.
+   * @example features: ["Priority support", "Custom integrations", "Unlimited exports"]
+   */
+  features?: string[];
   /**
    * Enable per-seat billing for this plan.
    * When true, addSeat/removeSeat will update Stripe subscription quantity.

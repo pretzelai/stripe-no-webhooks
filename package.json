@@ -37,7 +37,7 @@
     "release": "npm version patch && npm publish"
   },
   "dependencies": {
-    "@pretzelai/stripe-sync-engine": "^0.48.1",
+    "@pretzelai/stripe-sync-engine": "^0.48.3",
     "dotenv": "^17.2.3",
     "pg": "^8.13.1"
   },
