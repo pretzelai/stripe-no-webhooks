@@ -33,6 +33,7 @@ import type {
   StripeConfig,
   HandlerConfig,
   HandlerContext,
+  TaxConfig,
 } from "./types";
 import { handleCheckout } from "./handlers/checkout";
 import { handleCustomerPortal } from "./handlers/customer-portal";
@@ -59,6 +60,7 @@ export type {
   HandlerConfig,
   StripeWebhookCallbacks,
   CreditsConfig,
+  TaxConfig,
   CheckoutRequestBody,
   CustomerPortalRequestBody,
 } from "./types";
@@ -82,6 +84,7 @@ export class Billing {
   private readonly mapUserIdToStripeCustomerId?: StripeConfig["mapUserIdToStripeCustomerId"];
   private readonly creditsConfig?: StripeConfig["credits"];
   private readonly callbacks?: StripeConfig["callbacks"];
+  private readonly tax: TaxConfig;
 
   constructor(config: StripeConfig = {}) {
     const {
@@ -95,6 +98,7 @@ export class Billing {
       credits: creditsConfig,
       callbacks,
       mapUserIdToStripeCustomerId,
+      tax,
     } = config;
 
     this.stripe = new Stripe(stripeSecretKey);
@@ -111,6 +115,7 @@ export class Billing {
     this.mapUserIdToStripeCustomerId = mapUserIdToStripeCustomerId;
     this.creditsConfig = creditsConfig;
     this.callbacks = callbacks;
+    this.tax = tax ?? {};
 
     initCredits(this.pool, this.schema);
 
@@ -298,11 +303,23 @@ export class Billing {
       resolveUser,
       resolveOrg,
       callbacks: handlerCallbacks,
-      automaticTax = false,
     } = handlerConfig;
 
     // Merge callbacks: handler-level overrides instance-level
     const callbacks = { ...this.callbacks, ...handlerCallbacks };
+
+    // Build tax config with sensible defaults
+    const taxConfig: TaxConfig = { ...this.tax };
+
+    // When automaticTax is enabled, default to collecting address
+    if (taxConfig.automaticTax) {
+      taxConfig.billingAddressCollection ??= "auto";
+    }
+
+    // When collecting address or tax IDs, save to customer
+    if (taxConfig.billingAddressCollection || taxConfig.taxIdCollection) {
+      taxConfig.customerUpdate ??= { address: "auto", name: "auto" };
+    }
 
     const creditLifecycle = createCreditLifecycle({
       pool: this.pool,
@@ -336,7 +353,7 @@ export class Billing {
       grantTo: this.grantTo,
       defaultSuccessUrl: this.defaultSuccessUrl,
       defaultCancelUrl: this.defaultCancelUrl,
-      automaticTax,
+      tax: taxConfig,
       resolveUser,
       resolveOrg,
       resolveStripeCustomerId: this.resolveStripeCustomerId,

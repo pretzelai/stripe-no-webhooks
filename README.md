@@ -1,25 +1,24 @@
 # stripe-no-webhooks
 
-Opinionated library to help you implement payments with Stripe. It syncs Stripe data to your database and gives you useful helpers to implement subscriptions and credits.
-
 ## Why this library?
 
-This library is a wrapper on Stripe SDK (with some bells and whistles). It gives you an opinionated and clear path to implement payments:
+This is an opinionated library to help you implement payments with Stripe.
 
 1. Define plans in code which sync to Stripe
 2. No manual webhook setup - the library handles webhooks and syncs Stripe data to your DB
-3. Simple APIs for subscriptions and credits
-4. Optional callbacks (`onSubscriptionCreated`, etc.) for custom logic
+3. Simple APIs for subscriptions, credits and credit topups
+4. Support for seat based billing, smart tax collection, plan upgrades and downgrades (including sane handline of credits)
+5. Optional callbacks (`onSubscriptionCreated`, etc.) for custom logic
 
 ## Quick Start
 
-This guide assumes you have a Next.js app and a PostgreSQL database. We start with a `test mode` Stripe API key so you can test your setup locally. Then, the guide covers how to set up your app for production.
+This guide assumes you have a Next.js app and a PostgreSQL database. We recommend starting with a `test mode` Stripe API key so you can test your setup locally in your dev environment. Then, the guide will walk you through how to set up your app for production.
+
+### 1. Install and initialize
 
 ```bash
 npm install stripe-no-webhooks stripe
 ```
-
-### 1. Initialize
 
 ```bash
 npx stripe-no-webhooks init
@@ -28,7 +27,7 @@ npx stripe-no-webhooks init
 You'll be prompted for:
 
 - **Stripe test key** (for eg, `sk_test_...`) - get it from [Stripe dashboard](https://dashboard.stripe.com/apikeys)
-- **Database URL** - PostgreSQL connection string
+- **Database URL** – PostgreSQL connection string (for example: `postgresql://postgres:password@localhost:5432/app_db`)
 - **Site URL** - For eg, `http://localhost:3000` for local dev
 
 This will update your `.env` file with your credentials and create the following files:
@@ -47,7 +46,7 @@ This will create the `stripe` schema in your database with the necessary tables 
 
 ### 3. Define your plans
 
-Edit `billing.config.ts`:
+Edit `billing.config.ts` to define your plans for the test environment. Here's an example:
 
 ```typescript
 const billingConfig: BillingConfig = {
@@ -63,14 +62,20 @@ const billingConfig: BillingConfig = {
           { amount: 2000, currency: "usd", interval: "month" }, // $20/mo
           { amount: 20000, currency: "usd", interval: "year" }, // $200/yr
         ],
-        // Optional: credits (tracked automatically)
+        // Optional: credits
         credits: {
           api_calls: { allocation: 1000, displayName: "API Calls" },
         },
-        // Optional: custom features (just text for pricing page)
+        // Optional: custom features (just text for the pricing table)
         features: ["Priority support", "Custom integrations"],
       },
     ],
+  },
+  production: {
+    // Leave empty for now, you can add plans later by
+    // copying the test plans and syncing again - see the "Going to Production"
+    // section below in this README for more details
+    plans: [],
   },
 };
 ```
@@ -156,9 +161,17 @@ if (subscription?.status === "active") {
   const apiCredits = await billing.credits.getBalance(userId, "api_calls");
   console.log("API credits remaining:", apiCredits);
 
-  // Or get all credit balances at once
-  const allCredits = await billing.credits.getAllBalances(userId);
-  console.log("All credits:", allCredits); // { api_calls: 100, ... }
+  // Consume credits when user performs an action
+  const creditsResult = await billing.credits.consume({
+    userId,
+    creditType: "api_calls",
+    amount: 1,
+  });
+
+  if (!creditsResult.success) {
+    // User has insufficient credits
+    console.log(`Only ${result.balance} credits available`);
+  }
 }
 ```
 
@@ -168,9 +181,10 @@ When a user completes checkout:
 
 1. Stripe sends a webhook to your app
 2. The library receives it and syncs the data to your database. If credits are enabled, it will also update the credits balance
-3. `billing.subscriptions.get(userId)` now returns the subscription
+3. `billing.subscriptions.get(userId)` now returns the subscription based on the Stripe data that's synced to your database
+4. Credits are tracked automatically through a credit balance and a ledger of transactions via the library's internal APIs. These APIs are all idempotent and you don't have to worry about double counting or missing transactions
 
-You can verify this by checking your database's `stripe.subscriptions` table.
+You can verify this by checking your database's `stripe.subscriptions` and `stripe.credit_balances` and `stripe.credit_ledger` tables.
 
 ---
 
@@ -193,6 +207,7 @@ export default function Pricing() {
 ```
 
 That's it! The component automatically:
+
 - Fetches plans from your server (based on your `STRIPE_SECRET_KEY` mode)
 - Detects the user's current subscription (if logged in)
 - Highlights their current plan and defaults the interval toggle
@@ -263,7 +278,7 @@ const billingConfig: BillingConfig = {
 
 ### 2. Sync and create webhook
 
-Run sync and choose "Set up for production":
+Run sync and choose **"Set up for production"**:
 
 ```bash
 npx stripe-no-webhooks sync
@@ -274,17 +289,17 @@ You'll be prompted for:
 - Your **live** Stripe key (`sk_live_...`)
 - Your production URL
 
-This creates the products in Stripe and sets up the webhook endpoint.
+This creates the products in your **live mode** Stripe account and sets up the webhook endpoint.
 
 ### 3. Add webhook secret
 
-The CLI displays your webhook secret. Add it to your production environment:
+The CLI displays your webhook secret. Add it to your production environment (for eg, in your Vercel production environment variables):
 
 ```
 STRIPE_WEBHOOK_SECRET=whsec_...
 ```
 
-> Secrets are also saved to `.stripe-webhook-secrets` (gitignored) for reference.
+> Secrets are also saved to `.stripe-webhook-secrets` (gitignored) for reference in case you forget to copy it.
 
 ---
 
@@ -308,6 +323,8 @@ export const billing = new Billing({
 
 Available callbacks: `onSubscriptionCreated`, `onSubscriptionCancelled`, `onSubscriptionRenewed`, `onSubscriptionPlanChanged`, `onCreditsGranted`, `onCreditsRevoked`, `onTopUpCompleted`, `onAutoTopUpFailed`, `onCreditsLow`
 
+See [API Reference](./docs/reference.md) for more details.
+
 ---
 
 ## CLI Reference
@@ -326,4 +343,5 @@ Available callbacks: `onSubscriptionCreated`, `onSubscriptionCancelled`, `onSubs
 
 - [Credits System](./docs/credits.md) - Consumable credits with auto top-up
 - [Team Billing](./docs/team-billing.md) - Organization subscriptions with seats
+- [Tax & Business Billing](./docs/tax.md) - Automatic tax calculation and VAT/tax ID collection
 - [API Reference](./docs/reference.md) - Full API documentation

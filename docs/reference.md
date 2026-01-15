@@ -20,6 +20,17 @@ const billing = new Billing({
     grantTo: "subscriber" | "organization" | "seat-users" | "manual",
   },
 
+  // Tax configuration (see docs/tax.md for details)
+  tax: {
+    automaticTax: boolean,              // Enable Stripe Tax
+    billingAddressCollection: "auto" | "required",
+    taxIdCollection: boolean,           // Collect VAT/GST IDs
+    customerUpdate: {
+      address: "auto" | "never",
+      name: "auto" | "never",
+    },
+  },
+
   // Callbacks for subscription and credit events
   callbacks: StripeWebhookCallbacks,
 
@@ -46,9 +57,6 @@ export const POST = billing.createHandler({
 
   // OPTIONAL: Override instance-level callbacks (prefer defining on Billing instance)
   callbacks: StripeWebhookCallbacks,
-
-  // OPTIONAL: Enable automatic tax calculation
-  automaticTax: boolean, // Default: false
 });
 
 // User type

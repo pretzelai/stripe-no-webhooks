@@ -77,6 +77,44 @@ export interface StripeWebhookCallbacks {
   }) => void | Promise<void>;
 }
 
+/**
+ * Tax configuration for checkout sessions.
+ * Configure at the Billing constructor level for consistent behavior.
+ */
+export interface TaxConfig {
+  /**
+   * Enable Stripe Tax for automatic tax calculation.
+   * Requires Stripe Tax to be enabled in your Stripe dashboard.
+   * @default false
+   */
+  automaticTax?: boolean;
+
+  /**
+   * Collect billing address at checkout.
+   * - 'auto': Only collect when required for tax calculation
+   * - 'required': Always collect billing address
+   * @default 'auto' when automaticTax is enabled
+   */
+  billingAddressCollection?: "auto" | "required";
+
+  /**
+   * Enable tax ID collection at checkout (VAT, GST, etc.).
+   * Useful for B2B sales where customers need to provide tax IDs.
+   * @default false
+   */
+  taxIdCollection?: boolean;
+
+  /**
+   * Update customer record with collected information.
+   * When enabled, billing address and name are saved to the Stripe customer.
+   * @default { address: 'auto', name: 'auto' } when billingAddressCollection or taxIdCollection is enabled
+   */
+  customerUpdate?: {
+    address?: "auto" | "never";
+    name?: "auto" | "never";
+  };
+}
+
 export interface CreditsConfig {
   grantTo?: CreditsGrantTo;
   onTopUpCompleted?: (params: {
@@ -139,6 +177,12 @@ export interface StripeConfig {
   credits?: CreditsConfig;
   callbacks?: StripeWebhookCallbacks;
 
+  /**
+   * Tax configuration for checkout sessions.
+   * @see TaxConfig
+   */
+  tax?: TaxConfig;
+
   mapUserIdToStripeCustomerId?: (
     userId: string
   ) => string | Promise<string> | null | Promise<string | null>;
@@ -154,8 +198,6 @@ export interface HandlerConfig {
   ) => string | Promise<string> | null | Promise<string | null>;
 
   callbacks?: StripeWebhookCallbacks;
-
-  automaticTax?: boolean;
 }
 
 export type StripeHandlerConfig = StripeConfig & HandlerConfig;
@@ -184,7 +226,7 @@ export interface HandlerContext {
   grantTo: CreditsGrantTo;
   defaultSuccessUrl?: string;
   defaultCancelUrl?: string;
-  automaticTax: boolean;
+  tax: TaxConfig;
   resolveUser?: HandlerConfig["resolveUser"];
   resolveOrg?: HandlerConfig["resolveOrg"];
   resolveStripeCustomerId: (options: {
