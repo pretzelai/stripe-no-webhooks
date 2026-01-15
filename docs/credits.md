@@ -107,6 +107,31 @@ credits: {
 
 Auto top-up triggers automatically when using `billing.credits.consume()`.
 
+### Top-Up Payment Mode
+
+Top-ups use different Stripe payment flows depending on your tax configuration:
+
+| Tax Config | Payment Method | Stripe Fee | Shows in Portal |
+|------------|---------------|------------|-----------------|
+| Disabled (default) | PaymentIntent | Standard | No |
+| Enabled (`automaticTax` or `taxIdCollection`) | Invoice | +0.4-0.5% | Yes |
+
+**When to use each:**
+
+- **B2C apps** (consumer-facing): Leave tax config disabled for lower fees. Top-ups won't appear in Customer Portal's invoice history, but customers typically don't need invoices for personal purchases.
+
+- **B2B apps** (business customers): Enable tax config to create proper invoices. Business customers need invoices for accounting/expense reports, and they'll appear in the Customer Portal.
+
+```typescript
+// B2B mode - creates invoices for top-ups
+const billing = new Billing({
+  billingConfig,
+  tax: {
+    automaticTax: true,  // This enables invoice-based top-ups
+  },
+});
+```
+
 ## Callbacks
 
 Define callbacks when creating the `Billing` instance:

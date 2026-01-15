@@ -228,7 +228,7 @@ export class Billing {
       amountCharged: number;
       currency: string;
       newBalance: number;
-      paymentIntentId: string;
+      sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
     }) => void | Promise<void>;
     onCreditsLow?: (params: {
       userId: string;
@@ -245,6 +245,7 @@ export class Billing {
       mode: this.mode,
       successUrl: this.defaultSuccessUrl || "",
       cancelUrl: this.defaultCancelUrl || "",
+      tax: this.tax,
       onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,
       onTopUpCompleted: callbacks?.onTopUpCompleted,
       onCreditsLow: callbacks?.onCreditsLow,
@@ -338,6 +339,7 @@ export class Billing {
       mode: this.mode,
       successUrl: this.defaultSuccessUrl || "",
       cancelUrl: this.defaultCancelUrl || "",
+      tax: taxConfig,
       onCreditsGranted: callbacks?.onCreditsGranted,
       onTopUpCompleted: callbacks?.onTopUpCompleted,
       onAutoTopUpFailed: callbacks?.onAutoTopUpFailed,

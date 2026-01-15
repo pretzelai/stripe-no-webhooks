@@ -59,7 +59,7 @@ export interface StripeWebhookCallbacks {
     amountCharged: number;
     currency: string;
     newBalance: number;
-    paymentIntentId: string;
+    sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
   }) => void | Promise<void>;
 
   onAutoTopUpFailed?: (params: {
@@ -124,7 +124,7 @@ export interface CreditsConfig {
     amountCharged: number;
     currency: string;
     newBalance: number;
-    paymentIntentId: string;
+    sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
   }) => void | Promise<void>;
   onAutoTopUpFailed?: (params: {
     userId: string;

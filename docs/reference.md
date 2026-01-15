@@ -291,7 +291,7 @@ const billing = new Billing({
       amountCharged: number,
       currency: string,
       newBalance: number,
-      paymentIntentId: string,
+      sourceId: string, // PaymentIntent ID (B2C) or Invoice ID (B2B)
     }) => void,
 
     onAutoTopUpFailed?: (params: {

@@ -341,6 +341,8 @@ See [API Reference](./docs/reference.md) for more details.
 
 ## Learn More
 
+This README only covers the basics. The library supports more features than what is covered here. For more details, see the following docs:
+
 - [Credits System](./docs/credits.md) - Consumable credits with auto top-up
 - [Team Billing](./docs/team-billing.md) - Organization subscriptions with seats
 - [Tax & Business Billing](./docs/tax.md) - Automatic tax calculation and VAT/tax ID collection

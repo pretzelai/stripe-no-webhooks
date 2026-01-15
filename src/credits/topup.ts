@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 import type { Pool } from "pg";
 import type { BillingConfig, OnDemandTopUp, AutoTopUp } from "../BillingConfig";
+import type { TaxConfig } from "../types";
 import { credits } from "./index";
 import * as db from "./db";
 import { CreditError } from "./types";
@@ -9,13 +10,13 @@ export type TopUpSuccess = {
   success: true;
   balance: number;
   charged: { amountCents: number; currency: string };
-  paymentIntentId: string;
+  sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
 };
 
 export type TopUpPending = {
   success: true;
   status: "pending";
-  paymentIntentId: string;
+  sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
   /** Credits will be granted when payment succeeds (via webhook) */
   message: string;
 };
@@ -48,7 +49,7 @@ export type TopUpParams = {
 export type AutoTopUpTriggered = {
   triggered: true;
   status: "succeeded" | "pending";
-  paymentIntentId: string;
+  sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
 };
 
 export type AutoTopUpSkipped = {
@@ -90,6 +91,7 @@ export type TopUpHandler = {
   }) => Promise<AutoTopUpResult>;
   handlePaymentIntentSucceeded: (paymentIntent: Stripe.PaymentIntent) => Promise<void>;
   handleTopUpCheckoutCompleted: (session: Stripe.Checkout.Session) => Promise<void>;
+  handleInvoicePaid: (invoice: Stripe.Invoice) => Promise<void>;
 };
 
 export function createTopUpHandler(deps: {
@@ -100,6 +102,7 @@ export function createTopUpHandler(deps: {
   mode: "test" | "production";
   successUrl: string;
   cancelUrl: string;
+  tax?: TaxConfig;
   onCreditsGranted?: (params: {
     userId: string;
     creditType: string;
@@ -115,7 +118,7 @@ export function createTopUpHandler(deps: {
     amountCharged: number;
     currency: string;
     newBalance: number;
-    paymentIntentId: string;
+    sourceId: string;
   }) => void | Promise<void>;
   onAutoTopUpFailed?: (params: {
     userId: string;
@@ -138,11 +141,16 @@ export function createTopUpHandler(deps: {
     mode,
     successUrl,
     cancelUrl,
+    tax,
     onCreditsGranted,
     onTopUpCompleted,
     onAutoTopUpFailed,
     onCreditsLow,
   } = deps;
+
+  // B2B mode uses invoices (proper receipts, shows in Customer Portal)
+  // B2C mode uses PaymentIntents (cheaper, no extra 0.4-0.5% fee)
+  const useInvoices = !!(tax?.automaticTax || tax?.taxIdCollection);
 
   async function getCustomerByUserId(userId: string): Promise<{
     id: string;
@@ -265,6 +273,170 @@ export function createTopUpHandler(deps: {
     }
   }
 
+  /**
+   * B2B Recovery: Create a hosted invoice URL for customers without payment method.
+   * The customer can pay via Stripe's hosted invoice page.
+   */
+  async function createRecoveryInvoice(
+    customerId: string,
+    creditType: string,
+    amount: number,
+    totalCents: number,
+    currency: string,
+    userId: string,
+    displayName: string
+  ): Promise<string> {
+    // Create invoice FIRST, then add items to it (prevents items going to subscription)
+    const invoice = await stripe.invoices.create({
+      customer: customerId,
+      collection_method: "send_invoice",
+      days_until_due: 7,
+      pending_invoice_items_behavior: "exclude",
+      // Enable automatic tax if configured
+      ...(tax?.automaticTax && { automatic_tax: { enabled: true } }),
+      metadata: {
+        top_up_credit_type: creditType,
+        top_up_amount: String(amount),
+        user_id: userId,
+      },
+    });
+
+    // Add invoice item to this specific invoice
+    // Use unit_amount_decimal + quantity for proper invoice display (e.g., "50 x $0.10")
+    const unitAmount = Math.round(totalCents / amount);
+    await stripe.invoiceItems.create({
+      customer: customerId,
+      invoice: invoice.id,
+      unit_amount_decimal: String(unitAmount),
+      quantity: amount,
+      currency,
+      description: `${displayName} (credit top-up)`,
+    });
+
+    // Finalize to get hosted URL
+    const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
+
+    if (!finalizedInvoice.hosted_invoice_url) {
+      throw new CreditError("INVOICE_ERROR", "Failed to get invoice URL");
+    }
+
+    return finalizedInvoice.hosted_invoice_url;
+  }
+
+  /**
+   * Try to create a recovery URL, returning undefined if it fails.
+   * Uses invoice URL for B2B mode, checkout session for B2C mode.
+   */
+  async function tryCreateRecoveryUrl(
+    customerId: string,
+    creditType: string,
+    amount: number,
+    totalCents: number,
+    currency: string,
+    userId: string,
+    displayName: string
+  ): Promise<string | undefined> {
+    try {
+      if (useInvoices) {
+        return await createRecoveryInvoice(
+          customerId,
+          creditType,
+          amount,
+          totalCents,
+          currency,
+          userId,
+          displayName
+        );
+      } else {
+        return await createRecoveryCheckout(
+          customerId,
+          creditType,
+          amount,
+          totalCents,
+          currency
+        );
+      }
+    } catch (err) {
+      console.error("Failed to create recovery URL:", err);
+      return undefined;
+    }
+  }
+
+  /**
+   * Grant credits from a paid invoice. Used for B2B mode.
+   * Handles both inline (immediate) and webhook paths with idempotency.
+   */
+  async function grantCreditsFromInvoice(
+    invoice: Stripe.Invoice
+  ): Promise<number> {
+    const creditType = invoice.metadata?.top_up_credit_type;
+    const amountStr = invoice.metadata?.top_up_amount;
+    const userId = invoice.metadata?.user_id;
+    const isAuto = invoice.metadata?.top_up_auto === "true";
+
+    if (!creditType || !amountStr || !userId) {
+      throw new CreditError(
+        "INVALID_METADATA",
+        "Missing top-up metadata on Invoice"
+      );
+    }
+
+    const amount = parseInt(amountStr, 10);
+    if (isNaN(amount) || amount <= 0) {
+      throw new CreditError(
+        "INVALID_METADATA",
+        "Invalid top_up_amount in Invoice metadata"
+      );
+    }
+
+    const source = isAuto ? "auto_topup" : "topup";
+    let newBalance: number;
+    let alreadyGranted = false;
+
+    try {
+      newBalance = await credits.grant({
+        userId,
+        creditType,
+        amount,
+        source,
+        sourceId: invoice.id,
+        idempotencyKey: `topup_invoice_${invoice.id}`,
+      });
+    } catch (grantErr) {
+      if (
+        grantErr instanceof CreditError &&
+        grantErr.code === "IDEMPOTENCY_CONFLICT"
+      ) {
+        newBalance = await credits.getBalance(userId, creditType);
+        alreadyGranted = true;
+      } else {
+        throw grantErr;
+      }
+    }
+
+    if (!alreadyGranted) {
+      await onCreditsGranted?.({
+        userId,
+        creditType,
+        amount,
+        newBalance,
+        source,
+        sourceId: invoice.id,
+      });
+      await onTopUpCompleted?.({
+        userId,
+        creditType,
+        creditsAdded: amount,
+        amountCharged: invoice.amount_paid,
+        currency: invoice.currency,
+        newBalance,
+        sourceId: invoice.id,
+      });
+    }
+
+    return newBalance;
+  }
+
   // for on-demand top-ups
   async function topUp(params: TopUpParams): Promise<TopUpResult> {
     const { userId, creditType, amount, idempotencyKey } = params;
@@ -360,13 +532,21 @@ export function createTopUpHandler(deps: {
     }
     const currency = subscription.currency;
 
+    // Use configured displayName if available, otherwise construct from ID
+    const creditConfig = plan.credits?.[creditType];
+    const displayName =
+      creditConfig?.displayName ||
+      creditType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
     if (!customer.defaultPaymentMethod) {
-      const recoveryUrl = await tryCreateRecoveryCheckout(
+      const recoveryUrl = await tryCreateRecoveryUrl(
         customer.id,
         creditType,
         amount,
         totalCents,
-        currency
+        currency,
+        userId,
+        displayName
       );
       return {
         success: false,
@@ -379,79 +559,174 @@ export function createTopUpHandler(deps: {
     }
 
     try {
-      const paymentIntent = await stripe.paymentIntents.create(
-        {
-          amount: totalCents,
-          currency,
-          customer: customer.id,
-          payment_method: customer.defaultPaymentMethod,
-          confirm: true,
-          off_session: true,
-          metadata: {
-            top_up_credit_type: creditType,
-            top_up_amount: String(amount),
-            user_id: userId,
+      if (useInvoices) {
+        // B2B MODE: Create invoice (proper receipts, shows in Customer Portal)
+        // Has additional 0.4-0.5% Stripe Invoicing fee
+
+        // IMPORTANT: Create invoice FIRST, then add items to it.
+        // If we create invoice items without specifying an invoice, they get
+        // attached to the subscription's upcoming invoice instead of a standalone one.
+        // auto_advance: false prevents Stripe from retrying payment if it fails
+        // We handle payment explicitly with pay() and recovery flow
+        const invoice = await stripe.invoices.create(
+          {
+            customer: customer.id,
+            auto_advance: false,
+            // Don't include pending items from subscription
+            pending_invoice_items_behavior: "exclude",
+            // Enable automatic tax if configured
+            ...(tax?.automaticTax && { automatic_tax: { enabled: true } }),
+            metadata: {
+              top_up_credit_type: creditType,
+              top_up_amount: String(amount),
+              user_id: userId,
+            },
           },
-        },
-        idempotencyKey ? { idempotencyKey } : undefined
-      );
+          idempotencyKey
+            ? { idempotencyKey: `${idempotencyKey}_invoice` }
+            : undefined
+        );
 
-      // If succeeded immediately, grant credits now (webhook will be idempotent)
-      // we do still use the webhook to grant credits for slower resolving payment intents
-      if (paymentIntent.status === "succeeded") {
-        const newBalance = await grantCreditsFromPayment(paymentIntent);
+        // Now add the invoice item to this specific invoice
+        // Use unit_amount_decimal + quantity for proper invoice display (e.g., "50 x $0.10")
+        await stripe.invoiceItems.create(
+          {
+            customer: customer.id,
+            invoice: invoice.id,
+            unit_amount_decimal: String(pricePerCreditCents),
+            quantity: amount,
+            currency,
+            description: `${displayName} (credit top-up)`,
+          },
+          idempotencyKey
+            ? { idempotencyKey: `${idempotencyKey}_item` }
+            : undefined
+        );
+
+        let paidInvoice: Stripe.Invoice;
+        try {
+          paidInvoice = await stripe.invoices.pay(
+            invoice.id,
+            {},
+            idempotencyKey
+              ? { idempotencyKey: `${idempotencyKey}_pay` }
+              : undefined
+          );
+        } catch (payErr) {
+          // Payment failed - void the invoice to prevent it from being paid later
+          // (which would grant credits without going through our flow)
+          await stripe.invoices.voidInvoice(invoice.id).catch(() => {});
+          throw payErr;
+        }
+
+        if (paidInvoice.status === "paid") {
+          const newBalance = await grantCreditsFromInvoice(paidInvoice);
+          return {
+            success: true,
+            balance: newBalance,
+            charged: { amountCents: totalCents, currency },
+            sourceId: paidInvoice.id,
+          };
+        }
+
+        // Invoice not paid (unusual status) - void it and offer recovery
+        await stripe.invoices.voidInvoice(invoice.id).catch(() => {});
+        const recoveryUrl = await tryCreateRecoveryUrl(
+          customer.id,
+          creditType,
+          amount,
+          totalCents,
+          currency,
+          userId,
+          displayName
+        );
         return {
-          success: true,
-          balance: newBalance,
-          charged: { amountCents: totalCents, currency },
-          paymentIntentId: paymentIntent.id,
+          success: false,
+          error: {
+            code: "PAYMENT_FAILED",
+            message: `Invoice status: ${paidInvoice.status}`,
+            recoveryUrl,
+          },
+        };
+      } else {
+        // B2C MODE: Use PaymentIntent directly (cheaper, no Invoicing fee)
+        const paymentIntent = await stripe.paymentIntents.create(
+          {
+            amount: totalCents,
+            currency,
+            customer: customer.id,
+            payment_method: customer.defaultPaymentMethod,
+            confirm: true,
+            off_session: true,
+            metadata: {
+              top_up_credit_type: creditType,
+              top_up_amount: String(amount),
+              user_id: userId,
+            },
+          },
+          idempotencyKey ? { idempotencyKey } : undefined
+        );
+
+        if (paymentIntent.status === "succeeded") {
+          const newBalance = await grantCreditsFromPayment(paymentIntent);
+          return {
+            success: true,
+            balance: newBalance,
+            charged: { amountCents: totalCents, currency },
+            sourceId: paymentIntent.id,
+          };
+        }
+
+        if (paymentIntent.status === "processing") {
+          return {
+            success: true,
+            status: "pending",
+            sourceId: paymentIntent.id,
+            message:
+              "Payment is processing. Credits will be added once payment completes.",
+          };
+        }
+
+        // Payment needs action or failed - offer recovery
+        const recoveryUrl = await tryCreateRecoveryUrl(
+          customer.id,
+          creditType,
+          amount,
+          totalCents,
+          currency,
+          userId,
+          displayName
+        );
+        return {
+          success: false,
+          error: {
+            code: "PAYMENT_FAILED",
+            message: `Payment status: ${paymentIntent.status}`,
+            recoveryUrl,
+          },
         };
       }
-
-      // Note that only async payment methods ever enter the processing state, cards never do
-      if (paymentIntent.status === "processing") {
-        return {
-          success: true,
-          status: "pending",
-          paymentIntentId: paymentIntent.id,
-          message:
-            "Payment is processing. Credits will be added once payment completes.",
-        };
-      }
-
-      // Payment needs action or failed - offer recovery checkout
-      const recoveryUrl = await tryCreateRecoveryCheckout(
-        customer.id,
-        creditType,
-        amount,
-        totalCents,
-        currency
-      );
-      return {
-        success: false,
-        error: {
-          code: "PAYMENT_FAILED",
-          message: `Payment status: ${paymentIntent.status}`,
-          recoveryUrl,
-        },
-      };
     } catch (err) {
-      // Check if this is a Stripe error
-      const stripeError = err as { type?: string; code?: string; message?: string };
+      const stripeError = err as {
+        type?: string;
+        code?: string;
+        message?: string;
+      };
       const isCardError = stripeError.type === "card_error";
       const isInvalidRequest = stripeError.type === "invalid_request_error";
       const errorCode = stripeError.code;
       const message = stripeError.message || "Payment failed";
 
-      // For card errors (declined, insufficient funds), offer recovery checkout
-      // For invalid request errors (config issues), don't try recovery - it won't help
+      // For card errors (declined, insufficient funds), offer recovery
       if (isCardError) {
-        const recoveryUrl = await tryCreateRecoveryCheckout(
+        const recoveryUrl = await tryCreateRecoveryUrl(
           customer.id,
           creditType,
           amount,
           totalCents,
-          currency
+          currency,
+          userId,
+          displayName
         );
         return {
           success: false,
@@ -540,7 +815,7 @@ export function createTopUpHandler(deps: {
         amountCharged: paymentIntent.amount,
         currency: paymentIntent.currency,
         newBalance,
-        paymentIntentId: paymentIntent.id,
+        sourceId: paymentIntent.id,
       });
     }
 
@@ -648,8 +923,30 @@ export function createTopUpHandler(deps: {
       amountCharged: session.amount_total ?? 0,
       currency: session.currency ?? "usd",
       newBalance,
-      paymentIntentId,
+      sourceId: paymentIntentId,
     });
+  }
+
+  /**
+   * Handle invoice.paid webhook for B2B mode top-up invoices.
+   * Credits are typically granted inline when invoice.pay() succeeds,
+   * but this handles edge cases (async payment, retry after failure).
+   */
+  async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
+    // Only process top-up invoices (not subscription invoices)
+    if (!invoice.metadata?.top_up_credit_type) {
+      return;
+    }
+
+    try {
+      await grantCreditsFromInvoice(invoice);
+    } catch (err) {
+      // Idempotency conflict = already granted inline, which is expected
+      if (err instanceof CreditError && err.code === "IDEMPOTENCY_CONFLICT") {
+        return;
+      }
+      throw err;
+    }
   }
 
   // utility function so that the user can check if their customer has a payment method on file
@@ -759,56 +1056,136 @@ export function createTopUpHandler(deps: {
       autoTopUpsThisMonth + 1
     }`;
 
+    // Use configured displayName if available, otherwise construct from ID
+    const creditConfig = plan.credits?.[creditType];
+    const displayName =
+      creditConfig?.displayName ||
+      creditType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
     try {
-      const paymentIntent = await stripe.paymentIntents.create(
-        {
-          amount: totalCents,
-          currency,
-          customer: customer.id,
-          payment_method: customer.defaultPaymentMethod,
-          confirm: true,
-          off_session: true,
-          metadata: {
-            top_up_credit_type: creditType,
-            top_up_amount: String(purchaseAmount),
-            user_id: userId,
-            top_up_auto: "true",
+      if (useInvoices) {
+        // B2B MODE: Create invoice (proper receipts, shows in Customer Portal)
+        // Create invoice FIRST with pending_invoice_items_behavior: "exclude"
+        // to prevent items going to subscription's upcoming invoice
+        const invoice = await stripe.invoices.create(
+          {
+            customer: customer.id,
+            auto_advance: false,
+            pending_invoice_items_behavior: "exclude",
+            // Enable automatic tax if configured
+            ...(tax?.automaticTax && { automatic_tax: { enabled: true } }),
+            metadata: {
+              top_up_credit_type: creditType,
+              top_up_amount: String(purchaseAmount),
+              user_id: userId,
+              top_up_auto: "true",
+            },
           },
-        },
-        { idempotencyKey }
-      );
+          { idempotencyKey: `${idempotencyKey}_invoice` }
+        );
 
-      if (paymentIntent.status === "succeeded") {
-        await grantCreditsFromPayment(paymentIntent); // this call is also idempotent
+        // Add item to this specific invoice
+        // Use unit_amount_decimal + quantity for proper invoice display
+        await stripe.invoiceItems.create(
+          {
+            customer: customer.id,
+            invoice: invoice.id,
+            unit_amount_decimal: String(pricePerCreditCents),
+            quantity: purchaseAmount,
+            currency,
+            description: `${displayName} (auto top-up)`,
+          },
+          { idempotencyKey: `${idempotencyKey}_item` }
+        );
+
+        let paidInvoice: Stripe.Invoice;
+        try {
+          paidInvoice = await stripe.invoices.pay(
+            invoice.id,
+            {},
+            { idempotencyKey: `${idempotencyKey}_pay` }
+          );
+        } catch (payErr) {
+          // Payment failed - void the invoice to prevent future confusion
+          await stripe.invoices.voidInvoice(invoice.id).catch(() => {});
+          throw payErr;
+        }
+
+        if (paidInvoice.status === "paid") {
+          await grantCreditsFromInvoice(paidInvoice);
+          return {
+            triggered: true,
+            status: "succeeded",
+            sourceId: paidInvoice.id,
+          };
+        }
+
+        // Invoice not paid (unusual status) - void it
+        await stripe.invoices.voidInvoice(invoice.id).catch(() => {});
+        const message = `Invoice status: ${paidInvoice.status}`;
+        await onAutoTopUpFailed?.({
+          userId,
+          creditType,
+          reason: "payment_requires_action",
+          error: message,
+        });
         return {
-          triggered: true,
-          status: "succeeded",
-          paymentIntentId: paymentIntent.id,
+          triggered: false,
+          reason: "payment_requires_action",
+          error: message,
+        };
+      } else {
+        // B2C MODE: Use PaymentIntent directly (cheaper, no Invoicing fee)
+        const paymentIntent = await stripe.paymentIntents.create(
+          {
+            amount: totalCents,
+            currency,
+            customer: customer.id,
+            payment_method: customer.defaultPaymentMethod,
+            confirm: true,
+            off_session: true,
+            metadata: {
+              top_up_credit_type: creditType,
+              top_up_amount: String(purchaseAmount),
+              user_id: userId,
+              top_up_auto: "true",
+            },
+          },
+          { idempotencyKey }
+        );
+
+        if (paymentIntent.status === "succeeded") {
+          await grantCreditsFromPayment(paymentIntent); // this call is also idempotent
+          return {
+            triggered: true,
+            status: "succeeded",
+            sourceId: paymentIntent.id,
+          };
+        }
+
+        if (paymentIntent.status === "processing") {
+          // Webhook will handle granting credits when payment completes
+          return {
+            triggered: true,
+            status: "pending",
+            sourceId: paymentIntent.id,
+          };
+        }
+
+        // requires_action, requires_payment_method, etc. - user not present to handle
+        const message = `Payment requires action: ${paymentIntent.status}`;
+        await onAutoTopUpFailed?.({
+          userId,
+          creditType,
+          reason: "payment_requires_action",
+          error: message,
+        });
+        return {
+          triggered: false,
+          reason: "payment_requires_action",
+          error: message,
         };
       }
-
-      if (paymentIntent.status === "processing") {
-        // Webhook will handle granting credits when payment completes
-        return {
-          triggered: true,
-          status: "pending",
-          paymentIntentId: paymentIntent.id,
-        };
-      }
-
-      // requires_action, requires_payment_method, etc. - user not present to handle
-      const message = `Payment requires action: ${paymentIntent.status}`;
-      await onAutoTopUpFailed?.({
-        userId,
-        creditType,
-        reason: "payment_requires_action",
-        error: message,
-      });
-      return {
-        triggered: false,
-        reason: "payment_requires_action",
-        error: message,
-      };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Payment failed";
       await onAutoTopUpFailed?.({
@@ -831,5 +1208,6 @@ export function createTopUpHandler(deps: {
     triggerAutoTopUpIfNeeded,
     handlePaymentIntentSucceeded,
     handleTopUpCheckoutCompleted,
+    handleInvoicePaid,
   };
 }
