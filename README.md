@@ -135,6 +135,8 @@ import { checkout } from "stripe-no-webhooks/client";
 
 Use `planName` (matches your billing config) and `interval` (month/year). No need to deal with Stripe price IDs directly.
 
+**Yearly plans:** When a plan has both monthly and yearly prices, the `PricingPage` shows a toggle. For yearly subscriptions, credits are automatically scaled (12× monthly allocation upfront). Switching between monthly/yearly on the same plan is handled automatically - see [Credits](./docs/credits.md) for details on all upgrade/downgrade scenarios.
+
 You can test the checkout flow by running by using a stripe test card number:
 
 - Card number: `4242 4242 4242 4242`
@@ -211,6 +213,8 @@ That's it! The component automatically:
 - Fetches plans from your server (based on your `STRIPE_SECRET_KEY` mode)
 - Detects the user's current subscription (if logged in)
 - Highlights their current plan and defaults the interval toggle
+- Shows monthly/yearly toggle with discount badge (e.g., "Save 17%")
+- Disables checkout for plans that don't support the selected interval
 - Shows a loading skeleton while fetching
 
 ### Option B: Build your own

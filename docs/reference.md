@@ -138,12 +138,16 @@ type Subscription = {
   plan: {
     id: string;
     name: string;
-    priceId: string;
+    priceId: string;  // Use this to look up the interval from your billing config
   } | null;
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
 };
+
+// To get the billing interval, look up the price in your config:
+const price = plan.price.find(p => p.id === subscription.plan.priceId);
+const interval = price?.interval; // "month" | "year" | "week"
 ```
 
 ## Credits API
@@ -329,6 +333,16 @@ type Price = {
   interval: "month" | "year" | "week" | "one_time";
 };
 
+// Example: Plan with monthly and yearly pricing
+{
+  name: "Pro",
+  price: [
+    { amount: 2000, currency: "usd", interval: "month" },   // $20/mo
+    { amount: 20000, currency: "usd", interval: "year" },   // $200/yr (17% savings)
+  ],
+  credits: { api_calls: { allocation: 1000 } },  // Yearly gets 12,000 upfront
+}
+
 type CreditConfig = {
   allocation: number;
   displayName?: string; // Human-readable name for pricing page (e.g., "API Calls")
@@ -379,6 +393,9 @@ The component automatically:
 - Detects the user's current subscription if they're logged in
 - Highlights their current plan with a "Current Plan" badge
 - Defaults the interval toggle to match their subscription
+- Shows monthly/yearly toggle with discount badge when plans support both intervals
+- Disables checkout for plans that don't support the selected interval
+- Scales credit display (yearly shows 12× monthly allocation)
 
 ### Manual Implementation
 

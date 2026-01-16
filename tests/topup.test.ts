@@ -1798,3 +1798,350 @@ describe("TopUp: Boundary Cases", () => {
     expect(result.triggered).toBe(true);
   });
 });
+
+// =============================================================================
+// Tests: Both On-Demand and Auto Top-Up Enabled (Dual Mode)
+// =============================================================================
+
+describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
+  test("on-demand top-up works when auto top-up is also configured", async () => {
+    // Pro plan has BOTH pricePerCreditCents AND autoTopUp configured
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    // Should be able to do on-demand top-up even though auto is configured
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success && "balance" in result) {
+      expect(result.balance).toBe(500);
+    }
+  });
+
+  test("on-demand uses default min/max when not specified", async () => {
+    // Pro plan has pricePerCreditCents but no explicit minPerPurchase/maxPerPurchase
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    // Should succeed with amount of 1 (default min is 1)
+    // But need to ensure it meets Stripe's 60 cent minimum
+    const result = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 100, // 100 * $0.01 = $1.00, above Stripe minimum
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test("manual top-up brings balance above auto threshold, auto does not trigger", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    // Start with low balance
+    await credits.grant({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 100, // Below threshold of 500
+      source: "subscription",
+      sourceId: "sub_pro_1",
+    });
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    // User manually tops up 500 credits
+    const manualResult = await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 500,
+    });
+
+    expect(manualResult.success).toBe(true);
+
+    // Now balance is 600, which is above threshold of 500
+    const currentBalance = await credits.getBalance("user_1", "api_calls");
+    expect(currentBalance).toBe(600);
+
+    // Auto top-up should NOT trigger since balance is above threshold
+    const autoResult = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "api_calls",
+      currentBalance: currentBalance,
+    });
+
+    expect(autoResult.triggered).toBe(false);
+    if (!autoResult.triggered) {
+      expect(autoResult.reason).toBe("balance_above_threshold");
+    }
+  });
+
+  test("manual top-up does not count against auto top-up monthly limit", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    // Do 5 manual top-ups
+    for (let i = 0; i < 5; i++) {
+      const result = await topUpHandler.topUp({
+        userId: "user_1",
+        creditType: "api_calls",
+        amount: 100,
+      });
+      expect(result.success).toBe(true);
+    }
+
+    // Auto top-up should still work (max is 3 per month for auto, but manual doesn't count)
+    const autoResult = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "api_calls",
+      currentBalance: 100, // Below threshold of 500
+    });
+
+    expect(autoResult.triggered).toBe(true);
+    if (autoResult.triggered) {
+      expect(autoResult.status).toBe("succeeded");
+    }
+  });
+
+  test("auto top-up and manual top-up tracked separately", async () => {
+    await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
+
+    let grantedCalls: any[] = [];
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      onCreditsGranted: (params) => {
+        grantedCalls.push(params);
+      },
+    });
+
+    // Manual top-up
+    await topUpHandler.topUp({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 200,
+    });
+
+    // Auto top-up
+    await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_1",
+      creditType: "api_calls",
+      currentBalance: 100,
+    });
+
+    expect(grantedCalls.length).toBe(2);
+    expect(grantedCalls[0].source).toBe("topup");
+    expect(grantedCalls[1].source).toBe("auto_topup");
+  });
+
+  test("on-demand respects minPerPurchase even on dual-mode plan without explicit limits", async () => {
+    // Create a config where Pro plan would have implicit defaults
+    const configWithDefaults: BillingConfig = {
+      test: {
+        plans: [
+          {
+            id: "pro_defaults",
+            name: "Pro Defaults",
+            price: [{ id: "price_pro_defaults", amount: 2999, currency: "usd", interval: "month" }],
+            credits: {
+              api_calls: {
+                allocation: 10000,
+                pricePerCreditCents: 10, // $0.10 per credit
+                // No minPerPurchase - should default to 1
+                // No maxPerPurchase - should have no limit
+                autoTopUp: {
+                  threshold: 500,
+                  amount: 100,
+                  maxPerMonth: 3,
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    // Properly set up user with the new price/subscription
+    await setupUserWithSubscription("user_defaults", "cus_defaults", "sub_defaults", "price_pro_defaults", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: configWithDefaults,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    // Should fail with amount=1 since 1 credit * $0.10 = $0.10 < $0.60 Stripe minimum
+    const result = await topUpHandler.topUp({
+      userId: "user_defaults",
+      creditType: "api_calls",
+      amount: 1,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("INVALID_AMOUNT");
+      expect(result.error.message).toContain("60 cents");
+    }
+
+    // Should succeed with amount=10 ($1.00)
+    const result2 = await topUpHandler.topUp({
+      userId: "user_defaults",
+      creditType: "api_calls",
+      amount: 10,
+    });
+
+    expect(result2.success).toBe(true);
+  });
+});
+
+// =============================================================================
+// Tests: Auto Top-Up with Custom Configs
+// =============================================================================
+
+describe("TopUp: Auto Top-Up with Custom Configs", () => {
+  test("auto top-up succeeds with valid custom config", async () => {
+    // Create a config where auto top-up amount * price >= 60 cents
+    const validAmountConfig: BillingConfig = {
+      test: {
+        plans: [
+          {
+            id: "valid_auto",
+            name: "Valid Auto",
+            price: [{ id: "price_valid_auto", amount: 999, currency: "usd", interval: "month" }],
+            credits: {
+              api_calls: {
+                allocation: 1000,
+                pricePerCreditCents: 1, // $0.01 per credit
+                autoTopUp: {
+                  threshold: 100,
+                  amount: 100, // 100 * $0.01 = $1.00 >= $0.60 minimum
+                  maxPerMonth: 10,
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    // Properly set up user with the new price/subscription
+    await setupUserWithSubscription("user_valid", "cus_valid", "sub_valid", "price_valid_auto", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: validAmountConfig,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_valid",
+      creditType: "api_calls",
+      currentBalance: 50,
+    });
+
+    expect(result.triggered).toBe(true);
+    if (result.triggered) {
+      expect(result.status).toBe("succeeded");
+    }
+  });
+
+  test("auto top-up with different threshold and amount values", async () => {
+    const customConfig: BillingConfig = {
+      test: {
+        plans: [
+          {
+            id: "custom_auto",
+            name: "Custom Auto",
+            price: [{ id: "price_custom_auto", amount: 1999, currency: "usd", interval: "month" }],
+            credits: {
+              api_calls: {
+                allocation: 5000,
+                pricePerCreditCents: 2, // $0.02 per credit
+                autoTopUp: {
+                  threshold: 200,
+                  amount: 500, // 500 * $0.02 = $10.00
+                  maxPerMonth: 5,
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    await setupUserWithSubscription("user_custom", "cus_custom", "sub_custom", "price_custom_auto", "pm_card_visa");
+
+    const topUpHandler = createTopUpHandler({
+      stripe: stripe as any,
+      pool,
+      schema: "stripe",
+      billingConfig: customConfig,
+      mode: "test",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+    });
+
+    // Balance at 199 (below threshold of 200), should trigger
+    const result = await topUpHandler.triggerAutoTopUpIfNeeded({
+      userId: "user_custom",
+      creditType: "api_calls",
+      currentBalance: 199,
+    });
+
+    expect(result.triggered).toBe(true);
+
+    // Verify 500 credits were added
+    expect(await credits.getBalance("user_custom", "api_calls")).toBe(500);
+  });
+});

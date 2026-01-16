@@ -30,7 +30,11 @@ const TEST_BILLING_CONFIG: BillingConfig = {
       {
         id: "basic",
         name: "Basic",
-        price: [{ id: "price_basic_monthly", amount: 999, currency: "usd", interval: "month" }],
+        price: [
+          { id: "price_basic_monthly", amount: 999, currency: "usd", interval: "month" },
+          { id: "price_basic_yearly", amount: 9990, currency: "usd", interval: "year" },
+          { id: "price_basic_weekly", amount: 299, currency: "usd", interval: "week" },
+        ],
         credits: {
           api_calls: { allocation: 1000, onRenewal: "reset" },
         },
@@ -38,7 +42,10 @@ const TEST_BILLING_CONFIG: BillingConfig = {
       {
         id: "pro",
         name: "Pro",
-        price: [{ id: "price_pro_monthly", amount: 2999, currency: "usd", interval: "month" }],
+        price: [
+          { id: "price_pro_monthly", amount: 2999, currency: "usd", interval: "month" },
+          { id: "price_pro_yearly", amount: 29990, currency: "usd", interval: "year" },
+        ],
         credits: {
           api_calls: { allocation: 10000, onRenewal: "reset" },
           storage_gb: { allocation: 100, onRenewal: "add" },
@@ -71,8 +78,9 @@ const TEST_BILLING_CONFIG: BillingConfig = {
 function createMockSubscription(overrides: Partial<Stripe.Subscription> & {
   priceId: string;
   customerId?: string;
+  interval?: "month" | "year" | "week";
 }): Stripe.Subscription {
-  const { priceId, customerId = "cus_test_user", ...rest } = overrides;
+  const { priceId, customerId = "cus_test_user", interval = "month", ...rest } = overrides;
 
   return {
     id: `sub_${Math.random().toString(36).substring(7)}`,
@@ -88,6 +96,10 @@ function createMockSubscription(overrides: Partial<Stripe.Subscription> & {
           id: priceId,
           object: "price",
           currency: "usd",
+          recurring: {
+            interval: interval,
+            interval_count: 1,
+          },
         } as Stripe.Price,
         quantity: 1,
       }],
@@ -1015,5 +1027,613 @@ describe("Lifecycle: Seat-Users Mode", () => {
 
     // No credits granted in manual mode
     expect(await credits.getBalance("user_1", "api_calls")).toBe(0);
+  });
+});
+
+// =============================================================================
+// Tests: Yearly Plan Support - New Subscription
+// =============================================================================
+
+describe("Lifecycle: Yearly Plans - New Subscription", () => {
+  test("yearly subscription grants 12x monthly allocation", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_yearly_1",
+      priceId: "price_basic_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+    });
+
+    await lifecycle.onSubscriptionCreated(subscription);
+
+    // Basic plan: 1000 api_calls monthly → 12000 yearly
+    const balance = await credits.getBalance("user_1", "api_calls");
+    expect(balance).toBe(12000);
+  });
+
+  test("yearly subscription grants 12x for multiple credit types", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_yearly_pro",
+      priceId: "price_pro_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+    });
+
+    await lifecycle.onSubscriptionCreated(subscription);
+
+    // Pro plan: 10000 api_calls, 100 storage_gb → 120000, 1200
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(120000);
+    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1200);
+  });
+
+  test("weekly subscription grants 0.25x monthly allocation (rounded up)", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_weekly_1",
+      priceId: "price_basic_weekly",
+      customerId: "cus_test_user",
+      interval: "week",
+    });
+
+    await lifecycle.onSubscriptionCreated(subscription);
+
+    // Basic plan: 1000 api_calls monthly → ceil(1000/4) = 250 weekly
+    const balance = await credits.getBalance("user_1", "api_calls");
+    expect(balance).toBe(250);
+  });
+
+  test("weekly with non-divisible allocation rounds up", async () => {
+    // Create a custom config with a non-divisible allocation
+    const customConfig: BillingConfig = {
+      test: {
+        plans: [
+          {
+            id: "odd",
+            name: "Odd Plan",
+            price: [{ id: "price_odd_weekly", amount: 299, currency: "usd", interval: "week" }],
+            credits: { api_calls: { allocation: 100 } }, // 100/4 = 25
+          },
+          {
+            id: "odd2",
+            name: "Odd Plan 2",
+            price: [{ id: "price_odd2_weekly", amount: 299, currency: "usd", interval: "week" }],
+            credits: { api_calls: { allocation: 99 } }, // 99/4 = 24.75 → ceil = 25
+          },
+        ],
+      },
+    };
+
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: customConfig,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    const sub1 = createMockSubscription({
+      id: "sub_odd1",
+      priceId: "price_odd_weekly",
+      customerId: "cus_test_user",
+      interval: "week",
+    });
+
+    await lifecycle.onSubscriptionCreated(sub1);
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(25); // ceil(100/4)
+
+    // Clean up for next test
+    await credits.revokeAll({ userId: "user_1", creditType: "api_calls", source: "manual" });
+
+    const sub2 = createMockSubscription({
+      id: "sub_odd2",
+      priceId: "price_odd2_weekly",
+      customerId: "cus_test_user",
+      interval: "week",
+    });
+
+    await lifecycle.onSubscriptionCreated(sub2);
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(25); // ceil(99/4) = 25
+  });
+});
+
+// =============================================================================
+// Tests: Yearly Plan Support - Renewal
+// =============================================================================
+
+describe("Lifecycle: Yearly Plans - Renewal", () => {
+  test("yearly renewal grants 12x credits with onRenewal: reset", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // User has 5000 remaining from previous year
+    await credits.grant({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 5000,
+      source: "subscription",
+      sourceId: "sub_yearly_renew",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_yearly_renew",
+      priceId: "price_basic_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+    });
+
+    await lifecycle.onSubscriptionRenewed(subscription, "inv_yearly_1");
+
+    // Should reset to 12000 (unused 5000 lost)
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(12000);
+  });
+
+  test("yearly renewal with onRenewal: add accumulates 12x", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // User has 500 storage remaining (Pro has onRenewal: "add" for storage)
+    await credits.grant({
+      userId: "user_1",
+      creditType: "storage_gb",
+      amount: 500,
+      source: "subscription",
+      sourceId: "sub_yearly_add",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_yearly_add",
+      priceId: "price_pro_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+    });
+
+    await lifecycle.onSubscriptionRenewed(subscription, "inv_yearly_add");
+
+    // storage_gb: 500 existing + 1200 (100 * 12) = 1700
+    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1700);
+    // api_calls: reset to 120000
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(120000);
+  });
+
+  test("weekly renewal grants 0.25x credits", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // User has 100 remaining from previous week
+    await credits.grant({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 100,
+      source: "subscription",
+      sourceId: "sub_weekly_renew",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_weekly_renew",
+      priceId: "price_basic_weekly",
+      customerId: "cus_test_user",
+      interval: "week",
+    });
+
+    await lifecycle.onSubscriptionRenewed(subscription, "inv_weekly_1");
+
+    // Should reset to 250 (ceil(1000/4))
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(250);
+  });
+});
+
+// =============================================================================
+// Tests: Yearly Plan Support - Same-Plan Interval Changes
+// =============================================================================
+
+describe("Lifecycle: Yearly Plans - Same-Plan Interval Changes", () => {
+  test("monthly to yearly upgrade: keeps old credits + grants 12x new", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // Start with Basic Monthly
+    const monthlySub = createMockSubscription({
+      id: "sub_interval_change",
+      priceId: "price_basic_monthly",
+      customerId: "cus_test_user",
+      interval: "month",
+    });
+    await lifecycle.onSubscriptionCreated(monthlySub);
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+
+    // Consume some credits
+    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 300 });
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(700);
+
+    // Upgrade to Basic Yearly (same plan, different interval)
+    const yearlySub = createMockSubscription({
+      id: "sub_interval_change",
+      priceId: "price_basic_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+      metadata: {
+        upgrade_from_price_id: "price_basic_monthly",
+        upgrade_from_price_amount: "999", // Non-zero = paid, so keep old credits
+      },
+    });
+
+    await lifecycle.onSubscriptionPlanChanged(yearlySub, "price_basic_monthly");
+
+    // Should keep 700 + get 12000 = 12700
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(12700);
+  });
+
+  test("yearly to monthly downgrade: scheduled, grants monthly at period end", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // User has yearly credits
+    await credits.grant({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 12000,
+      source: "subscription",
+      sourceId: "sub_yearly_downgrade",
+    });
+
+    // Consume some
+    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 4000 });
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(8000);
+
+    // Schedule downgrade (credits unchanged immediately)
+    const scheduledSub = createMockSubscription({
+      id: "sub_yearly_downgrade",
+      priceId: "price_basic_monthly",
+      customerId: "cus_test_user",
+      interval: "month",
+      metadata: {
+        pending_credit_downgrade: "true",
+        downgrade_from_price: "price_basic_yearly",
+      },
+    });
+
+    await lifecycle.onSubscriptionPlanChanged(scheduledSub, "price_basic_yearly");
+
+    // Credits unchanged (still 8000)
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(8000);
+
+    // At period end, downgrade applied
+    const appliedSub = createMockSubscription({
+      id: "sub_yearly_downgrade",
+      priceId: "price_basic_monthly",
+      customerId: "cus_test_user",
+      interval: "month",
+    });
+
+    await lifecycle.onDowngradeApplied(appliedSub, "price_basic_monthly");
+
+    // Should reset to monthly allocation (1000)
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+  });
+});
+
+// =============================================================================
+// Tests: Yearly Plan Support - Cross-Plan Upgrades with Intervals
+// =============================================================================
+
+describe("Lifecycle: Yearly Plans - Cross-Plan Upgrades", () => {
+  test("Basic Monthly to Pro Yearly: keeps old + grants 12x Pro", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // Start with Basic Monthly
+    const basicSub = createMockSubscription({
+      id: "sub_cross_upgrade",
+      priceId: "price_basic_monthly",
+      customerId: "cus_test_user",
+      interval: "month",
+    });
+    await lifecycle.onSubscriptionCreated(basicSub);
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+
+    // Consume some
+    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 400 });
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(600);
+
+    // Upgrade to Pro Yearly
+    const proYearlySub = createMockSubscription({
+      id: "sub_cross_upgrade",
+      priceId: "price_pro_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+      metadata: {
+        upgrade_from_price_id: "price_basic_monthly",
+        upgrade_from_price_amount: "999",
+      },
+    });
+
+    await lifecycle.onSubscriptionPlanChanged(proYearlySub, "price_basic_monthly");
+
+    // api_calls: 600 (kept) + 120000 (Pro yearly) = 120600
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(120600);
+    // storage_gb: new credit type, 100 * 12 = 1200
+    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1200);
+  });
+
+  test("Free Monthly to Pro Yearly: revokes free, grants 12x Pro", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // Start with Free plan
+    const freeSub = createMockSubscription({
+      id: "sub_free_to_yearly",
+      priceId: "price_free_monthly",
+      customerId: "cus_test_user",
+      interval: "month",
+    });
+    await lifecycle.onSubscriptionCreated(freeSub);
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(100);
+
+    // Upgrade to Pro Yearly (Free → Paid)
+    const proYearlySub = createMockSubscription({
+      id: "sub_free_to_yearly",
+      priceId: "price_pro_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+      metadata: {
+        upgrade_from_price_id: "price_free_monthly",
+        upgrade_from_price_amount: "0", // Free plan indicator
+      },
+    });
+
+    await lifecycle.onSubscriptionPlanChanged(proYearlySub, "price_free_monthly");
+
+    // api_calls: revoked free 100, granted 120000
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(120000);
+    // storage_gb: 1200 (new credit type)
+    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1200);
+  });
+});
+
+// =============================================================================
+// Tests: Yearly Plan Support - Downgrades with Intervals
+// =============================================================================
+
+describe("Lifecycle: Yearly Plans - Downgrades", () => {
+  test("Pro Yearly to Basic Monthly downgrade: resets to monthly Basic allocation", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // User has Pro yearly credits
+    await credits.grant({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 120000,
+      source: "subscription",
+      sourceId: "sub_yearly_to_monthly",
+    });
+    await credits.grant({
+      userId: "user_1",
+      creditType: "storage_gb",
+      amount: 1200,
+      source: "subscription",
+      sourceId: "sub_yearly_to_monthly",
+    });
+
+    // Consume some
+    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 50000 });
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(70000);
+
+    // Downgrade applied at period end to Basic Monthly
+    const downgradedSub = createMockSubscription({
+      id: "sub_yearly_to_monthly",
+      priceId: "price_basic_monthly",
+      customerId: "cus_test_user",
+      interval: "month",
+    });
+
+    await lifecycle.onDowngradeApplied(downgradedSub, "price_basic_monthly");
+
+    // api_calls: reset to monthly Basic (1000)
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    // storage_gb: revoked (not in Basic plan)
+    expect(await credits.getBalance("user_1", "storage_gb")).toBe(0);
+  });
+
+  test("Pro Yearly to Basic Yearly downgrade: resets to yearly Basic allocation", async () => {
+    await setupTestUser("user_1", "cus_test_user");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "subscriber",
+    });
+
+    // User has Pro yearly credits
+    await credits.grant({
+      userId: "user_1",
+      creditType: "api_calls",
+      amount: 120000,
+      source: "subscription",
+      sourceId: "sub_yearly_to_yearly",
+    });
+    await credits.grant({
+      userId: "user_1",
+      creditType: "storage_gb",
+      amount: 1200,
+      source: "subscription",
+      sourceId: "sub_yearly_to_yearly",
+    });
+
+    // Downgrade applied at period end to Basic Yearly
+    const downgradedSub = createMockSubscription({
+      id: "sub_yearly_to_yearly",
+      priceId: "price_basic_yearly",
+      customerId: "cus_test_user",
+      interval: "year",
+    });
+
+    await lifecycle.onDowngradeApplied(downgradedSub, "price_basic_yearly");
+
+    // api_calls: reset to yearly Basic (1000 * 12 = 12000)
+    expect(await credits.getBalance("user_1", "api_calls")).toBe(12000);
+    // storage_gb: revoked (not in Basic plan)
+    expect(await credits.getBalance("user_1", "storage_gb")).toBe(0);
+  });
+});
+
+// =============================================================================
+// Tests: Yearly Plan Support - Seat-Users Mode
+// =============================================================================
+
+describe("Lifecycle: Yearly Plans - Seat-Users Mode", () => {
+  test("yearly subscription grants 12x to first seat user", async () => {
+    await setupTestUser("org_1", "cus_org_1");
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "seat-users",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_seat_yearly",
+      priceId: "price_basic_yearly",
+      customerId: "cus_org_1",
+      interval: "year",
+      metadata: { first_seat_user_id: "user_alice" },
+    });
+
+    await lifecycle.onSubscriptionCreated(subscription);
+
+    // user_alice should get 12x credits
+    expect(await credits.getBalance("user_alice", "api_calls")).toBe(12000);
+    expect(await credits.getBalance("org_1", "api_calls")).toBe(0);
+  });
+
+  test("yearly renewal grants 12x to all seat users", async () => {
+    await setupTestUser("org_1", "cus_org_1");
+
+    // Set up existing seat users
+    await credits.grant({
+      userId: "user_alice",
+      creditType: "api_calls",
+      amount: 5000,
+      source: "seat_grant",
+      sourceId: "sub_seat_yearly_renew",
+    });
+    await credits.grant({
+      userId: "user_bob",
+      creditType: "api_calls",
+      amount: 3000,
+      source: "seat_grant",
+      sourceId: "sub_seat_yearly_renew",
+    });
+
+    const lifecycle = createCreditLifecycle({
+      pool,
+      schema: "stripe",
+      billingConfig: TEST_BILLING_CONFIG,
+      mode: "test",
+      grantTo: "seat-users",
+    });
+
+    const subscription = createMockSubscription({
+      id: "sub_seat_yearly_renew",
+      priceId: "price_basic_yearly",
+      customerId: "cus_org_1",
+      interval: "year",
+    });
+
+    await lifecycle.onSubscriptionRenewed(subscription, "inv_seat_yearly");
+
+    // Both users should get reset to 12000 each
+    expect(await credits.getBalance("user_alice", "api_calls")).toBe(12000);
+    expect(await credits.getBalance("user_bob", "api_calls")).toBe(12000);
   });
 });
