@@ -135,7 +135,7 @@ import { checkout } from "stripe-no-webhooks/client";
 
 Use `planName` (matches your billing config) and `interval` (month/year). No need to deal with Stripe price IDs directly.
 
-**Yearly plans:** When a plan has both monthly and yearly prices, the `PricingPage` shows a toggle. For yearly subscriptions, credits are automatically scaled (12× monthly allocation upfront). See [Credits](./docs/credits.md) for details.
+**Yearly plans:** When a plan has both monthly and yearly prices, the `PricingPage` shows a toggle. For yearly subscriptions, credits are automatically scaled (12× monthly allocation upfront). Switching between monthly/yearly on the same plan is handled automatically - see [Credits](./docs/credits.md) for details on all upgrade/downgrade scenarios.
 
 You can test the checkout flow by running by using a stripe test card number:
 

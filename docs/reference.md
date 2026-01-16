@@ -138,12 +138,16 @@ type Subscription = {
   plan: {
     id: string;
     name: string;
-    priceId: string;
+    priceId: string;  // Use this to look up the interval from your billing config
   } | null;
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
 };
+
+// To get the billing interval, look up the price in your config:
+const price = plan.price.find(p => p.id === subscription.plan.priceId);
+const interval = price?.interval; // "month" | "year" | "week"
 ```
 
 ## Credits API

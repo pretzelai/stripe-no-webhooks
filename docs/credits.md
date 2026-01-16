@@ -159,7 +159,7 @@ When users change plans, credits are handled differently for upgrades vs downgra
 When a user upgrades (e.g., Basic → Pro):
 
 1. **Old credits are preserved** - Users keep their remaining credits from the old plan
-2. **New credits are granted** - Users receive the new plan's full allocation
+2. **New credits are granted** - Users receive the new plan's full allocation (scaled for interval)
 3. **Result:** User has old_balance + new_allocation
 
 **Why preserve old credits?** Stripe doesn't prorate subscription upgrades by default. If a user upgrades mid-cycle, they've already paid for their remaining Basic credits. Revoking them would be unfair since they're not getting a refund.
@@ -172,6 +172,49 @@ Example: User on Basic (1,000 credits/month) upgrades to Pro (10,000 credits/mon
 ```
 
 **Exception: Free → Paid upgrades** revoke the free credits first, then grant paid credits. Free tier credits have no monetary value, so there's nothing to preserve.
+
+### Same-Plan Interval Changes
+
+Switching between monthly and yearly on the **same plan** follows upgrade/downgrade rules:
+
+**Monthly → Yearly (Upgrade)**
+- Treated as an upgrade (immediate)
+- Old credits preserved + new yearly allocation (12×) granted
+
+```
+Example: Pro Monthly → Pro Yearly
+- User has 700 credits remaining from monthly
+- After switch: 700 + 120,000 = 120,700 credits
+```
+
+**Yearly → Monthly (Downgrade)**
+- Treated as a downgrade (scheduled for period end)
+- User keeps yearly credits until period ends
+- At renewal: resets to monthly allocation
+
+```
+Example: Pro Yearly → Pro Monthly
+- User has 80,000 credits remaining from yearly
+- Credits unchanged until period ends
+- At period end: resets to 10,000 (monthly allocation)
+```
+
+### Cross-Plan Upgrades with Interval Changes
+
+When upgrading to a different plan AND changing interval:
+
+```
+Example: Basic Monthly → Pro Yearly
+- User has 400 Basic credits remaining
+- After upgrade: 400 + 120,000 = 120,400 credits
+- Also gets new credit types (e.g., storage_gb: 1,200)
+```
+
+```
+Example: Free → Pro Yearly
+- Free credits revoked (no monetary value)
+- Pro yearly credits granted: 120,000
+```
 
 ### Downgrades (At Period End)
 
@@ -225,12 +268,77 @@ When a subscription is cancelled, **all credits are revoked** (including top-ups
 
 ### Summary
 
-| Event                 | Credits Behavior                           | Timing     |
-| --------------------- | ------------------------------------------ | ---------- |
-| Upgrade (Paid → Paid) | Keep old + grant new                       | Immediate  |
-| Upgrade (Free → Paid) | Revoke old, grant new                      | Immediate  |
-| Downgrade             | Keep current until period end, then adjust | Period end |
-| Cancellation          | Revoke all                                 | Immediate  |
+| Event                      | Credits Behavior                           | Timing     |
+| -------------------------- | ------------------------------------------ | ---------- |
+| Upgrade (Paid → Paid)      | Keep old + grant new (scaled)              | Immediate  |
+| Upgrade (Free → Paid)      | Revoke old, grant new (scaled)             | Immediate  |
+| Monthly → Yearly (same plan) | Keep old + grant 12× new                 | Immediate  |
+| Yearly → Monthly (same plan) | Keep until period end, then reset to 1×  | Period end |
+| Cross-plan + interval      | Same as upgrade/downgrade rules (scaled)   | Depends    |
+| Downgrade                  | Keep current until period end, then adjust | Period end |
+| Cancellation               | Revoke all                                 | Immediate  |
+
+## Displaying Credits in Your UI
+
+### Pricing Page
+
+The generated `PricingPage` component automatically scales credits for yearly plans:
+- Monthly plan shows: "1,000 API Calls/mo"
+- Yearly plan shows: "12,000 API Calls/yr"
+
+### Dashboard / Account Page
+
+For custom dashboards, you need to scale the allocation yourself based on the billing interval. Here's how:
+
+```typescript
+import billingConfig from "@/billing.config";
+
+// Get subscription
+const subscription = await billing.subscriptions.get(userId);
+const priceId = subscription?.plan?.priceId;
+
+// Find the plan and price to get the interval
+const plans = billingConfig.test.plans; // or production
+const plan = plans.find(p => p.price.some(pr => pr.id === priceId));
+const price = plan?.price.find(pr => pr.id === priceId);
+const interval = price?.interval ?? "month";
+
+// Get credit balance
+const balance = await billing.credits.getBalance(userId, "api_calls");
+const baseAllocation = plan?.credits?.api_calls?.allocation ?? 0;
+
+// Scale allocation based on interval
+const scaledAllocation = baseAllocation * (
+  interval === "year" ? 12 :
+  interval === "week" ? 0.25 :
+  1
+);
+
+// Now you can display:
+// - Balance: 8,500 / 12,000 yearly
+// - Or calculate bonus credits from top-ups:
+const bonusCredits = Math.max(0, balance - scaledAllocation);
+```
+
+**Why manual scaling?** The `allocation` in your config is the base (monthly) value. The library automatically scales when granting credits, but your UI needs to scale for display purposes.
+
+**Tip:** Create a helper function to avoid repeating this logic:
+
+```typescript
+function getScaledAllocation(plan: Plan, interval: string, creditType: string): number {
+  const base = plan.credits?.[creditType]?.allocation ?? 0;
+  if (interval === "year") return base * 12;
+  if (interval === "week") return Math.ceil(base / 4);
+  return base;
+}
+```
+
+### Top-Ups on Yearly Plans
+
+Top-up pricing is **per-credit** and does NOT scale with billing interval:
+- `pricePerCreditCents: 10` means $0.10 per credit, whether monthly or yearly
+- Auto top-up works the same regardless of interval
+- Top-up credits are "bonus" credits on top of the scaled subscription allocation
 
 ## Callbacks
 
