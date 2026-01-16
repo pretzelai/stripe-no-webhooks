@@ -90,19 +90,19 @@ const hasEnough = await billing.credits.hasCredits("user_123", "api_calls", 10);
 
 ## Top-Ups
 
-Let users buy more credits. Choose one mode per credit type:
-
-**On-demand** - user clicks a button to buy additional credits:
+Let users buy more credits. Add `pricePerCreditCents` to enable top-ups:
 
 ```typescript
 credits: {
   api_calls: {
     allocation: 1000,
-    topUp: {
-      mode: "on_demand",
-      pricePerCreditCents: 1,  // $0.01 per credit, currency comes from the Plan currency
-      minPerPurchase: 100,
-      maxPerPurchase: 10000,
+    pricePerCreditCents: 1,
+    minPerPurchase: 100,
+    maxPerPurchase: 10000,
+    autoTopUp: {        // (optional)
+      threshold: 100,   // Trigger when balance drops below 100
+      amount: 500,      // Buy 500 more
+      maxPerMonth: 5,   // Up to 5 times each calendar month
     },
   },
 }
@@ -125,33 +125,14 @@ if (result.success) {
 }
 ```
 
-**Auto** - charges automatically when balance is low:
-
-```typescript
-credits: {
-  api_calls: {
-    allocation: 1000,
-    topUp: {
-      mode: "auto",
-      pricePerCreditCents: 1,
-      balanceThreshold: 100,  // When below 100
-      purchaseAmount: 500,    // Buy 500 more
-      maxPerMonth: 5,         // Upto 5 times each calendar month
-    },
-  },
-}
-```
-
-Auto top-up triggers automatically when using `billing.credits.consume()`.
-
 ### Top-Up Payment Mode
 
 Top-ups use different Stripe payment flows depending on your tax configuration:
 
-| Tax Config | Payment Method | Stripe Fee | Shows in Portal |
-|------------|---------------|------------|-----------------|
-| Disabled (default) | PaymentIntent | Standard | No |
-| Enabled (`automaticTax` or `taxIdCollection`) | Invoice | +0.4-0.5% | Yes |
+| Tax Config                                    | Payment Method | Stripe Fee | Shows in Portal |
+| --------------------------------------------- | -------------- | ---------- | --------------- |
+| Disabled (default)                            | PaymentIntent  | Standard   | No              |
+| Enabled (`automaticTax` or `taxIdCollection`) | Invoice        | +0.4-0.5%  | Yes             |
 
 **When to use each:**
 
@@ -164,7 +145,7 @@ Top-ups use different Stripe payment flows depending on your tax configuration:
 const billing = new Billing({
   billingConfig,
   tax: {
-    automaticTax: true,  // This enables invoice-based top-ups
+    automaticTax: true, // This enables invoice-based top-ups
   },
 });
 ```
@@ -218,10 +199,10 @@ By waiting until period end, users get what they paid for—no more, no less.
 
 At period end, credits follow the `onRenewal` setting:
 
-| Setting | Behavior | Use Case |
-|---------|----------|----------|
-| `"reset"` (default) | Revoke all, grant new allocation | Most SaaS apps |
-| `"add"` | Keep balance, add new allocation | Rollover credits |
+| Setting             | Behavior                         | Use Case         |
+| ------------------- | -------------------------------- | ---------------- |
+| `"reset"` (default) | Revoke all, grant new allocation | Most SaaS apps   |
+| `"add"`             | Keep balance, add new allocation | Rollover credits |
 
 ```typescript
 credits: {
@@ -244,12 +225,12 @@ When a subscription is cancelled, **all credits are revoked** (including top-ups
 
 ### Summary
 
-| Event | Credits Behavior | Timing |
-|-------|-----------------|--------|
-| Upgrade (Paid → Paid) | Keep old + grant new | Immediate |
-| Upgrade (Free → Paid) | Revoke old, grant new | Immediate |
-| Downgrade | Keep current until period end, then adjust | Period end |
-| Cancellation | Revoke all | Immediate |
+| Event                 | Credits Behavior                           | Timing     |
+| --------------------- | ------------------------------------------ | ---------- |
+| Upgrade (Paid → Paid) | Keep old + grant new                       | Immediate  |
+| Upgrade (Free → Paid) | Revoke old, grant new                      | Immediate  |
+| Downgrade             | Keep current until period end, then adjust | Period end |
+| Cancellation          | Revoke all                                 | Immediate  |
 
 ## Callbacks
 

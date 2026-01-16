@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import type { Pool } from "pg";
-import type { BillingConfig, OnDemandTopUp, AutoTopUp } from "../BillingConfig";
+import type { BillingConfig } from "../BillingConfig";
 import type { TaxConfig } from "../types";
 import { credits } from "./index";
 import * as db from "./db";
@@ -482,13 +482,13 @@ export function createTopUpHandler(deps: {
       };
     }
 
-    const topUpConfig = plan.credits?.[creditType]?.topUp;
-    if (!topUpConfig || topUpConfig.mode !== "on_demand") {
+    const creditConfig = plan.credits?.[creditType];
+    if (!creditConfig?.pricePerCreditCents) {
       return {
         success: false,
         error: {
           code: "TOPUP_NOT_CONFIGURED",
-          message: `On-demand top-up not configured for ${creditType}`,
+          message: `Top-up not configured for ${creditType}`,
         },
       };
     }
@@ -497,7 +497,7 @@ export function createTopUpHandler(deps: {
       pricePerCreditCents,
       minPerPurchase = 1,
       maxPerPurchase,
-    } = topUpConfig as OnDemandTopUp;
+    } = creditConfig;
     if (amount < minPerPurchase) {
       return {
         success: false,
@@ -533,9 +533,8 @@ export function createTopUpHandler(deps: {
     const currency = subscription.currency;
 
     // Use configured displayName if available, otherwise construct from ID
-    const creditConfig = plan.credits?.[creditType];
     const displayName =
-      creditConfig?.displayName ||
+      creditConfig.displayName ||
       creditType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     if (!customer.defaultPaymentMethod) {
@@ -984,17 +983,17 @@ export function createTopUpHandler(deps: {
       return { triggered: false, reason: "not_configured" };
     }
 
-    const topUpConfig = plan.credits?.[creditType]?.topUp;
-    if (!topUpConfig || topUpConfig.mode !== "auto") {
+    const creditConfig = plan.credits?.[creditType];
+    if (!creditConfig?.pricePerCreditCents || !creditConfig.autoTopUp) {
       return { triggered: false, reason: "not_configured" };
     }
 
+    const { pricePerCreditCents } = creditConfig;
     const {
-      pricePerCreditCents,
-      balanceThreshold,
-      purchaseAmount,
+      threshold: balanceThreshold,
+      amount: purchaseAmount,
       maxPerMonth = 10,
-    } = topUpConfig as AutoTopUp;
+    } = creditConfig.autoTopUp;
 
     // Validate config to fail fast with clear errors
     if (
@@ -1057,9 +1056,8 @@ export function createTopUpHandler(deps: {
     }`;
 
     // Use configured displayName if available, otherwise construct from ID
-    const creditConfig = plan.credits?.[creditType];
     const displayName =
-      creditConfig?.displayName ||
+      creditConfig.displayName ||
       creditType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     try {
