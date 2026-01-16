@@ -1,13 +1,16 @@
 # Credits
 
-Give users a monthly allocation of credits (API calls, emails, tokens, etc.).
+Give users credits (API calls, emails, tokens, etc.) that renew with their subscription.
 
 ## Add Credits to a Plan
 
 ```typescript
 {
   name: "Pro",
-  price: [{ amount: 2000, currency: "usd", interval: "month" }],
+  price: [
+    { amount: 2000, currency: "usd", interval: "month" },
+    { amount: 20000, currency: "usd", interval: "year" },
+  ],
   credits: {
     api_calls: { allocation: 1000 },
     ai_tokens: { allocation: 50000 },
@@ -25,6 +28,40 @@ credits: {
   },
 }
 ```
+
+## Yearly Plans and Credit Allocation
+
+When a plan supports both monthly and yearly billing, credits are **automatically scaled** based on the billing interval:
+
+| Interval | Allocation Formula | Example (1000 base) |
+|----------|-------------------|---------------------|
+| Month | Base allocation | 1,000 credits |
+| Year | Base × 12 | 12,000 credits |
+| Week | Base ÷ 4 (rounded up) | 250 credits |
+
+This means a user on a yearly plan receives 12× the monthly allocation upfront when they subscribe and at each yearly renewal.
+
+**Why give all credits upfront for yearly plans?**
+- Stripe only sends a renewal webhook once per year
+- Users paid for a full year, so they should get a full year's worth of credits
+- Simple and predictable for users
+
+**Example:**
+```
+Pro Monthly ($20/mo):  1,000 API calls/month → 12,000/year total
+Pro Yearly ($200/yr):  12,000 API calls upfront → same value, discounted price
+```
+
+### Note on Monthly Drip for Yearly Plans
+
+Some apps want to grant credits monthly even for yearly subscribers (e.g., 1,000/month instead of 12,000 upfront). This requires a scheduled task (cron job) since Stripe only fires webhooks at renewal.
+
+Options for monthly drip:
+- **Vercel Cron** - Add a daily/weekly cron job
+- **pg_cron** (Neon/Supabase) - Database-level scheduling
+- **Custom scheduler** - External service that calls your API monthly
+
+This is outside the scope of the library's core functionality, but you can use `billing.credits.grant()` in your cron handler.
 
 ## Consume Credits
 

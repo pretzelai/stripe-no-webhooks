@@ -131,7 +131,7 @@ function formatConfigToTs(config) {
   return toTsObjectLiteral(reordered, 0);
 }
 
-// --- Main Sync Command ---
+// --- Main Sync Logic (pure function, no interactive prompts) ---
 
 async function sync(options = {}) {
   const {
@@ -186,6 +186,7 @@ async function sync(options = {}) {
   const stripe = new Stripe(stripeSecretKey);
 
   // Show mode indicator
+  logger.log(`Running in ${mode} mode`);
   modeBox(mode, stripeSecretKey, `${mode}.plans`);
 
   let content = fs.readFileSync(billingConfigPath, "utf8");
@@ -484,7 +485,27 @@ async function sync(options = {}) {
     `Synced ${stats.productsPulled + stats.productsSynced + stats.productsCreated} products, ${stats.pricesPulled + stats.pricesSynced + stats.pricesCreated} prices`
   );
 
-  // --- Webhook Setup Menu ---
+  return {
+    success: true,
+    stats,
+    // Return context needed for webhook setup
+    _context: { stripe, mode, billingConfigPath, Stripe },
+  };
+}
+
+// --- Interactive Webhook Setup (CLI only) ---
+
+async function setupWebhooks(options = {}) {
+  const {
+    env = process.env,
+    cwd = process.cwd(),
+    logger = console,
+    stripe,
+    mode,
+    billingConfigPath,
+    Stripe,
+  } = options;
+
   const siteUrl = env.NEXT_PUBLIC_SITE_URL || "";
   const isLocal = !siteUrl || isLocalhost(siteUrl);
 
@@ -516,7 +537,7 @@ async function sync(options = {}) {
   if (choice.action === "skip") {
     rl.close();
     info("Skipped webhook setup");
-    return { success: true, stats };
+    return { success: true };
   }
 
   if (choice.action === "staging") {
@@ -554,7 +575,7 @@ async function sync(options = {}) {
       error(`Failed to create webhook: ${err.message}`);
     }
 
-    return { success: true, stats };
+    return { success: true };
   }
 
   if (choice.action === "production") {
@@ -568,7 +589,7 @@ async function sync(options = {}) {
     if (!liveKey.includes("_live_")) {
       rl.close();
       error("Production setup requires a live key (sk_live_...)");
-      return { success: true, stats };
+      return { success: true };
     }
 
     const prodUrl = await question(rl, "Enter your production URL");
@@ -576,7 +597,7 @@ async function sync(options = {}) {
 
     if (!prodUrl) {
       error("Production URL is required");
-      return { success: true, stats };
+      return { success: true };
     }
 
     const liveStripe = new Stripe(liveKey);
@@ -719,15 +740,16 @@ async function sync(options = {}) {
       error(`Failed to create webhook: ${err.message}`);
     }
 
-    return { success: true, stats };
+    return { success: true };
   }
 
   rl.close();
-  return { success: true, stats };
+  return { success: true };
 }
 
 module.exports = {
   sync,
+  setupWebhooks,
   // Export for testing
   findMatchingBrace,
   tsObjectToJson,

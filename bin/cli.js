@@ -8,7 +8,7 @@ require("dotenv").config({ path: path.join(process.cwd(), ".env") });
 
 const { migrate } = require("./commands/migrate");
 const { init } = require("./commands/init");
-const { sync } = require("./commands/sync");
+const { sync, setupWebhooks } = require("./commands/sync");
 const { generate } = require("./commands/generate");
 const { backfill } = require("./commands/backfill");
 
@@ -43,7 +43,10 @@ async function main() {
       break;
 
     case "sync":
-      await sync();
+      const syncResult = await sync();
+      if (syncResult.success && syncResult._context) {
+        await setupWebhooks(syncResult._context);
+      }
       break;
 
     case "generate":
