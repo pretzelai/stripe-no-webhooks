@@ -32,12 +32,9 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           api_calls: {
             allocation: 1000,
             onRenewal: "reset",
-            topUp: {
-              mode: "on_demand",
-              pricePerCreditCents: 1, // $0.01 per credit
-              minPerPurchase: 100,
-              maxPerPurchase: 10000,
-            },
+            pricePerCreditCents: 1, // $0.01 per credit
+            minPerPurchase: 100,
+            maxPerPurchase: 10000,
           },
         },
       },
@@ -49,11 +46,10 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           api_calls: {
             allocation: 10000,
             onRenewal: "reset",
-            topUp: {
-              mode: "auto",
-              pricePerCreditCents: 1,
-              balanceThreshold: 500,
-              purchaseAmount: 1000,
+            pricePerCreditCents: 1,
+            autoTopUp: {
+              threshold: 500,
+              amount: 1000,
               maxPerMonth: 3,
             },
           },
@@ -72,7 +68,7 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           api_calls: {
             allocation: 500,
             onRenewal: "reset",
-            // No topUp configured
+            // No pricePerCreditCents configured
           },
         },
       },
@@ -1366,12 +1362,9 @@ describe("TopUp: Stripe Minimum Charge", () => {
               api_calls: {
                 allocation: 1000,
                 onRenewal: "reset",
-                topUp: {
-                  mode: "on_demand",
-                  pricePerCreditCents: 1,
-                  minPerPurchase: 10, // Allow smaller purchases
-                  maxPerPurchase: 10000,
-                },
+                pricePerCreditCents: 1,
+                minPerPurchase: 10, // Allow smaller purchases
+                maxPerPurchase: 10000,
               },
             },
           },
@@ -1577,8 +1570,8 @@ describe("TopUp: Auto Top-Up Failure Scenarios", () => {
     }
   });
 
-  test("auto top-up returns not_configured for wrong top-up mode", async () => {
-    // Basic plan has on_demand mode, not auto
+  test("auto top-up returns not_configured when autoTopUp not configured", async () => {
+    // Basic plan has pricePerCreditCents but no autoTopUp config
     await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
 
     const topUpHandler = createTopUpHandler({

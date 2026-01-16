@@ -333,21 +333,15 @@ type CreditConfig = {
   allocation: number;
   displayName?: string; // Human-readable name for pricing page (e.g., "API Calls")
   onRenewal?: "reset" | "add"; // Default: "reset"
-  topUp?: OnDemandTopUp | AutoTopUp;
-};
-
-type OnDemandTopUp = {
-  mode: "on_demand";
-  pricePerCreditCents: number;
+  pricePerCreditCents?: number; // Price per credit in cents, enables top-ups
   minPerPurchase?: number; // Default: 1
   maxPerPurchase?: number;
+  autoTopUp?: AutoTopUpConfig; // Enable automatic top-ups
 };
 
-type AutoTopUp = {
-  mode: "auto";
-  pricePerCreditCents: number;
-  balanceThreshold: number;
-  purchaseAmount: number;
+type AutoTopUpConfig = {
+  threshold: number; // Trigger when balance drops below this
+  amount: number; // Number of credits to purchase
   maxPerMonth?: number; // Default: 10
 };
 ```

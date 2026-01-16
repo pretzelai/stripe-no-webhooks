@@ -7,19 +7,13 @@ export type Price = {
   interval: PriceInterval;
 };
 
-export type OnDemandTopUp = {
-  mode: "on_demand";
-  pricePerCreditCents: number;
-  minPerPurchase?: number; // default: 1
-  maxPerPurchase?: number;
-};
-
-export type AutoTopUp = {
-  mode: "auto";
-  pricePerCreditCents: number;
-  balanceThreshold: number;
-  purchaseAmount: number;
-  maxPerMonth?: number; // default: 10
+export type AutoTopUpConfig = {
+  /** Trigger auto top-up when balance drops below this threshold */
+  threshold: number;
+  /** Number of credits to purchase when auto top-up triggers */
+  amount: number;
+  /** Maximum auto top-ups per calendar month (default: 10) */
+  maxPerMonth?: number;
 };
 
 export type CreditConfig = {
@@ -35,7 +29,14 @@ export type CreditConfig = {
    * - 'add': Add allocation to current balance (credits accumulate)
    */
   onRenewal?: "reset" | "add";
-  topUp?: OnDemandTopUp | AutoTopUp;
+  /** Price per credit in cents. Currency comes from the Plan's price. */
+  pricePerCreditCents?: number;
+  /** Minimum credits per top-up purchase (default: 1) */
+  minPerPurchase?: number;
+  /** Maximum credits per top-up purchase */
+  maxPerPurchase?: number;
+  /** Configure automatic top-ups when balance drops below threshold */
+  autoTopUp?: AutoTopUpConfig;
 };
 
 export type Plan = {
