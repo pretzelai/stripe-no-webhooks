@@ -342,9 +342,23 @@ export const billing = new Billing({
 });
 ```
 
-Available callbacks: `onSubscriptionCreated`, `onSubscriptionCancelled`, `onSubscriptionRenewed`, `onSubscriptionPlanChanged`, `onCreditsGranted`, `onCreditsRevoked`, `onTopUpCompleted`, `onAutoTopUpFailed`, `onCreditsLow`
+Available callbacks: `onSubscriptionCreated`, `onSubscriptionCancelled`, `onSubscriptionRenewed`, `onSubscriptionPlanChanged`, `onSubscriptionPaymentFailed`, `onCreditsGranted`, `onCreditsRevoked`, `onTopUpCompleted`, `onAutoTopUpFailed`, `onCreditsLow`
 
 See [API Reference](./docs/reference.md) for more details.
+
+---
+
+## Handling Payment Failures
+
+Payments fail. Cards expire, get declined, or run out of funds. The library helps you handle this gracefully:
+
+**Subscription failures:** Use `onSubscriptionPaymentFailed` callback to send custom emails when renewal payments fail. Stripe handles retries automatically.
+
+**On-demand top-ups:** When `topUp()` fails, it returns a `recoveryUrl`. Redirect users there to enter a new card.
+
+**Auto top-ups:** If you enable auto top-ups, be aware that failed payments are automatically rate-limited (24h cooldown, max 3 retries) to protect your users' cards from being flagged for fraud. Use `onAutoTopUpFailed` to notify users when their card needs attention.
+
+See [Payment Failures](./docs/payment-failures.md) for the complete guide.
 
 ---
 
@@ -365,6 +379,7 @@ See [API Reference](./docs/reference.md) for more details.
 This README only covers the basics. The library supports more features than what is covered here. For more details, see the following docs:
 
 - [Credits System](./docs/credits.md) - Consumable credits with auto top-up
+- [Payment Failures](./docs/payment-failures.md) - Handle declined cards and failed payments
 - [Team Billing](./docs/team-billing.md) - Organization subscriptions with seats
 - [Tax & Business Billing](./docs/tax.md) - Automatic tax calculation and VAT/tax ID collection
 - [API Reference](./docs/reference.md) - Full API documentation

@@ -133,6 +133,23 @@ await billing.subscriptions.get(userId: string): Promise<Subscription | null>
 
 // List all subscriptions
 await billing.subscriptions.list(userId: string): Promise<Subscription[]>
+
+// Check payment status (for showing warnings in UI)
+await billing.subscriptions.getPaymentStatus(userId: string): Promise<SubscriptionPaymentStatus>
+```
+
+```typescript
+type SubscriptionPaymentStatus = {
+  status: "ok" | "past_due" | "unpaid" | "no_subscription";
+  failedInvoice?: {
+    id: string;
+    amountDue: number;
+    currency: string;
+    attemptCount: number;
+    nextPaymentAttempt: Date | null;
+    hostedInvoiceUrl: string | null;  // Direct link for user to pay
+  };
+};
 ```
 
 ```typescript
@@ -188,6 +205,15 @@ await billing.credits.getHistory(userId: string, options?: {
 
 // Check for saved payment method
 await billing.credits.hasPaymentMethod(userId: string): Promise<boolean>
+
+// Check if auto top-up is blocked (and why)
+await billing.credits.getAutoTopUpStatus(userId: string, creditType: string): Promise<AutoTopUpStatus | null>
+
+// Unblock auto top-up after user updates payment method
+await billing.credits.unblockAutoTopUp(userId: string, creditType: string): Promise<void>
+
+// Unblock all auto top-ups for user
+await billing.credits.unblockAllAutoTopUps(userId: string): Promise<void>
 ```
 
 ### Write
@@ -276,6 +302,22 @@ const billing = new Billing({
     onSubscriptionCancelled?: (subscription: Stripe.Subscription) => void,
     onSubscriptionRenewed?: (subscription: Stripe.Subscription) => void,
 
+    onSubscriptionPaymentFailed?: (params: {
+      userId: string,
+      stripeCustomerId: string,
+      subscriptionId: string,
+      invoiceId: string,
+      amountDue: number,
+      currency: string,
+      stripeDeclineCode?: string,
+      failureMessage?: string,
+      attemptCount: number,
+      nextPaymentAttempt: Date | null,  // null if final attempt
+      willRetry: boolean,
+      planName?: string,
+      priceId: string,
+    }) => void,
+
     onCreditsGranted?: (params: {
       userId: string,
       creditType: string,
@@ -313,9 +355,15 @@ const billing = new Billing({
 
     onAutoTopUpFailed?: (params: {
       userId: string,
+      stripeCustomerId: string,
       creditType: string,
-      reason: "no_payment_method" | "payment_failed" | "monthly_limit_reached" | "unexpected_error",
-      error?: string,
+      trigger: "stripe_declined_payment" | "waiting_for_retry_cooldown"
+             | "blocked_until_card_updated" | "no_payment_method"
+             | "monthly_limit_reached" | "unexpected_error",
+      status: "will_retry" | "action_required",
+      nextAttemptAt?: Date,
+      failureCount: number,
+      stripeDeclineCode?: string,
     }) => void,
   },
 });

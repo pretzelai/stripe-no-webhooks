@@ -120,10 +120,20 @@ if (result.success) {
   // Credits added, card charged
 } else if (result.error?.recoveryUrl) {
   // No card or payment failed - redirect to Stripe Checkout
-  // to manually purchase credits by putting in a new card
   return redirect(result.error.recoveryUrl);
 }
 ```
+
+### Auto Top-Up Failure Handling
+
+When auto top-ups are enabled, the library automatically:
+- **Rate-limits retries** - Waits 24h before retrying soft declines (insufficient funds)
+- **Stops after 3 failures** - Blocks auto top-up until user updates their card
+- **Distinguishes decline types** - Hard declines (expired card) block immediately
+
+This protects your users' cards from being flagged for fraud by card networks.
+
+Use `onAutoTopUpFailed` to notify users when their card needs attention. See [Payment Failures](./payment-failures.md) for the complete guide.
 
 ### Top-Up Payment Mode
 
@@ -355,13 +365,12 @@ export const billing = new Billing({
     onCreditsGranted: ({ userId, creditType, amount }) => {},
     onCreditsRevoked: ({ userId, creditType, amount }) => {},
     onCreditsLow: ({ userId, creditType, balance, threshold }) => {},
-    onTopUpCompleted: ({
-      userId,
-      creditType,
-      creditsAdded,
-      amountCharged,
-    }) => {},
-    onAutoTopUpFailed: ({ userId, creditType, reason }) => {},
+    onTopUpCompleted: ({ userId, creditType, creditsAdded, amountCharged }) => {},
+    onAutoTopUpFailed: ({ userId, creditType, trigger, status }) => {
+      // trigger: "stripe_declined_payment" | "blocked_until_card_updated" | ...
+      // status: "will_retry" | "action_required"
+      // See docs/payment-failures.md for full details
+    },
   },
 });
 ```
