@@ -2,7 +2,6 @@ import type Stripe from "stripe";
 import type { Pool } from "pg";
 import type { BillingConfig, Plan, PriceInterval, CreditConfig } from "../BillingConfig";
 import type { TransactionSource } from "./types";
-import { CreditError } from "./types";
 import { credits } from "./index";
 import { getActiveSeatUsers, getCreditsGrantedBySource, checkIdempotencyKeyPrefix } from "./db";
 import {
@@ -402,14 +401,10 @@ export function createCreditLifecycle(config: Config) {
         // Grant/reset credits to all active seat users
         const seatUsers = await getActiveSeatUsers(subscription.id);
         for (const userId of seatUsers) {
-          // Check if already processed for this user
+          // Check if already processed for this user - return gracefully to avoid webhook retry loops
           const alreadyProcessed = await checkIdempotencyKeyPrefix(`renewal_${invoiceId}_${userId}`);
           if (alreadyProcessed) {
-            throw new CreditError(
-              "IDEMPOTENCY_CONFLICT",
-              "Operation already processed",
-              { idempotencyKey: `renewal_${invoiceId}_${userId}` }
-            );
+            continue; // Skip this user, already processed
           }
           await grantOrResetCreditsForUser(
             userId,
@@ -427,14 +422,10 @@ export function createCreditLifecycle(config: Config) {
       const userId = await resolveUserId(subscription);
       if (!userId) return;
 
-      // Check if already processed - BEFORE any revokes to ensure full idempotency
+      // Check if already processed - return gracefully to avoid webhook retry loops
       const alreadyProcessed = await checkIdempotencyKeyPrefix(invoiceId);
       if (alreadyProcessed) {
-        throw new CreditError(
-          "IDEMPOTENCY_CONFLICT",
-          "Operation already processed",
-          { idempotencyKey: invoiceId }
-        );
+        return; // Already processed, nothing to do
       }
 
       for (const [creditType, creditConfig] of Object.entries(plan.credits)) {

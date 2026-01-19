@@ -293,6 +293,17 @@ export function createTopUpHandler(deps: {
       },
       success_url: successUrl,
       cancel_url: cancelUrl,
+      // Tax support for B2B mode
+      ...(tax?.automaticTax && {
+        automatic_tax: { enabled: true },
+      }),
+      ...(tax?.taxIdCollection && {
+        tax_id_collection: { enabled: true },
+      }),
+      // customer_update is required when automaticTax or taxIdCollection is enabled
+      ...((tax?.automaticTax || tax?.taxIdCollection) && {
+        customer_update: { address: "auto", name: "auto" },
+      }),
     });
 
     if (!session.url) {
@@ -305,10 +316,13 @@ export function createTopUpHandler(deps: {
   }
 
   /**
-   * Try to create a recovery checkout, returning undefined if it fails.
-   * This prevents recovery checkout errors from masking the original payment error.
+   * Create a recovery URL for failed top-ups.
+   * Always uses Checkout sessions (even for B2B) because:
+   * - Checkout saves the new card via setup_future_usage
+   * - Checkout has success_url for redirect back to app
+   * - Checkout supports automatic_tax for B2B users
    */
-  async function tryCreateRecoveryCheckout(
+  async function tryCreateRecoveryUrl(
     customerId: string,
     creditType: string,
     amount: number,
@@ -323,96 +337,6 @@ export function createTopUpHandler(deps: {
         totalCents,
         currency
       );
-    } catch (err) {
-      // Log but don't throw - we still want to return the original error
-      console.error("Failed to create recovery checkout:", err);
-      return undefined;
-    }
-  }
-
-  /**
-   * B2B Recovery: Create a hosted invoice URL for customers without payment method.
-   * The customer can pay via Stripe's hosted invoice page.
-   */
-  async function createRecoveryInvoice(
-    customerId: string,
-    creditType: string,
-    amount: number,
-    totalCents: number,
-    currency: string,
-    userId: string,
-    displayName: string
-  ): Promise<string> {
-    // Create invoice FIRST, then add items to it (prevents items going to subscription)
-    const invoice = await stripe.invoices.create({
-      customer: customerId,
-      collection_method: "send_invoice",
-      days_until_due: 7,
-      pending_invoice_items_behavior: "exclude",
-      // Enable automatic tax if configured
-      ...(tax?.automaticTax && { automatic_tax: { enabled: true } }),
-      metadata: {
-        top_up_credit_type: creditType,
-        top_up_amount: String(amount),
-        user_id: userId,
-      },
-    });
-
-    // Add invoice item to this specific invoice
-    // Use unit_amount_decimal + quantity for proper invoice display (e.g., "50 x $0.10")
-    const unitAmount = Math.round(totalCents / amount);
-    await stripe.invoiceItems.create({
-      customer: customerId,
-      invoice: invoice.id,
-      unit_amount_decimal: String(unitAmount),
-      quantity: amount,
-      currency,
-      description: `${displayName} (credit top-up)`,
-    });
-
-    // Finalize to get hosted URL
-    const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
-
-    if (!finalizedInvoice.hosted_invoice_url) {
-      throw new CreditError("INVOICE_ERROR", "Failed to get invoice URL");
-    }
-
-    return finalizedInvoice.hosted_invoice_url;
-  }
-
-  /**
-   * Try to create a recovery URL, returning undefined if it fails.
-   * Uses invoice URL for B2B mode, checkout session for B2C mode.
-   */
-  async function tryCreateRecoveryUrl(
-    customerId: string,
-    creditType: string,
-    amount: number,
-    totalCents: number,
-    currency: string,
-    userId: string,
-    displayName: string
-  ): Promise<string | undefined> {
-    try {
-      if (useInvoices) {
-        return await createRecoveryInvoice(
-          customerId,
-          creditType,
-          amount,
-          totalCents,
-          currency,
-          userId,
-          displayName
-        );
-      } else {
-        return await createRecoveryCheckout(
-          customerId,
-          creditType,
-          amount,
-          totalCents,
-          currency
-        );
-      }
     } catch (err) {
       console.error("Failed to create recovery URL:", err);
       return undefined;
@@ -600,9 +524,7 @@ export function createTopUpHandler(deps: {
         creditType,
         amount,
         totalCents,
-        currency,
-        userId,
-        displayName
+        currency
       );
       return {
         success: false,
@@ -680,7 +602,8 @@ export function createTopUpHandler(deps: {
           return {
             success: true,
             balance: newBalance,
-            charged: { amountCents: totalCents, currency },
+            // Use amount_paid which includes tax for B2B mode
+            charged: { amountCents: paidInvoice.amount_paid, currency },
             sourceId: paidInvoice.id,
           };
         }
@@ -692,9 +615,7 @@ export function createTopUpHandler(deps: {
           creditType,
           amount,
           totalCents,
-          currency,
-          userId,
-          displayName
+          currency
         );
         return {
           success: false,
@@ -749,9 +670,7 @@ export function createTopUpHandler(deps: {
           creditType,
           amount,
           totalCents,
-          currency,
-          userId,
-          displayName
+          currency
         );
         return {
           success: false,
@@ -768,38 +687,40 @@ export function createTopUpHandler(deps: {
         code?: string;
         message?: string;
       };
-      const isCardError = stripeError.type === "card_error";
-      const isInvalidRequest = stripeError.type === "invalid_request_error";
-      const errorCode = stripeError.code;
+      const isDevError =
+        stripeError.type === "invalid_request_error" ||
+        stripeError.type === "authentication_error";
       const message = stripeError.message || "Payment failed";
 
-      // For card errors (declined, insufficient funds), offer recovery
-      if (isCardError) {
-        const recoveryUrl = await tryCreateRecoveryUrl(
-          customer.id,
-          creditType,
-          amount,
-          totalCents,
-          currency,
-          userId,
-          displayName
-        );
+      // Dev errors (invalid params, bad API key) - no recovery, fix the code
+      if (isDevError) {
         return {
           success: false,
           error: {
-            code: "PAYMENT_FAILED",
+            code:
+              stripeError.type === "invalid_request_error"
+                ? "INVALID_AMOUNT"
+                : "PAYMENT_FAILED",
             message,
-            recoveryUrl,
           },
         };
       }
 
-      // Invalid request or other Stripe error - return without recovery URL
+      // All other errors (card decline, bank failure, network issue, etc.)
+      // Offer recovery URL so user can complete purchase with different method
+      const recoveryUrl = await tryCreateRecoveryUrl(
+        customer.id,
+        creditType,
+        amount,
+        totalCents,
+        currency
+      );
       return {
         success: false,
         error: {
-          code: isInvalidRequest ? "INVALID_AMOUNT" : "PAYMENT_FAILED",
-          message: errorCode ? `${errorCode}: ${message}` : message,
+          code: "PAYMENT_FAILED",
+          message,
+          recoveryUrl,
         },
       };
     }
@@ -891,7 +812,7 @@ export function createTopUpHandler(deps: {
     // Clear any failure record on successful payment
     // This handles the "processing" -> "succeeded" path
     if (userId && creditType) {
-      await db.clearTopUpFailure(userId, creditType);
+      await db.unblockAutoTopUp(userId, creditType);
     }
   }
 
@@ -1016,7 +937,7 @@ export function createTopUpHandler(deps: {
     });
 
     // Clear any failure record - recovery checkout succeeded
-    await db.clearTopUpFailure(userId, creditType);
+    await db.unblockAutoTopUp(userId, creditType);
   }
 
   /**
@@ -1072,7 +993,7 @@ export function createTopUpHandler(deps: {
 
       // Clear any failure record on successful payment
       if (userId && creditType) {
-        await db.clearTopUpFailure(userId, creditType);
+        await db.unblockAutoTopUp(userId, creditType);
       }
     } catch (err) {
       // Idempotency conflict = already granted inline, which is expected
@@ -1111,7 +1032,11 @@ export function createTopUpHandler(deps: {
       return { triggered: false, reason: "user_not_found" };
     }
 
-    const subscription = await getActiveSubscription(customer.id);
+    // Capture values for use in nested functions (TypeScript narrowing doesn't flow through)
+    const customerId = customer.id;
+    const customerDefaultPM = customer.defaultPaymentMethod;
+
+    const subscription = await getActiveSubscription(customerId);
     if (!subscription) {
       return { triggered: false, reason: "no_subscription" };
     }
@@ -1152,13 +1077,13 @@ export function createTopUpHandler(deps: {
     }
 
     // Check for existing failure record (cooldown/disabled)
-    const failure = await db.getTopUpFailure(userId, creditType);
+    const failure = await db.getAutoTopUpStatus(userId, creditType);
     if (failure?.disabled) {
       // Hard decline or escalated soft decline (3+ failures) - blocked permanently
       if (failure.declineType === "hard" || failure.failureCount >= 3) {
         await onAutoTopUpFailed?.({
           userId,
-          stripeCustomerId: customer.id,
+          stripeCustomerId: customerId,
           creditType,
           trigger: "blocked_until_card_updated",
           status: "action_required",
@@ -1174,7 +1099,7 @@ export function createTopUpHandler(deps: {
       if (new Date() < cooldownEnd) {
         await onAutoTopUpFailed?.({
           userId,
-          stripeCustomerId: customer.id,
+          stripeCustomerId: customerId,
           creditType,
           trigger: "waiting_for_retry_cooldown",
           status: "will_retry",
@@ -1198,10 +1123,10 @@ export function createTopUpHandler(deps: {
       threshold: balanceThreshold,
     });
 
-    if (!customer.defaultPaymentMethod) {
+    if (!customerDefaultPM) {
       await onAutoTopUpFailed?.({
         userId,
-        stripeCustomerId: customer.id,
+        stripeCustomerId: customerId,
         creditType,
         trigger: "no_payment_method",
         status: "action_required",
@@ -1217,7 +1142,7 @@ export function createTopUpHandler(deps: {
     if (autoTopUpsThisMonth >= maxPerMonth) {
       await onAutoTopUpFailed?.({
         userId,
-        stripeCustomerId: customer.id,
+        stripeCustomerId: customerId,
         creditType,
         trigger: "monthly_limit_reached",
         status: "will_retry", // Resets next month
@@ -1237,7 +1162,7 @@ export function createTopUpHandler(deps: {
     const yearMonth = `${now.getUTCFullYear()}-${String(
       now.getUTCMonth() + 1
     ).padStart(2, "0")}`;
-    const pmSuffix = customer.defaultPaymentMethod?.slice(-8) ?? "nopm";
+    const pmSuffix = customerDefaultPM.slice(-8);
     const idempotencyKey = `auto_topup_${userId}_${creditType}_${yearMonth}_${
       autoTopUpsThisMonth + 1
     }_${pmSuffix}`;
@@ -1256,7 +1181,7 @@ export function createTopUpHandler(deps: {
       const failureRecord = await db.recordTopUpFailure({
         userId,
         creditType,
-        paymentMethodId: customer!.defaultPaymentMethod,
+        paymentMethodId: customerDefaultPM,
         declineType,
         declineCode: declineCode ?? null,
       });
@@ -1273,7 +1198,7 @@ export function createTopUpHandler(deps: {
 
       await onAutoTopUpFailed?.({
         userId,
-        stripeCustomerId: customer!.id,
+        stripeCustomerId: customerId,
         creditType,
         trigger: "stripe_declined_payment",
         status: isActionRequired ? "action_required" : "will_retry",
@@ -1295,7 +1220,7 @@ export function createTopUpHandler(deps: {
     async function handlePaymentSuccess(): Promise<void> {
       // Clear any existing failure record on success
       if (failure) {
-        await db.clearTopUpFailure(userId, creditType);
+        await db.unblockAutoTopUp(userId, creditType);
       }
     }
 
@@ -1306,7 +1231,7 @@ export function createTopUpHandler(deps: {
         // to prevent items going to subscription's upcoming invoice
         const invoice = await stripe.invoices.create(
           {
-            customer: customer.id,
+            customer: customerId,
             auto_advance: false,
             pending_invoice_items_behavior: "exclude",
             // Enable automatic tax if configured
@@ -1325,7 +1250,7 @@ export function createTopUpHandler(deps: {
         // Use unit_amount_decimal + quantity for proper invoice display
         await stripe.invoiceItems.create(
           {
-            customer: customer.id,
+            customer: customerId,
             invoice: invoice.id,
             unit_amount_decimal: String(pricePerCreditCents),
             quantity: purchaseAmount,
@@ -1370,8 +1295,8 @@ export function createTopUpHandler(deps: {
           {
             amount: totalCents,
             currency,
-            customer: customer.id,
-            payment_method: customer.defaultPaymentMethod,
+            customer: customerId,
+            payment_method: customerDefaultPM,
             confirm: true,
             off_session: true,
             metadata: {
@@ -1482,7 +1407,7 @@ export function createTopUpHandler(deps: {
 
     // Payment method changed - clear all failures for this user
     // (they've taken action to fix their payment method)
-    await db.clearAllTopUpFailuresForUser(userId);
+    await db.unblockAllAutoTopUps(userId);
   }
 
   return {

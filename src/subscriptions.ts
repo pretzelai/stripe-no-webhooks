@@ -1,3 +1,4 @@
+import type Stripe from "stripe";
 import type { Pool } from "pg";
 import type { BillingConfig } from "./BillingConfig";
 import { getStripeCustomerId } from "./helpers";
@@ -25,6 +26,18 @@ export interface Subscription {
   cancelAtPeriodEnd: boolean;
 }
 
+export interface SubscriptionPaymentStatus {
+  status: "ok" | "past_due" | "unpaid" | "no_subscription";
+  failedInvoice?: {
+    id: string;
+    amountDue: number;
+    currency: string;
+    attemptCount: number;
+    nextPaymentAttempt: Date | null;
+    hostedInvoiceUrl: string | null;
+  };
+}
+
 interface SubscriptionRow {
   id: string;
   status: SubscriptionStatus;
@@ -42,12 +55,13 @@ interface SubscriptionRow {
 }
 
 export function createSubscriptionsApi(deps: {
+  stripe?: Stripe;
   pool: Pool | null;
   schema: string;
   billingConfig?: BillingConfig;
   mode: "test" | "production";
 }) {
-  const { pool, schema, billingConfig, mode } = deps;
+  const { stripe, pool, schema, billingConfig, mode } = deps;
 
   function resolvePlanFromPriceId(priceId: string): { id: string; name: string } | null {
     const plans = billingConfig?.[mode]?.plans;
@@ -154,5 +168,66 @@ export function createSubscriptionsApi(deps: {
     return result.rows.map(rowToSubscription);
   }
 
-  return { isActive, get, list };
+  /**
+   * Get the payment status for a user's subscription.
+   * Returns 'ok' if payments are current, or details about failed payments.
+   */
+  async function getPaymentStatus(
+    userId: string
+  ): Promise<SubscriptionPaymentStatus> {
+    const subscription = await get(userId);
+
+    if (!subscription) {
+      return { status: "no_subscription" };
+    }
+
+    if (
+      subscription.status === "active" ||
+      subscription.status === "trialing"
+    ) {
+      return { status: "ok" };
+    }
+
+    if (
+      subscription.status === "past_due" ||
+      subscription.status === "unpaid"
+    ) {
+      // Try to get failed invoice details from Stripe API
+      if (stripe) {
+        try {
+          const invoices = await stripe.invoices.list({
+            subscription: subscription.id,
+            status: "open",
+            limit: 1,
+          });
+
+          const failedInvoice = invoices.data[0];
+          if (failedInvoice) {
+            return {
+              status: subscription.status,
+              failedInvoice: {
+                id: failedInvoice.id,
+                amountDue: failedInvoice.amount_due,
+                currency: failedInvoice.currency,
+                attemptCount: failedInvoice.attempt_count ?? 1,
+                nextPaymentAttempt: failedInvoice.next_payment_attempt
+                  ? new Date(failedInvoice.next_payment_attempt * 1000)
+                  : null,
+                hostedInvoiceUrl: failedInvoice.hosted_invoice_url ?? null,
+              },
+            };
+          }
+        } catch {
+          // Fall through to return status without invoice details
+        }
+      }
+
+      return { status: subscription.status };
+    }
+
+    // Other statuses (canceled, incomplete, etc.) - treat as no active subscription
+    return { status: "no_subscription" };
+  }
+
+  return { isActive, get, list, getPaymentStatus };
 }

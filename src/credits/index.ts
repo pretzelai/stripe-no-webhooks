@@ -5,10 +5,10 @@ import {
   getAllBalances,
   hasCredits,
   getHistory,
-  clearTopUpFailure,
-  clearAllTopUpFailuresForUser,
-  getTopUpFailure,
-  type TopUpFailureRecord,
+  unblockAutoTopUp,
+  unblockAllAutoTopUps,
+  getAutoTopUpStatus,
+  type AutoTopUpStatus,
 } from "./db";
 import {
   consume,
@@ -26,7 +26,7 @@ export type {
   TransactionType,
   TransactionSource,
 } from "./types";
-export type { TopUpFailureRecord };
+export type { AutoTopUpStatus };
 
 export function initCredits(pool: Pool | null, schema = "stripe") {
   setPool(pool, schema);
@@ -43,8 +43,8 @@ export const credits = {
   revokeAllCreditTypesForUser,
   setBalance,
   getHistory,
-  // Top-up failure management
-  resetTopUpFailure: clearTopUpFailure,
-  resetAllTopUpFailures: clearAllTopUpFailuresForUser,
-  getTopUpFailure,
+  // Auto top-up management
+  getAutoTopUpStatus,
+  unblockAutoTopUp,
+  unblockAllAutoTopUps,
 };

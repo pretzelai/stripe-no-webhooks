@@ -90,13 +90,18 @@ This will create the products/prices in Stripe and update your config with their
 
 ### 5. Update your billing client
 
-Specify how to get the `userId` in the `resolveUser` function. For example, with Clerk:
+Update `lib/billing.ts` to specify how to get the `userId` in the `resolveUser` function. For example, with Clerk:
 
 ```typescript
-import { billing } from "@/lib/billing";
+// lib/billing.ts
+import { Billing } from "stripe-no-webhooks";
 import { auth } from "@clerk/nextjs/server"; // or your auth library
+import billingConfig from "../billing.config";
 
-export const POST = billing.createHandler({
+export const billing = new Billing({
+  billingConfig,
+  successUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+  cancelUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
   resolveUser: async () => {
     const { userId } = await auth();
     return userId ? { id: userId } : null;
@@ -104,7 +109,19 @@ export const POST = billing.createHandler({
 });
 ```
 
-There are many other options you can specify for the createHandler function. See [API Reference](./docs/reference.md) for more details.
+Then your route handler is zero-config:
+
+```typescript
+// app/api/stripe/[...all]/route.ts
+import { billing } from "@/lib/billing";
+
+const handler = billing.createHandler();
+
+export const POST = handler;
+export const GET = handler;
+```
+
+See [API Reference](./docs/reference.md) for more options.
 
 ### 6. Test your setup
 

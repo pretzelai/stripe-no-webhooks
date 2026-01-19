@@ -461,7 +461,7 @@ export async function getCreditsGrantedBySource(
 
 // Top-up failure tracking
 
-export type TopUpFailureRecord = {
+export type AutoTopUpStatus = {
   userId: string;
   creditType: string;
   paymentMethodId: string | null;
@@ -472,10 +472,10 @@ export type TopUpFailureRecord = {
   disabled: boolean;
 };
 
-export async function getTopUpFailure(
+export async function getAutoTopUpStatus(
   userId: string,
   creditType: string
-): Promise<TopUpFailureRecord | null> {
+): Promise<AutoTopUpStatus | null> {
   const p = ensurePool();
   const result = await p.query(
     `SELECT user_id, credit_type, payment_method_id, decline_type, decline_code,
@@ -504,7 +504,7 @@ export async function recordTopUpFailure(params: {
   paymentMethodId: string | null;
   declineType: "hard" | "soft";
   declineCode: string | null;
-}): Promise<TopUpFailureRecord> {
+}): Promise<AutoTopUpStatus> {
   const { userId, creditType, paymentMethodId, declineType, declineCode } =
     params;
   const p = ensurePool();
@@ -538,7 +538,7 @@ export async function recordTopUpFailure(params: {
   };
 }
 
-export async function clearTopUpFailure(
+export async function unblockAutoTopUp(
   userId: string,
   creditType: string
 ): Promise<void> {
@@ -549,7 +549,7 @@ export async function clearTopUpFailure(
   );
 }
 
-export async function clearAllTopUpFailuresForUser(
+export async function unblockAllAutoTopUps(
   userId: string
 ): Promise<void> {
   const p = ensurePool();

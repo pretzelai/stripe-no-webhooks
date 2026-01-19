@@ -1,9 +1,13 @@
 import type Stripe from "stripe";
+import type { Pool } from "pg";
 import type { StripeSync } from "@pretzelai/stripe-sync-engine";
 import type { StripeWebhookCallbacks } from "../types";
 import type { CreditLifecycle } from "../credits/lifecycle";
 import type { TopUpHandler } from "../credits/topup";
-import { getCustomerIdFromSubscription } from "../helpers";
+import {
+  getCustomerIdFromSubscription,
+  getUserIdFromStripeCustomer,
+} from "../helpers";
 
 export interface WebhookContext {
   stripe: Stripe;
@@ -12,6 +16,8 @@ export interface WebhookContext {
   creditLifecycle: CreditLifecycle;
   topUpHandler: TopUpHandler;
   callbacks?: StripeWebhookCallbacks;
+  pool: Pool | null;
+  schema: string;
 }
 
 export async function handleWebhook(
@@ -90,9 +96,10 @@ async function handleDuplicateSubscriptions(
   subscription: Stripe.Subscription
 ): Promise<boolean> {
   const customerId = getCustomerIdFromSubscription(subscription);
+  // Don't filter by status in API - fetch all and filter locally
+  // This catches both active and trialing duplicates
   const allSubs = await ctx.stripe.subscriptions.list({
     customer: customerId,
-    status: "active",
     limit: 10,
   });
   const activeSubs = allSubs.data.filter(
@@ -411,6 +418,80 @@ async function handleEvent(
 
       // Clear top-up failures if payment method changed
       await ctx.topUpHandler.handleCustomerUpdated(customer, previousAttributes);
+      break;
+    }
+
+    case "invoice.payment_failed": {
+      const invoice = event.data.object as Stripe.Invoice;
+
+      // Only handle subscription invoices (not top-ups or other invoice types)
+      const subscriptionId = invoice.subscription;
+      if (!subscriptionId || !invoice.customer) break;
+
+      // Look up userId from our mapping table
+      const customerId =
+        typeof invoice.customer === "string"
+          ? invoice.customer
+          : invoice.customer.id;
+      const userId = await getUserIdFromStripeCustomer(
+        ctx.pool,
+        ctx.schema,
+        customerId
+      );
+      if (!userId) {
+        console.warn(
+          `No userId found for customer ${customerId} in invoice.payment_failed`
+        );
+        break;
+      }
+
+      // Get decline code from payment intent
+      let declineCode: string | undefined;
+      let failureMessage: string | undefined;
+      if (invoice.payment_intent) {
+        const piId =
+          typeof invoice.payment_intent === "string"
+            ? invoice.payment_intent
+            : invoice.payment_intent.id;
+        try {
+          const pi = await ctx.stripe.paymentIntents.retrieve(piId);
+          declineCode = pi.last_payment_error?.decline_code ?? undefined;
+          failureMessage = pi.last_payment_error?.message ?? undefined;
+        } catch (err) {
+          console.warn("Could not retrieve PaymentIntent for decline code:", err);
+        }
+      }
+
+      // Get subscription details for plan context
+      const subId =
+        typeof subscriptionId === "string" ? subscriptionId : subscriptionId.id;
+      let priceId = "";
+      let planName: string | undefined;
+      try {
+        const subscription = await ctx.stripe.subscriptions.retrieve(subId);
+        priceId = subscription.items.data[0]?.price?.id ?? "";
+        planName = subscription.items.data[0]?.price?.nickname ?? undefined;
+      } catch (err) {
+        console.warn("Could not retrieve subscription for plan context:", err);
+      }
+
+      await ctx.callbacks?.onSubscriptionPaymentFailed?.({
+        userId,
+        stripeCustomerId: customerId,
+        subscriptionId: subId,
+        invoiceId: invoice.id,
+        amountDue: invoice.amount_due,
+        currency: invoice.currency,
+        stripeDeclineCode: declineCode,
+        failureMessage,
+        attemptCount: invoice.attempt_count ?? 1,
+        nextPaymentAttempt: invoice.next_payment_attempt
+          ? new Date(invoice.next_payment_attempt * 1000)
+          : null,
+        willRetry: invoice.next_payment_attempt !== null,
+        planName,
+        priceId,
+      });
       break;
     }
   }

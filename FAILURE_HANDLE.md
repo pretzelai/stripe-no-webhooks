@@ -9,6 +9,7 @@ This document outlines failure modes in the credit top-up system and the impleme
 | 1. Recovery checkout doesn't save payment method | ✅ Implemented | Add `setup_future_usage`, update default in webhook |
 | 2. No way to proactively update payment method | ✅ Already solved | Use Stripe Customer Portal (`manageSubscription()`) |
 | 3. No auto top-up cooldown after failure | ✅ Implemented | Failure tracking, hard/soft classification, 24h cooldown |
+| 4. No subscription payment failure callback | ✅ Implemented | Add `onSubscriptionPaymentFailed` callback, `getPaymentStatus()` API |
 
 ---
 
@@ -277,20 +278,145 @@ onAutoTopUpFailed: async (params) => {
 |---------|-----|
 | Payment method changes | Webhook detects new `default_payment_method` different from `payment_method_id` in failure record |
 | Successful payment | Webhook: `payment_intent.succeeded` or `invoice.paid` clears failure state |
-| Manual reset | `billing.credits.resetTopUpFailure(userId, creditType)` |
+| Manual reset | `billing.credits.unblockAutoTopUp(userId, creditType)` |
 
-#### 6. Manual Reset API
+#### 6. Management API
 
 ```typescript
-// Reset failure for specific credit type
-await billing.credits.resetTopUpFailure(userId, creditType);
+// Check if auto top-up is blocked and why
+const status = await billing.credits.getAutoTopUpStatus(userId, creditType);
 
-// Reset all failures for user
-await billing.credits.resetAllTopUpFailures(userId);
+// Unblock auto top-up for a specific credit type (allow retry)
+await billing.credits.unblockAutoTopUp(userId, creditType);
 
-// Get current failure record
-const failure = await billing.credits.getTopUpFailure(userId, creditType);
+// Unblock all auto top-ups for user (all credit types)
+await billing.credits.unblockAllAutoTopUps(userId);
 ```
+
+---
+
+## Problem 4: No Subscription Payment Failure Callback
+
+### Analysis
+
+The library has comprehensive failure handling for **top-ups** but lacks equivalent support for **subscription** payment failures.
+
+**Payment types (after implementation):**
+
+| Type | Failure Detection | Developer Notification | Recovery Path |
+|------|-------------------|------------------------|---------------|
+| Auto top-up | ✅ Full tracking | ✅ `onAutoTopUpFailed` | ✅ `/recovery` endpoint |
+| On-demand top-up | ✅ Sync result | ✅ Returns `recoveryUrl` | ✅ Checkout session |
+| Subscription | ✅ `getPaymentStatus()` | ✅ `onSubscriptionPaymentFailed` | ✅ `/recovery` + hosted invoice URL |
+
+**What happens when a subscription payment fails:**
+1. Stripe sends `invoice.payment_failed` webhook
+2. The library syncs the data (stripe-sync-engine) but doesn't notify the developer
+3. Stripe handles dunning automatically (retry schedule, automatic emails)
+4. Developer has no way to know unless they poll subscription status
+
+**What developers might want to do on subscription failure:**
+- Send custom branded email (not Stripe's generic dunning emails)
+- Show warning banner in their app UI ("Your subscription payment failed")
+- Downgrade user immediately vs waiting for dunning to exhaust
+- Log/track internally for analytics
+- Trigger internal alerts (Slack, PagerDuty, etc.)
+
+### Mitigating Factors
+
+- Stripe's built-in dunning is good (configurable retry schedule, automatic emails)
+- Subscription status IS queryable via `billing.subscriptions.get()` → check for `past_due`
+- Customer Portal handles payment method updates
+- Most apps rely on Stripe's default behavior and it works fine
+
+### Gap: Missing Callbacks
+
+**Needed:**
+
+1. `onSubscriptionPaymentFailed` - when subscription invoice payment fails
+   - Triggered by: `invoice.payment_failed` where invoice is for a subscription
+   - Should include: userId, subscription info, invoice info, decline code, dunning status
+
+2. `onSubscriptionPastDue` - when subscription enters past_due status (optional, could be derived from #1)
+
+### Implemented Solution
+
+#### 1. Callback Type
+
+```typescript
+onSubscriptionPaymentFailed?: (params: {
+  userId: string;
+  stripeCustomerId: string;
+  subscriptionId: string;
+  invoiceId: string;
+  amountDue: number;
+  currency: string;
+  stripeDeclineCode?: string;
+  failureMessage?: string;
+  attemptCount: number;
+  nextPaymentAttempt: Date | null;  // null if final attempt
+  willRetry: boolean;
+  planName?: string;
+  priceId: string;
+}) => void | Promise<void>;
+```
+
+#### 2. Payment Status API
+
+```typescript
+const status = await billing.subscriptions.getPaymentStatus(userId);
+// Returns:
+// {
+//   status: 'ok' | 'past_due' | 'unpaid' | 'no_subscription';
+//   failedInvoice?: {
+//     id: string;
+//     amountDue: number;
+//     currency: string;
+//     attemptCount: number;
+//     nextPaymentAttempt: Date | null;
+//     hostedInvoiceUrl: string | null;  // Direct link to pay invoice
+//   };
+// }
+```
+
+#### 3. Recovery
+
+- **Customer Portal**: Use `/recovery` endpoint or `manageSubscription()` to update payment method
+- **Hosted Invoice URL**: Use `failedInvoice.hostedInvoiceUrl` to let user pay specific invoice directly
+
+#### 4. Example Usage
+
+```typescript
+callbacks: {
+  onSubscriptionPaymentFailed: async (params) => {
+    const recoveryUrl = `${APP_URL}/api/stripe/recovery?userId=${params.userId}`;
+
+    if (!params.willRetry) {
+      // Final attempt - urgent email
+      await sendEmail(params.userId, "Action required: Update payment method", {
+        message: "Your subscription will be cancelled if payment is not received.",
+        recoveryUrl,
+      });
+    } else {
+      // First/middle attempt - informative email
+      await sendEmail(params.userId, "Payment failed - we'll retry", {
+        message: `We'll retry on ${params.nextPaymentAttempt?.toLocaleDateString()}`,
+        recoveryUrl,
+      });
+    }
+  },
+}
+```
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/helpers.ts` | Added `getUserIdFromStripeCustomer()` for reverse customer lookup |
+| `src/types.ts` | Added `onSubscriptionPaymentFailed` callback type |
+| `src/handlers/webhook.ts` | Handle `invoice.payment_failed` event, updated `WebhookContext` |
+| `src/subscriptions.ts` | Added `getPaymentStatus()` method and `SubscriptionPaymentStatus` type |
+| `src/Billing.ts` | Pass pool/schema to webhook context, export new types |
 
 ---
 
@@ -324,18 +450,18 @@ const failure = await billing.credits.getTopUpFailure(userId, creditType);
 - New callback params: `AutoTopUpFailedCallbackParams` with `stripeCustomerId`, `trigger`, `status`, `nextAttemptAt`, `failureCount`, `stripeDeclineCode`
 
 **`src/credits/db.ts`:**
-- Added `TopUpFailureRecord` type
-- Added `getTopUpFailure(userId, creditType)`
-- Added `recordTopUpFailure(params)`
-- Added `clearTopUpFailure(userId, creditType)`
-- Added `clearAllTopUpFailuresForUser(userId)`
+- Added `AutoTopUpStatus` type
+- Added `getAutoTopUpStatus(userId, creditType)`
+- Added `recordTopUpFailure(params)` (internal)
+- Added `unblockAutoTopUp(userId, creditType)`
+- Added `unblockAllAutoTopUps(userId)`
 
 **`src/credits/index.ts`:**
-- Exports: `resetTopUpFailure`, `resetAllTopUpFailures`, `getTopUpFailure`
+- Exports: `getAutoTopUpStatus`, `unblockAutoTopUp`, `unblockAllAutoTopUps`
 
 **`src/Billing.ts`:**
 - Added `/recovery` GET endpoint (generates fresh portal URL)
-- Credits API exposes: `resetTopUpFailure`, `resetAllTopUpFailures`, `getTopUpFailure`
+- Credits API exposes: `getAutoTopUpStatus`, `unblockAutoTopUp`, `unblockAllAutoTopUps`
 - Updated callback type to use `AutoTopUpFailedCallbackParams`
 
 **`src/types.ts`:**
@@ -357,8 +483,8 @@ const failure = await billing.credits.getTopUpFailure(userId, creditType);
 
 **Test setup:**
 - Neon project: `gentle-glade-02710402` (snw-test)
-- Test customer: `cus_TnrVVJua556CZ1`
-- Test user: `user_38LYpQt1RmjfDTMZ3jJrplqnCtQ`
+- Test customer 1: `cus_TnrVVJua556CZ1` / `user_38LYpQt1RmjfDTMZ3jJrplqnCtQ` (auto top-up tests)
+- Test customer 2: `cus_TotJ4Nng6Eyggj` / `user_38TJwV7Mr3snhh1kGJ5eGAuSxhH` (on-demand top-up tests)
 
 **Tested scenarios:**
 
@@ -430,18 +556,20 @@ callbacks: {
 - [x] B2B (Invoice mode) soft decline → `status: will_retry`, failure recorded ✅
 - [x] B2B recovery → update payment method via portal, auto top-up succeeds ✅
 
-**On-demand top-up scenarios (B2C - PaymentIntent mode):**
-- [ ] On-demand `topUp()` with failing card → returns `recoveryUrl`
-- [ ] Recovery checkout completes → credits granted, new card saved as default
-
 **On-demand top-up scenarios (B2B - Invoice mode):**
-- [ ] On-demand `topUp()` with failing card → returns hosted invoice URL
-- [ ] Invoice paid → credits granted, new card saved as default
+- [x] On-demand `topUp()` with failing card → returns `recoveryUrl` (Checkout session, not hosted invoice) ✅
+- [x] Recovery checkout completes → credits granted, new card saved as default ✅
+- Note: B2B on-demand uses Checkout sessions for recovery (not hosted invoices) because Checkout supports `setup_future_usage` to save the new card
+
+**On-demand top-up scenarios (B2C - PaymentIntent mode):**
+- [x] On-demand `topUp()` with failing card → returns `recoveryUrl` ✅
+- [x] Recovery checkout completes → credits granted, new card saved as default ✅
+- Verified: PaymentIntent created (not Invoice), no invoice in customer portal, `source_id` is `pi_xxx`
 
 **Management APIs:**
-- [ ] Manual reset via `billing.credits.resetTopUpFailure()`
-- [ ] Manual reset all via `billing.credits.resetAllTopUpFailures()`
-- [ ] Get failure status via `billing.credits.getTopUpFailure()`
+- [x] Get status via `billing.credits.getAutoTopUpStatus()` ✅
+- [x] Unblock via `billing.credits.unblockAutoTopUp()` ✅
+- [x] Unblock all via `billing.credits.unblockAllAutoTopUps()` ✅ (same code path as single unblock)
 
 ### How to Resume Testing
 

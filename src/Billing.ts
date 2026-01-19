@@ -6,7 +6,7 @@ import {
   initCredits,
   credits,
   type ConsumeResult,
-  type TopUpFailureRecord,
+  type AutoTopUpStatus,
 } from "./credits";
 import {
   createCreditLifecycle,
@@ -31,6 +31,7 @@ import {
   createSubscriptionsApi,
   type Subscription,
   type SubscriptionStatus,
+  type SubscriptionPaymentStatus,
 } from "./subscriptions";
 
 import type {
@@ -52,7 +53,7 @@ export type {
   TopUpPending,
   AutoTopUpResult,
   AutoTopUpFailedCallbackParams,
-  TopUpFailureRecord,
+  AutoTopUpStatus,
   ConsumeResult,
   AddSeatParams,
   AddSeatResult,
@@ -60,6 +61,7 @@ export type {
   RemoveSeatResult,
   Subscription,
   SubscriptionStatus,
+  SubscriptionPaymentStatus,
 };
 export type {
   User,
@@ -92,6 +94,8 @@ export class Billing {
   private readonly creditsConfig?: StripeConfig["credits"];
   private readonly callbacks?: StripeConfig["callbacks"];
   private readonly tax: TaxConfig;
+  private readonly resolveUser?: StripeConfig["resolveUser"];
+  private readonly resolveOrg?: StripeConfig["resolveOrg"];
 
   constructor(config: StripeConfig = {}) {
     const {
@@ -106,6 +110,8 @@ export class Billing {
       callbacks,
       mapUserIdToStripeCustomerId,
       tax,
+      resolveUser,
+      resolveOrg,
     } = config;
 
     this.stripe = new Stripe(stripeSecretKey);
@@ -123,6 +129,8 @@ export class Billing {
     this.creditsConfig = creditsConfig;
     this.callbacks = callbacks;
     this.tax = tax ?? {};
+    this.resolveUser = resolveUser;
+    this.resolveOrg = resolveOrg;
 
     initCredits(this.pool, this.schema);
 
@@ -136,6 +144,7 @@ export class Billing {
       : null;
 
     this.subscriptions = createSubscriptionsApi({
+      stripe: this.stripe,
       pool: this.pool,
       schema: this.schema,
       billingConfig: this.billingConfig,
@@ -255,6 +264,20 @@ export class Billing {
       onCreditsLow: callbacks?.onCreditsLow,
     });
 
+    // Helper to look up Stripe customer ID for error callbacks
+    const getStripeCustomerId = async (userId: string): Promise<string> => {
+      if (!this.pool) return "";
+      try {
+        const result = await this.pool.query(
+          `SELECT stripe_customer_id FROM ${this.schema}.user_stripe_customer_map WHERE user_id = $1`,
+          [userId]
+        );
+        return result.rows[0]?.stripe_customer_id ?? "";
+      } catch {
+        return "";
+      }
+    };
+
     const consumeCredits = async (params: {
       userId: string;
       creditType: string;
@@ -272,12 +295,13 @@ export class Billing {
             creditType: params.creditType,
             currentBalance: result.balance,
           })
-          .catch((err) => {
+          .catch(async (err) => {
             console.error("Auto top-up error:", err);
-            // For unexpected errors, we don't have stripeCustomerId
+            // Look up the customer ID for the callback
+            const stripeCustomerId = await getStripeCustomerId(params.userId);
             callbacks?.onAutoTopUpFailed?.({
               userId: params.userId,
-              stripeCustomerId: "",
+              stripeCustomerId,
               creditType: params.creditType,
               trigger: "unexpected_error",
               status: "action_required",
@@ -301,19 +325,23 @@ export class Billing {
       getHistory: credits.getHistory,
       topUp: topUpHandler.topUp,
       hasPaymentMethod: topUpHandler.hasPaymentMethod,
-      // Top-up failure management
-      resetTopUpFailure: credits.resetTopUpFailure,
-      resetAllTopUpFailures: credits.resetAllTopUpFailures,
-      getTopUpFailure: credits.getTopUpFailure,
+      // Auto top-up management
+      getAutoTopUpStatus: credits.getAutoTopUpStatus,
+      unblockAutoTopUp: credits.unblockAutoTopUp,
+      unblockAllAutoTopUps: credits.unblockAllAutoTopUps,
     };
   }
 
   createHandler(handlerConfig: HandlerConfig = {}) {
     const {
-      resolveUser,
-      resolveOrg,
+      resolveUser: handlerResolveUser,
+      resolveOrg: handlerResolveOrg,
       callbacks: handlerCallbacks,
     } = handlerConfig;
+
+    // Use handler-level overrides if provided, otherwise use instance-level
+    const resolveUser = handlerResolveUser ?? this.resolveUser;
+    const resolveOrg = handlerResolveOrg ?? this.resolveOrg;
 
     // Merge callbacks: handler-level overrides instance-level
     const callbacks = { ...this.callbacks, ...handlerCallbacks };
@@ -377,6 +405,8 @@ export class Billing {
       creditLifecycle,
       topUpHandler,
       callbacks,
+      pool: this.pool,
+      schema: this.schema,
     };
 
     return async (request: Request): Promise<Response> => {

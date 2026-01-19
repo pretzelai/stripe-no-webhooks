@@ -29,6 +29,22 @@ export interface StripeWebhookCallbacks {
     previousPriceId: string
   ) => void | Promise<void>;
 
+  onSubscriptionPaymentFailed?: (params: {
+    userId: string;
+    stripeCustomerId: string;
+    subscriptionId: string;
+    invoiceId: string;
+    amountDue: number;
+    currency: string;
+    stripeDeclineCode?: string;
+    failureMessage?: string;
+    attemptCount: number;
+    nextPaymentAttempt: Date | null;
+    willRetry: boolean;
+    planName?: string;
+    priceId: string;
+  }) => void | Promise<void>;
+
   onCreditsGranted?: (params: {
     userId: string;
     creditType: string;
@@ -172,20 +188,49 @@ export interface StripeConfig {
    */
   tax?: TaxConfig;
 
+  /**
+   * Resolve the current user from an incoming request.
+   * Used by the HTTP handler to determine who is making the request.
+   * @example
+   * resolveUser: async (req) => {
+   *   const session = await auth(); // Your auth library
+   *   return session?.user ? { id: session.user.id, email: session.user.email } : null;
+   * }
+   */
+  resolveUser?: (
+    request: Request
+  ) => User | Promise<User> | null | Promise<User | null>;
+
+  /**
+   * Resolve the organization ID from an incoming request (optional).
+   * Used for multi-tenant setups where subscriptions are per-organization.
+   */
+  resolveOrg?: (
+    request: Request
+  ) => string | Promise<string> | null | Promise<string | null>;
+
   mapUserIdToStripeCustomerId?: (
     userId: string
   ) => string | Promise<string> | null | Promise<string | null>;
 }
 
+/**
+ * Optional overrides for createHandler().
+ * Most config should be set in the Billing constructor.
+ * Use this only if you need route-specific overrides.
+ */
 export interface HandlerConfig {
+  /** Override resolveUser for this handler (rarely needed) */
   resolveUser?: (
     request: Request
   ) => User | Promise<User> | null | Promise<User | null>;
 
+  /** Override resolveOrg for this handler (rarely needed) */
   resolveOrg?: (
     request: Request
   ) => string | Promise<string> | null | Promise<string | null>;
 
+  /** Override callbacks for this handler (rarely needed) */
   callbacks?: StripeWebhookCallbacks;
 }
 

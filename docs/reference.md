@@ -16,6 +16,13 @@ const billing = new Billing({
   billingConfig: BillingConfig,
   successUrl: string,
   cancelUrl: string,
+
+  // REQUIRED: Resolve authenticated user from request
+  resolveUser: (request: Request) => User | null | Promise<User | null>,
+
+  // OPTIONAL: Resolve org for team/org billing
+  resolveOrg: (request: Request) => string | null | Promise<string | null>,
+
   credits: {
     grantTo: "subscriber" | "organization" | "seat-users" | "manual",
   },
@@ -47,15 +54,21 @@ billing.getPlans()  // Returns plans for current mode
 ## Handler
 
 ```typescript
-// Create HTTP handler with request-specific config
+// Create HTTP handler - typically zero-config since resolveUser is on Billing instance
+const handler = billing.createHandler();
+
+export const POST = handler;
+export const GET = handler;
+
+// Or with optional overrides (rarely needed)
 export const POST = billing.createHandler({
-  // REQUIRED: Resolve authenticated user from request
+  // Override resolveUser for this specific handler
   resolveUser: (request: Request) => User | null | Promise<User | null>,
 
-  // OPTIONAL: Resolve org for team/org billing
+  // Override resolveOrg for this specific handler
   resolveOrg: (request: Request) => string | null | Promise<string | null>,
 
-  // OPTIONAL: Override instance-level callbacks (prefer defining on Billing instance)
+  // Override callbacks for this specific handler
   callbacks: StripeWebhookCallbacks,
 });
 
@@ -67,7 +80,7 @@ type User = {
 };
 ```
 
-Callbacks can be defined either on the `Billing` instance (recommended) or in `createHandler()`. Handler-level callbacks override instance-level ones.
+All config should be defined on the `Billing` instance. Handler-level overrides are only needed for special cases (e.g., different auth for a specific route).
 
 ## Routes
 

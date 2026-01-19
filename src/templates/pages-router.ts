@@ -2,33 +2,9 @@
 import { billing } from "@/lib/billing";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-// TODO: Import your auth library - see some examples below
-// import { currentUser } from "@clerk/nextjs/server";
-// import { auth } from "@/lib/auth";
-
-const handler = billing.createHandler({
-  // REQUIRED: Return { id, email?, name? } or null if not authenticated
-  // Email/name are used when creating a new Stripe customer
-  resolveUser: async (request) => {
-    // Clerk (Pages Router - requires clerkMiddleware):
-    // const user = await currentUser();
-    // if (!user) return null;
-    // return { id: user.id, email: user.emailAddresses[0]?.emailAddress, name: user.fullName ?? undefined };
-
-    // Better Auth:
-    // const session = await auth.api.getSession({ headers: request.headers });
-    // if (!session?.user) return null;
-    // return { id: session.user.id, email: session.user.email, name: session.user.name };
-
-    return null; // TODO: Replace with your auth
-  },
-
-  // OPTIONAL: Resolve org for team/org billing
-  // resolveOrg: async () => {
-  //   const session = await getSession(req);
-  //   return session.currentOrgId ?? null;
-  // },
-});
+// All config (resolveUser, callbacks, etc.) is in lib/billing.ts
+// This handler just exposes the API routes
+const handler = billing.createHandler();
 
 // Disable body parsing, we need the raw body for webhook verification
 export const config = {
