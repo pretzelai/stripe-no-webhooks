@@ -506,7 +506,7 @@ async function setupWebhooks(options = {}) {
     Stripe,
   } = options;
 
-  const siteUrl = env.NEXT_PUBLIC_SITE_URL || "";
+  const siteUrl = env.NEXT_PUBLIC_APP_URL || "";
   const isLocal = !siteUrl || isLocalhost(siteUrl);
 
   divider();

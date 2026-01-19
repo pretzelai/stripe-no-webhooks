@@ -180,12 +180,12 @@ async function init(options = {}) {
 
   console.log();
 
-  // NEXT_PUBLIC_SITE_URL
+  // NEXT_PUBLIC_APP_URL
   console.log(
     `${COLORS.cyan}┌────────────────────────────────────────────────────────────┐${RESET}`
   );
   console.log(
-    `${COLORS.cyan}│${RESET}  ${BOLD}NEXT_PUBLIC_SITE_URL${RESET}                                      ${COLORS.cyan}│${RESET}`
+    `${COLORS.cyan}│${RESET}  ${BOLD}NEXT_PUBLIC_APP_URL${RESET}                                       ${COLORS.cyan}│${RESET}`
   );
   console.log(
     `${COLORS.cyan}│${RESET}  ${DIM}Your app's base URL (e.g., http://localhost:3000 for local)${RESET}${COLORS.cyan}│${RESET}`
@@ -194,9 +194,9 @@ async function init(options = {}) {
     `${COLORS.cyan}└────────────────────────────────────────────────────────────┘${RESET}`
   );
 
-  let siteUrl = env.NEXT_PUBLIC_SITE_URL || "";
+  let siteUrl = env.NEXT_PUBLIC_APP_URL || "";
   if (siteUrl) {
-    success(`NEXT_PUBLIC_SITE_URL already configured`);
+    success(`NEXT_PUBLIC_APP_URL already configured`);
   } else {
     const rl = createPrompt();
     siteUrl = await question(
@@ -206,8 +206,8 @@ async function init(options = {}) {
     );
     rl.close();
     if (siteUrl) {
-      envVars.push({ key: "NEXT_PUBLIC_SITE_URL", value: siteUrl });
-      success("NEXT_PUBLIC_SITE_URL saved");
+      envVars.push({ key: "NEXT_PUBLIC_APP_URL", value: siteUrl });
+      success("NEXT_PUBLIC_APP_URL saved");
     }
   }
 

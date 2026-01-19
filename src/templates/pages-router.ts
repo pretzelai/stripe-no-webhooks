@@ -18,9 +18,10 @@ export default async function stripeHandler(
   res: NextApiResponse
 ) {
   // Convert NextApiRequest to Request for the handler
+  // bodyParser is disabled, so we read the raw body for webhook signature verification
   const body = await new Promise<string>((resolve) => {
     let data = "";
-    req.on("data", (chunk: string) => (data += chunk));
+    req.on("data", (chunk: Buffer) => (data += chunk.toString()));
     req.on("end", () => resolve(data));
   });
 
