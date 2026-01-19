@@ -140,7 +140,7 @@ export async function revokeAll(params: {
   description?: string;
   metadata?: Record<string, unknown>;
 }): Promise<{ previousBalance: number; amountRevoked: number }> {
-  const currentBalance = await db.getBalance(params.userId, params.creditType);
+  const currentBalance = await db.getBalance({ userId: params.userId, creditType: params.creditType });
 
   if (currentBalance === 0) {
     return { previousBalance: 0, amountRevoked: 0 };
@@ -164,7 +164,7 @@ export async function revokeAllCreditTypesForUser(params: {
 }): Promise<
   Record<string, { previousBalance: number; amountRevoked: number }>
 > {
-  const allBalances = await db.getAllBalances(params.userId);
+  const allBalances = await db.getAllBalances({ userId: params.userId });
   const results: Record<
     string,
     { previousBalance: number; amountRevoked: number }

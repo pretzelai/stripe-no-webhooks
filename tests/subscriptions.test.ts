@@ -67,7 +67,7 @@ describe("Subscriptions API", () => {
 
   describe("isActive", () => {
     it("returns false for non-existent user", async () => {
-      const result = await subscriptions.isActive("unknown_user");
+      const result = await subscriptions.isActive({ userId: "unknown_user" });
       expect(result).toBe(false);
     });
 
@@ -75,7 +75,7 @@ describe("Subscriptions API", () => {
       await seedCustomer({ id: "cus_nosub" });
       await seedUserMap({ userId: "user_nosub", stripeCustomerId: "cus_nosub" });
 
-      const result = await subscriptions.isActive("user_nosub");
+      const result = await subscriptions.isActive({ userId: "user_nosub" });
       expect(result).toBe(false);
     });
 
@@ -90,7 +90,7 @@ describe("Subscriptions API", () => {
         status: "active",
       });
 
-      const result = await subscriptions.isActive("user_active");
+      const result = await subscriptions.isActive({ userId: "user_active" });
       expect(result).toBe(true);
     });
 
@@ -105,7 +105,7 @@ describe("Subscriptions API", () => {
         status: "trialing",
       });
 
-      const result = await subscriptions.isActive("user_trial");
+      const result = await subscriptions.isActive({ userId: "user_trial" });
       expect(result).toBe(true);
     });
 
@@ -120,7 +120,7 @@ describe("Subscriptions API", () => {
         status: "canceled",
       });
 
-      const result = await subscriptions.isActive("user_canceled");
+      const result = await subscriptions.isActive({ userId: "user_canceled" });
       expect(result).toBe(false);
     });
 
@@ -135,19 +135,19 @@ describe("Subscriptions API", () => {
         status: "past_due",
       });
 
-      const result = await subscriptions.isActive("user_pastdue");
+      const result = await subscriptions.isActive({ userId: "user_pastdue" });
       expect(result).toBe(false);
     });
   });
 
   describe("get", () => {
     it("returns null for non-existent user", async () => {
-      const result = await subscriptions.get("unknown_user");
+      const result = await subscriptions.get({ userId: "unknown_user" });
       expect(result).toBeNull();
     });
 
     it("returns null for user without customer mapping", async () => {
-      const result = await subscriptions.get("user_no_mapping");
+      const result = await subscriptions.get({ userId: "user_no_mapping" });
       expect(result).toBeNull();
     });
 
@@ -155,7 +155,7 @@ describe("Subscriptions API", () => {
       await seedCustomer({ id: "cus_nosub" });
       await seedUserMap({ userId: "user_nosub", stripeCustomerId: "cus_nosub" });
 
-      const result = await subscriptions.get("user_nosub");
+      const result = await subscriptions.get({ userId: "user_nosub" });
       expect(result).toBeNull();
     });
 
@@ -176,7 +176,7 @@ describe("Subscriptions API", () => {
         currentPeriodEnd: periodEnd,
       });
 
-      const result = await subscriptions.get("user_sub");
+      const result = await subscriptions.get({ userId: "user_sub" });
 
       expect(result).not.toBeNull();
       expect(result!.id).toBe("sub_get");
@@ -214,7 +214,7 @@ describe("Subscriptions API", () => {
         currentPeriodEnd: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
       });
 
-      const result = await subscriptions.get("user_multi");
+      const result = await subscriptions.get({ userId: "user_multi" });
 
       expect(result).not.toBeNull();
       expect(result!.id).toBe("sub_current_active");
@@ -245,7 +245,7 @@ describe("Subscriptions API", () => {
         currentPeriodEnd: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
       });
 
-      const result = await subscriptions.get("user_both_canceled");
+      const result = await subscriptions.get({ userId: "user_both_canceled" });
 
       expect(result).not.toBeNull();
       expect(result!.id).toBe("sub_recent");
@@ -262,7 +262,7 @@ describe("Subscriptions API", () => {
         status: "active",
       });
 
-      const result = await subscriptions.get("user_unknown_plan");
+      const result = await subscriptions.get({ userId: "user_unknown_plan" });
 
       expect(result).not.toBeNull();
       expect(result!.plan).toBeNull();
@@ -271,7 +271,7 @@ describe("Subscriptions API", () => {
 
   describe("list", () => {
     it("returns empty array for non-existent user", async () => {
-      const result = await subscriptions.list("unknown_user");
+      const result = await subscriptions.list({ userId: "unknown_user" });
       expect(result).toEqual([]);
     });
 
@@ -279,7 +279,7 @@ describe("Subscriptions API", () => {
       await seedCustomer({ id: "cus_nosubs" });
       await seedUserMap({ userId: "user_nosubs", stripeCustomerId: "cus_nosubs" });
 
-      const result = await subscriptions.list("user_nosubs");
+      const result = await subscriptions.list({ userId: "user_nosubs" });
       expect(result).toEqual([]);
     });
 
@@ -305,7 +305,7 @@ describe("Subscriptions API", () => {
         currentPeriodEnd: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
       });
 
-      const result = await subscriptions.list("user_manysubs");
+      const result = await subscriptions.list({ userId: "user_manysubs" });
 
       expect(result.length).toBe(2);
       // Should be ordered by period_end DESC
@@ -335,7 +335,7 @@ describe("Subscriptions API", () => {
         currentPeriodEnd: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
       });
 
-      const result = await subscriptions.list("user_plans");
+      const result = await subscriptions.list({ userId: "user_plans" });
 
       const proSub = result.find(s => s.id === "sub_pro");
       const basicSub = result.find(s => s.id === "sub_basic");
@@ -354,7 +354,7 @@ describe("Subscriptions API", () => {
         mode: "test",
       });
 
-      const result = await nopoolSubs.isActive("any_user");
+      const result = await nopoolSubs.isActive({ userId: "any_user" });
       expect(result).toBe(false);
     });
 
@@ -366,7 +366,7 @@ describe("Subscriptions API", () => {
         mode: "test",
       });
 
-      const result = await nopoolSubs.get("any_user");
+      const result = await nopoolSubs.get({ userId: "any_user" });
       expect(result).toBeNull();
     });
 
@@ -378,7 +378,7 @@ describe("Subscriptions API", () => {
         mode: "test",
       });
 
-      const result = await nopoolSubs.list("any_user");
+      const result = await nopoolSubs.list({ userId: "any_user" });
       expect(result).toEqual([]);
     });
   });
@@ -402,7 +402,7 @@ describe("Subscriptions API", () => {
         status: "active",
       });
 
-      const result = await noconfigSubs.get("user_noconfig");
+      const result = await noconfigSubs.get({ userId: "user_noconfig" });
 
       expect(result).not.toBeNull();
       expect(result!.plan).toBeNull();

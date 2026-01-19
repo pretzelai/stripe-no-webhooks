@@ -139,7 +139,7 @@ export type AutoTopUpFailedCallbackParams = {
 
 export type TopUpHandler = {
   topUp: (params: TopUpParams) => Promise<TopUpResult>;
-  hasPaymentMethod: (userId: string) => Promise<boolean>;
+  hasPaymentMethod: (params: { userId: string }) => Promise<boolean>;
   triggerAutoTopUpIfNeeded: (params: {
     userId: string;
     creditType: string;
@@ -388,7 +388,7 @@ export function createTopUpHandler(deps: {
         grantErr instanceof CreditError &&
         grantErr.code === "IDEMPOTENCY_CONFLICT"
       ) {
-        newBalance = await credits.getBalance(userId, creditType);
+        newBalance = await credits.getBalance({ userId, creditType });
         alreadyGranted = true;
       } else {
         throw grantErr;
@@ -768,7 +768,7 @@ export function createTopUpHandler(deps: {
         grantErr instanceof CreditError &&
         grantErr.code === "IDEMPOTENCY_CONFLICT"
       ) {
-        newBalance = await credits.getBalance(userId, creditType);
+        newBalance = await credits.getBalance({ userId, creditType });
         alreadyGranted = true;
       } else {
         throw grantErr;
@@ -812,7 +812,7 @@ export function createTopUpHandler(deps: {
     // Clear any failure record on successful payment
     // This handles the "processing" -> "succeeded" path
     if (userId && creditType) {
-      await db.unblockAutoTopUp(userId, creditType);
+      await db.unblockAutoTopUp({ userId, creditType });
     }
   }
 
@@ -937,7 +937,7 @@ export function createTopUpHandler(deps: {
     });
 
     // Clear any failure record - recovery checkout succeeded
-    await db.unblockAutoTopUp(userId, creditType);
+    await db.unblockAutoTopUp({ userId, creditType });
   }
 
   /**
@@ -993,7 +993,7 @@ export function createTopUpHandler(deps: {
 
       // Clear any failure record on successful payment
       if (userId && creditType) {
-        await db.unblockAutoTopUp(userId, creditType);
+        await db.unblockAutoTopUp({ userId, creditType });
       }
     } catch (err) {
       // Idempotency conflict = already granted inline, which is expected
@@ -1006,7 +1006,8 @@ export function createTopUpHandler(deps: {
 
   // utility function so that the user can check if their customer has a payment method on file
   // useful for conditionally showing a top-up button
-  async function hasPaymentMethod(userId: string): Promise<boolean> {
+  async function hasPaymentMethod(params: { userId: string }): Promise<boolean> {
+    const { userId } = params;
     const customer = await getCustomerByUserId(userId);
     return !!customer?.defaultPaymentMethod;
   }
@@ -1077,7 +1078,7 @@ export function createTopUpHandler(deps: {
     }
 
     // Check for existing failure record (cooldown/disabled)
-    const failure = await db.getAutoTopUpStatus(userId, creditType);
+    const failure = await db.getAutoTopUpStatus({ userId, creditType });
     if (failure?.disabled) {
       // Hard decline or escalated soft decline (3+ failures) - blocked permanently
       if (failure.declineType === "hard" || failure.failureCount >= 3) {
@@ -1220,7 +1221,7 @@ export function createTopUpHandler(deps: {
     async function handlePaymentSuccess(): Promise<void> {
       // Clear any existing failure record on success
       if (failure) {
-        await db.unblockAutoTopUp(userId, creditType);
+        await db.unblockAutoTopUp({ userId, creditType });
       }
     }
 
@@ -1407,7 +1408,7 @@ export function createTopUpHandler(deps: {
 
     // Payment method changed - clear all failures for this user
     // (they've taken action to fix their payment method)
-    await db.unblockAllAutoTopUps(userId);
+    await db.unblockAllAutoTopUps({ userId });
   }
 
   return {

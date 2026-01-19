@@ -37,7 +37,7 @@ describe("Credit System", () => {
         sourceId: "sub_123",
       });
 
-      const balance = await credits.getBalance("user_1", "api_calls");
+      const balance = await credits.getBalance({ userId: "user_1", creditType: "api_calls" });
       expect(balance).toBe(1000);
     });
 
@@ -57,7 +57,7 @@ describe("Credit System", () => {
         sourceId: "topup_1",
       });
 
-      const balance = await credits.getBalance("user_1", "api_calls");
+      const balance = await credits.getBalance({ userId: "user_1", creditType: "api_calls" });
       expect(balance).toBe(800);
     });
 
@@ -77,8 +77,8 @@ describe("Credit System", () => {
         sourceId: "sub_123",
       });
 
-      const apiBalance = await credits.getBalance("user_1", "api_calls");
-      const storageBalance = await credits.getBalance("user_1", "storage_gb");
+      const apiBalance = await credits.getBalance({ userId: "user_1", creditType: "api_calls" });
+      const storageBalance = await credits.getBalance({ userId: "user_1", creditType: "storage_gb" });
 
       expect(apiBalance).toBe(1000);
       expect(storageBalance).toBe(50);
@@ -216,7 +216,7 @@ describe("Credit System", () => {
       });
 
       // Should have 0 balance
-      const balance = await credits.getBalance("user_1", "api_calls");
+      const balance = await credits.getBalance({ userId: "user_1", creditType: "api_calls" });
       expect(balance).toBe(0);
     });
   });
@@ -238,7 +238,7 @@ describe("Credit System", () => {
         reason: "Admin adjustment",
       });
 
-      const balance = await credits.getBalance("user_1", "api_calls");
+      const balance = await credits.getBalance({ userId: "user_1", creditType: "api_calls" });
       expect(balance).toBe(1000);
     });
 
@@ -250,14 +250,14 @@ describe("Credit System", () => {
         reason: "Initial grant",
       });
 
-      const balance = await credits.getBalance("user_1", "api_calls");
+      const balance = await credits.getBalance({ userId: "user_1", creditType: "api_calls" });
       expect(balance).toBe(500);
     });
   });
 
   describe("getBalance / getAllBalances / hasCredits", () => {
     test("getBalance returns 0 for non-existent user", async () => {
-      const balance = await credits.getBalance("nonexistent", "api_calls");
+      const balance = await credits.getBalance({ userId: "nonexistent", creditType: "api_calls" });
       expect(balance).toBe(0);
     });
 
@@ -277,7 +277,7 @@ describe("Credit System", () => {
         sourceId: "sub_123",
       });
 
-      const balances = await credits.getAllBalances("user_1");
+      const balances = await credits.getAllBalances({ userId: "user_1" });
       expect(balances).toEqual({
         api_calls: 1000,
         storage_gb: 50,
@@ -293,7 +293,7 @@ describe("Credit System", () => {
         sourceId: "sub_123",
       });
 
-      const has = await credits.hasCredits("user_1", "api_calls", 50);
+      const has = await credits.hasCredits({ userId: "user_1", creditType: "api_calls", amount: 50 });
       expect(has).toBe(true);
     });
 
@@ -306,7 +306,7 @@ describe("Credit System", () => {
         sourceId: "sub_123",
       });
 
-      const has = await credits.hasCredits("user_1", "api_calls", 50);
+      const has = await credits.hasCredits({ userId: "user_1", creditType: "api_calls", amount: 50 });
       expect(has).toBe(false);
     });
   });
@@ -333,7 +333,7 @@ describe("Credit System", () => {
         description: "Second request",
       });
 
-      const history = await credits.getHistory("user_1", { creditType: "api_calls" });
+      const history = await credits.getHistory({ userId: "user_1", creditType: "api_calls" });
 
       expect(history.length).toBe(3);
       // Most recent first
@@ -360,8 +360,8 @@ describe("Credit System", () => {
         sourceId: "sub_123",
       });
 
-      const apiHistory = await credits.getHistory("user_1", { creditType: "api_calls" });
-      const storageHistory = await credits.getHistory("user_1", { creditType: "storage_gb" });
+      const apiHistory = await credits.getHistory({ userId: "user_1", creditType: "api_calls" });
+      const storageHistory = await credits.getHistory({ userId: "user_1", creditType: "storage_gb" });
 
       expect(apiHistory.length).toBe(1);
       expect(storageHistory.length).toBe(1);
@@ -383,7 +383,7 @@ describe("Credit System", () => {
         sourceId: "sub_123",
       });
 
-      const allHistory = await credits.getHistory("user_1");
+      const allHistory = await credits.getHistory({ userId: "user_1" });
       expect(allHistory.length).toBe(2);
     });
 
@@ -399,8 +399,8 @@ describe("Credit System", () => {
         });
       }
 
-      const page1 = await credits.getHistory("user_1", { limit: 2 });
-      const page2 = await credits.getHistory("user_1", { limit: 2, offset: 2 });
+      const page1 = await credits.getHistory({ userId: "user_1", limit: 2 });
+      const page2 = await credits.getHistory({ userId: "user_1", limit: 2, offset: 2 });
 
       expect(page1.length).toBe(2);
       expect(page2.length).toBe(2);
@@ -534,7 +534,7 @@ describe("Credit System", () => {
       expect((error as CreditError).code).toBe("IDEMPOTENCY_CONFLICT");
 
       // Balance should only reflect first grant
-      expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+      expect(await credits.getBalance({ userId: "user_1", creditType: "api_calls" })).toBe(1000);
     });
 
     test("revoke with same idempotency key throws on second call", async () => {
@@ -571,7 +571,7 @@ describe("Credit System", () => {
       expect((error as CreditError).code).toBe("IDEMPOTENCY_CONFLICT");
 
       // Balance should only reflect first revoke
-      expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+      expect(await credits.getBalance({ userId: "user_1", creditType: "api_calls" })).toBe(500);
     });
 
     test("setBalance with same idempotency key throws on second call", async () => {
@@ -600,7 +600,7 @@ describe("Credit System", () => {
       expect((error as CreditError).code).toBe("IDEMPOTENCY_CONFLICT");
 
       // Balance should be from first call
-      expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+      expect(await credits.getBalance({ userId: "user_1", creditType: "api_calls" })).toBe(1000);
     });
 
     test("different idempotency keys allow multiple operations", async () => {
@@ -622,7 +622,7 @@ describe("Credit System", () => {
         idempotencyKey: "grant_b",
       });
 
-      expect(await credits.getBalance("user_1", "api_calls")).toBe(200);
+      expect(await credits.getBalance({ userId: "user_1", creditType: "api_calls" })).toBe(200);
     });
   });
 
@@ -647,7 +647,7 @@ describe("Credit System", () => {
 
       await Promise.all(promises);
 
-      expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+      expect(await credits.getBalance({ userId: "user_1", creditType: "api_calls" })).toBe(1000);
     });
 
     test("concurrent consumes respect balance", async () => {
@@ -680,7 +680,7 @@ describe("Credit System", () => {
 
       expect(successes).toBe(5);
       expect(failures).toBe(5);
-      expect(await credits.getBalance("user_1", "api_calls")).toBe(0);
+      expect(await credits.getBalance({ userId: "user_1", creditType: "api_calls" })).toBe(0);
     });
   });
 
@@ -708,7 +708,7 @@ describe("Credit System", () => {
 
       expect(result.amountRevoked).toBe(100);
       expect(result.balance).toBe(0);
-      expect(await credits.getBalance("user_1", "api_calls")).toBe(0);
+      expect(await credits.getBalance({ userId: "user_1", creditType: "api_calls" })).toBe(0);
     });
 
     test("ledger entries sum to current balance", async () => {
@@ -741,9 +741,9 @@ describe("Credit System", () => {
         source: "manual",
       });
 
-      const history = await credits.getHistory("user_1", { creditType: "api_calls" });
+      const history = await credits.getHistory({ userId: "user_1", creditType: "api_calls" });
       const ledgerSum = history.reduce((sum, tx) => sum + tx.amount, 0);
-      const balance = await credits.getBalance("user_1", "api_calls");
+      const balance = await credits.getBalance({ userId: "user_1", creditType: "api_calls" });
 
       // 1000 - 300 + 200 - 100 = 800
       expect(ledgerSum).toBe(800);

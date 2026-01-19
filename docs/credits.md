@@ -83,9 +83,9 @@ if (!result.success) {
 ## Check Balance
 
 ```typescript
-const balance = await billing.credits.getBalance("user_123", "api_calls");
-const allBalances = await billing.credits.getAllBalances("user_123");
-const hasEnough = await billing.credits.hasCredits("user_123", "api_calls", 10);
+const balance = await billing.credits.getBalance({ userId: "user_123", creditType: "api_calls" });
+const allBalances = await billing.credits.getAllBalances({ userId: "user_123" });
+const hasEnough = await billing.credits.hasCredits({ userId: "user_123", creditType: "api_calls", amount: 10 });
 ```
 
 ## Top-Ups
@@ -304,7 +304,7 @@ For custom dashboards, you need to scale the allocation yourself based on the bi
 import billingConfig from "@/billing.config";
 
 // Get subscription
-const subscription = await billing.subscriptions.get(userId);
+const subscription = await billing.subscriptions.get({ userId });
 const priceId = subscription?.plan?.priceId;
 
 // Find the plan and price to get the interval
@@ -314,7 +314,7 @@ const price = plan?.price.find(pr => pr.id === priceId);
 const interval = price?.interval ?? "month";
 
 // Get credit balance
-const balance = await billing.credits.getBalance(userId, "api_calls");
+const balance = await billing.credits.getBalance({ userId, creditType: "api_calls" });
 const baseAllocation = plan?.credits?.api_calls?.allocation ?? 0;
 
 // Scale allocation based on interval

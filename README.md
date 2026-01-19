@@ -170,14 +170,14 @@ On the server, check if a user has an active subscription and how many credits (
 import { billing } from "@/lib/billing";
 
 // Get the subscription
-const subscription = await billing.subscriptions.get(userId);
+const subscription = await billing.subscriptions.get({ userId });
 
 if (subscription?.status === "active") {
   // User has an active subscription
   console.log("Plan:", subscription.plan.name);
 
   // Check credits for a specific type (if enabled in your config)
-  const apiCredits = await billing.credits.getBalance(userId, "api_calls");
+  const apiCredits = await billing.credits.getBalance({ userId, creditType: "api_calls" });
   console.log("API credits remaining:", apiCredits);
 
   // Consume credits when user performs an action
@@ -200,7 +200,7 @@ When a user completes checkout:
 
 1. Stripe sends a webhook to your app
 2. The library receives it and syncs the data to your database. If credits are enabled, it will also update the credits balance
-3. `billing.subscriptions.get(userId)` now returns the subscription based on the Stripe data that's synced to your database
+3. `billing.subscriptions.get({ userId })` now returns the subscription based on the Stripe data that's synced to your database
 4. Credits are tracked automatically through a credit balance and a ledger of transactions via the library's internal APIs. These APIs are all idempotent and you don't have to worry about double counting or missing transactions
 
 You can verify this by checking your database's `stripe.subscriptions` and `stripe.credit_balances` and `stripe.credit_ledger` tables.

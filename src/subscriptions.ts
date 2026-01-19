@@ -93,7 +93,8 @@ export function createSubscriptionsApi(deps: {
   /**
    * Check if a user has an active subscription.
    */
-  async function isActive(userId: string): Promise<boolean> {
+  async function isActive(params: { userId: string }): Promise<boolean> {
+    const { userId } = params;
     if (!pool) return false;
 
     const customerId = await getStripeCustomerId(pool, schema, userId);
@@ -112,7 +113,8 @@ export function createSubscriptionsApi(deps: {
    * Get the current subscription for a user.
    * Returns the most recent active/trialing subscription, or most recent overall if none active.
    */
-  async function get(userId: string): Promise<Subscription | null> {
+  async function get(params: { userId: string }): Promise<Subscription | null> {
+    const { userId } = params;
     if (!pool) return null;
 
     const customerId = await getStripeCustomerId(pool, schema, userId);
@@ -150,7 +152,8 @@ export function createSubscriptionsApi(deps: {
   /**
    * List all subscriptions for a user.
    */
-  async function list(userId: string): Promise<Subscription[]> {
+  async function list(params: { userId: string }): Promise<Subscription[]> {
+    const { userId } = params;
     if (!pool) return [];
 
     const customerId = await getStripeCustomerId(pool, schema, userId);
@@ -172,10 +175,11 @@ export function createSubscriptionsApi(deps: {
    * Get the payment status for a user's subscription.
    * Returns 'ok' if payments are current, or details about failed payments.
    */
-  async function getPaymentStatus(
-    userId: string
-  ): Promise<SubscriptionPaymentStatus> {
-    const subscription = await get(userId);
+  async function getPaymentStatus(params: {
+    userId: string;
+  }): Promise<SubscriptionPaymentStatus> {
+    const { userId } = params;
+    const subscription = await get({ userId });
 
     if (!subscription) {
       return { status: "no_subscription" };

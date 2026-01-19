@@ -212,7 +212,7 @@ export function createSeatsApi(config: Config) {
 
       for (const [creditType, grantedAmount] of Object.entries(grantsFromSeat)) {
         if (grantedAmount > 0) {
-          const currentBalance = await credits.getBalance(creditHolder, creditType);
+          const currentBalance = await credits.getBalance({ userId: creditHolder, creditType });
           const amountToRevoke = Math.min(grantedAmount, currentBalance);
 
           if (amountToRevoke > 0) {

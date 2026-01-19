@@ -21,10 +21,11 @@ function ensurePool(): Pool {
   return pool;
 }
 
-export async function getBalance(
-  userId: string,
-  creditType: string
-): Promise<number> {
+export async function getBalance(params: {
+  userId: string;
+  creditType: string;
+}): Promise<number> {
+  const { userId, creditType } = params;
   const p = ensurePool();
   const result = await p.query(
     `SELECT balance FROM ${schema}.credit_balances WHERE user_id = $1 AND credit_type_id = $2`,
@@ -33,9 +34,10 @@ export async function getBalance(
   return result.rows.length > 0 ? Number(result.rows[0].balance) : 0;
 }
 
-export async function getAllBalances(
-  userId: string
-): Promise<Record<string, number>> {
+export async function getAllBalances(params: {
+  userId: string;
+}): Promise<Record<string, number>> {
+  const { userId } = params;
   const p = ensurePool();
   const result = await p.query(
     `SELECT credit_type_id, balance FROM ${schema}.credit_balances WHERE user_id = $1`,
@@ -48,12 +50,13 @@ export async function getAllBalances(
   return balances;
 }
 
-export async function hasCredits(
-  userId: string,
-  creditType: string,
-  amount: number
-): Promise<boolean> {
-  const balance = await getBalance(userId, creditType);
+export async function hasCredits(params: {
+  userId: string;
+  creditType: string;
+  amount: number;
+}): Promise<boolean> {
+  const { userId, creditType, amount } = params;
+  const balance = await getBalance({ userId, creditType });
   return balance >= amount;
 }
 
@@ -357,11 +360,13 @@ export async function atomicSet(
   }
 }
 
-export async function getHistory(
-  userId: string,
-  options?: { creditType?: string; limit?: number; offset?: number }
-): Promise<CreditTransaction[]> {
-  const { creditType, limit = 50, offset = 0 } = options ?? {};
+export async function getHistory(params: {
+  userId: string;
+  creditType?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<CreditTransaction[]> {
+  const { userId, creditType, limit = 50, offset = 0 } = params;
   const p = ensurePool();
 
   let query = `
@@ -370,19 +375,19 @@ export async function getHistory(
     FROM ${schema}.credit_ledger
     WHERE user_id = $1
   `;
-  const params: (string | number)[] = [userId];
+  const queryParams: (string | number)[] = [userId];
 
   if (creditType) {
     query += ` AND credit_type_id = $2`;
-    params.push(creditType);
+    queryParams.push(creditType);
   }
 
-  query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${
-    params.length + 2
+  query += ` ORDER BY created_at DESC LIMIT $${queryParams.length + 1} OFFSET $${
+    queryParams.length + 2
   }`;
-  params.push(limit, offset);
+  queryParams.push(limit, offset);
 
-  const result = await p.query(query, params);
+  const result = await p.query(query, queryParams);
 
   return result.rows.map((row) => ({
     id: row.id,
@@ -472,10 +477,11 @@ export type AutoTopUpStatus = {
   disabled: boolean;
 };
 
-export async function getAutoTopUpStatus(
-  userId: string,
-  creditType: string
-): Promise<AutoTopUpStatus | null> {
+export async function getAutoTopUpStatus(params: {
+  userId: string;
+  creditType: string;
+}): Promise<AutoTopUpStatus | null> {
+  const { userId, creditType } = params;
   const p = ensurePool();
   const result = await p.query(
     `SELECT user_id, credit_type, payment_method_id, decline_type, decline_code,
@@ -538,10 +544,11 @@ export async function recordTopUpFailure(params: {
   };
 }
 
-export async function unblockAutoTopUp(
-  userId: string,
-  creditType: string
-): Promise<void> {
+export async function unblockAutoTopUp(params: {
+  userId: string;
+  creditType: string;
+}): Promise<void> {
+  const { userId, creditType } = params;
   const p = ensurePool();
   await p.query(
     `DELETE FROM ${schema}.topup_failures WHERE user_id = $1 AND credit_type = $2`,
@@ -549,9 +556,10 @@ export async function unblockAutoTopUp(
   );
 }
 
-export async function unblockAllAutoTopUps(
-  userId: string
-): Promise<void> {
+export async function unblockAllAutoTopUps(params: {
+  userId: string;
+}): Promise<void> {
+  const { userId } = params;
   const p = ensurePool();
   await p.query(`DELETE FROM ${schema}.topup_failures WHERE user_id = $1`, [
     userId,

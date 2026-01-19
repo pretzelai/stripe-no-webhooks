@@ -14,7 +14,7 @@ Payments fail. Cards expire, get lost, or run out of funds. This guide covers ho
 
 When a subscription renewal fails (card declined, expired, etc.), Stripe:
 1. Sends automatic retry emails (configurable in Stripe Dashboard)
-2. Retries the payment according to your dunning schedule
+2. Retries the payment smartly and automatically (this is called "dunning")
 3. Eventually cancels the subscription if all retries fail
 
 ### Get Notified
@@ -30,7 +30,7 @@ const billing = new Billing({
 
       if (!params.willRetry) {
         // Final attempt failed - subscription will be canceled
-        await sendUrgentEmail(params.userId, "Update your payment method");
+        await sendEmail(params.userId, "Update your payment method", { recoveryUrl });
       }
     },
   },
@@ -42,7 +42,7 @@ const billing = new Billing({
 Show users when their subscription has payment issues:
 
 ```typescript
-const status = await billing.subscriptions.getPaymentStatus(userId);
+const status = await billing.subscriptions.getPaymentStatus({ userId });
 
 if (status.status === "past_due") {
   // Show warning banner
@@ -64,12 +64,15 @@ if (status.status === "past_due") {
 ```typescript
 // Generate recovery URL for emails
 const recoveryUrl = `${APP_URL}/api/stripe/recovery?userId=${userId}`;
+
+// Send email with recovery URL
+await sendEmail(userId, "Update your payment method", { recoveryUrl });
 ```
 
 **Option 2: Hosted Invoice URL** - User pays the specific failed invoice directly.
 
 ```typescript
-const status = await billing.subscriptions.getPaymentStatus(userId);
+const status = await billing.subscriptions.getPaymentStatus({ userId });
 const payUrl = status.failedInvoice?.hostedInvoiceUrl;
 ```
 
@@ -93,7 +96,11 @@ const result = await billing.credits.topUp({
 });
 
 if (!result.success && result.error?.recoveryUrl) {
-  // Redirect user to Stripe Checkout to enter a new card
+  // Here, you might want to show a message to the user
+  // that the payment failed and they need to update their payment method
+
+  // Then either automatically or on button click by the user, you should
+  // redirect the user to the Stripe Checkout page to enter a new card.
   return redirect(result.error.recoveryUrl);
 }
 ```
@@ -108,16 +115,18 @@ The `recoveryUrl` takes the user to a Stripe Checkout page where they can:
 Auto top-ups happen automatically when credits drop below a threshold. If the payment fails, the library:
 
 1. **Tracks failures** - Distinguishes between temporary issues (insufficient funds) and permanent ones (card expired)
-2. **Applies cooldowns** - Waits 24 hours before retrying soft declines to avoid hammering the card
+2. **Applies cooldowns** - Waits 24 hours before retrying "soft declines" (such as insufficient funds) to avoid hammering the card
 3. **Blocks after 3 failures** - Stops retrying until the user updates their payment method
 4. **Notifies you** - Fires `onAutoTopUpFailed` callback
 
 ### Why This Matters
 
-Without failure handling, a declined card would trigger a payment attempt on every API call. This causes:
+Without failure handling, a declined card would trigger a payment attempt on every credit consumption API call. This causes:
 - Card network violations (Visa/Mastercard have retry limits)
 - Potential fraud flags on the customer's card
 - Dozens of "payment failed" notifications to your user
+
+So, we track auto-top-up failures to avoid these issues.
 
 ### Get Notified
 
@@ -183,13 +192,14 @@ const billing = new Billing({
 
 ```typescript
 // Check if auto top-up is blocked
-const status = await billing.credits.getAutoTopUpStatus(userId, "api_calls");
+const status = await billing.credits.getAutoTopUpStatus({ userId, creditType: "api_calls" });
 if (status?.disabled) {
   // Show UI to update payment method
 }
 
-// Manually unblock (e.g., after user updates card via your own UI)
-await billing.credits.unblockAutoTopUp(userId, "api_calls");
+// Manually unblock (e.g., after user updates card via your own UI in case
+// you're not using the Stripe Customer Portal)
+await billing.credits.unblockAutoTopUp({ userId, creditType: "api_calls" });
 ```
 
 ## Recovery Endpoint

@@ -73,6 +73,21 @@ export async function setupTestDb(): Promise<Pool> {
       ON ${SCHEMA}.credit_ledger(source_id);
   `);
 
+  // Top-up failure tracking for cooldown logic
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${SCHEMA}.topup_failures (
+      user_id TEXT NOT NULL,
+      credit_type TEXT NOT NULL,
+      payment_method_id TEXT,
+      decline_type TEXT NOT NULL,
+      decline_code TEXT,
+      failure_count INTEGER DEFAULT 1,
+      last_failure_at TIMESTAMPTZ DEFAULT NOW(),
+      disabled BOOLEAN DEFAULT FALSE,
+      PRIMARY KEY (user_id, credit_type)
+    );
+  `);
+
   await client.end();
 
   // Create pool for tests
@@ -286,6 +301,7 @@ export async function cleanupAllTestData(): Promise<void> {
     TRUNCATE
       ${SCHEMA}.credit_balances,
       ${SCHEMA}.credit_ledger,
+      ${SCHEMA}.topup_failures,
       ${SCHEMA}.subscription_items,
       ${SCHEMA}.subscriptions,
       ${SCHEMA}.customers,
