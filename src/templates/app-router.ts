@@ -23,6 +23,10 @@ export const POST = billing.createHandler({
     return null; // TODO: Replace with your auth
   },
 
+  // OPTIONAL: Redirect to login page when user is not authenticated
+  // Useful if you are using PricingPage
+  // loginUrl: "/sign-in",
+
   // OPTIONAL: Resolve org for team/org billing
   // resolveOrg: async () => {
   //   const session = await getSession();

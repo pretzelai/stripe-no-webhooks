@@ -412,6 +412,7 @@ export class Billing {
     const {
       resolveUser,
       resolveOrg,
+      loginUrl,
       callbacks: handlerCallbacks,
     } = handlerConfig;
 
@@ -467,6 +468,7 @@ export class Billing {
       tax: taxConfig,
       resolveUser,
       resolveOrg,
+      loginUrl,
       resolveStripeCustomerId: this.resolveStripeCustomerId,
     };
 
