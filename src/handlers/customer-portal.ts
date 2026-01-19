@@ -12,6 +12,10 @@ export async function handleCustomerPortal(
 
     const user = ctx.resolveUser ? await ctx.resolveUser(request) : null;
     if (!user) {
+      if (ctx.loginUrl) {
+        const loginUrl = new URL(ctx.loginUrl, request.url).href;
+        return successResponse(request, { url: loginUrl }, loginUrl);
+      }
       return errorResponse(
         "Unauthorized. Configure resolveUser to extract authenticated user.",
         401

@@ -45,6 +45,7 @@ import { handleCheckout } from "./handlers/checkout";
 import { handleCustomerPortal } from "./handlers/customer-portal";
 import { handleWebhook } from "./handlers/webhook";
 import { handleBilling } from "./handlers/billing";
+import { getActiveSubscription } from "./helpers";
 
 export type { CreditsGrantTo };
 export type {
@@ -96,6 +97,7 @@ export class Billing {
   private readonly tax: TaxConfig;
   private readonly resolveUser?: StripeConfig["resolveUser"];
   private readonly resolveOrg?: StripeConfig["resolveOrg"];
+  private readonly loginUrl?: string;
 
   constructor(config: StripeConfig = {}) {
     const {
@@ -112,6 +114,7 @@ export class Billing {
       tax,
       resolveUser,
       resolveOrg,
+      loginUrl,
     } = config;
 
     this.stripe = new Stripe(stripeSecretKey);
@@ -131,6 +134,7 @@ export class Billing {
     this.tax = tax ?? {};
     this.resolveUser = resolveUser;
     this.resolveOrg = resolveOrg;
+    this.loginUrl = loginUrl;
 
     initCredits(this.pool, this.schema);
 
@@ -180,6 +184,114 @@ export class Billing {
    */
   getPlans() {
     return this.billingConfig?.[this.mode]?.plans || [];
+  }
+
+  /**
+   * Assign a user to a free plan if they don't already have a subscription.
+   * Call this when a user logs in to ensure they have access to the free plan.
+   *
+   * @param options.userId - The user ID to assign to the free plan
+   * @param options.planName - Name of the free plan (optional - auto-detects if only one free plan exists)
+   * @param options.interval - Billing interval for the free plan (default: "month")
+   * @returns The created subscription, or null if user already has a subscription
+   */
+  async assignFreePlan(options: {
+    userId: string;
+    planName?: string;
+    interval?: "month" | "year" | "week";
+  }): Promise<Stripe.Subscription | null> {
+    const { userId, planName, interval = "month" } = options;
+
+    if (!this.pool) {
+      throw new Error("Database connection required to assign free plan");
+    }
+
+    // Get or create Stripe customer
+    const customerId = await this.resolveStripeCustomerId({
+      user: { id: userId },
+      createIfNotFound: true,
+    });
+
+    if (!customerId) {
+      throw new Error("Failed to create Stripe customer");
+    }
+
+    // Check if user already has an active subscription
+    const existingSubscription = await getActiveSubscription(
+      this.stripe,
+      customerId
+    );
+
+    if (existingSubscription) {
+      // User already has a subscription, return null
+      return null;
+    }
+
+    // Find the free plan
+    const plans = this.billingConfig?.[this.mode]?.plans || [];
+    let freePlan;
+
+    if (planName) {
+      // If planName is provided, find that specific plan
+      freePlan = plans.find((p) => p.name === planName);
+      if (!freePlan) {
+        throw new Error(`Plan "${planName}" not found in billing config`);
+      }
+    } else {
+      // Auto-detect free plans (plans with at least one price with amount: 0)
+      const freePlans = plans.filter((p) =>
+        p.price.some((pr) => pr.amount === 0)
+      );
+
+      if (freePlans.length === 0) {
+        throw new Error(
+          "No free plan found in billing config. Define a plan with price amount: 0"
+        );
+      }
+
+      if (freePlans.length > 1) {
+        const freeNames = freePlans.map((p) => p.name).join(", ");
+        throw new Error(
+          `Multiple free plans found (${freeNames}). Please specify planName to choose which one to assign.`
+        );
+      }
+
+      freePlan = freePlans[0];
+    }
+
+    // Find a free price for the specified interval, or any free price
+    let price = freePlan.price.find(
+      (p) => p.interval === interval && p.amount === 0
+    );
+
+    // If no free price at the specified interval, try to find any free price
+    if (!price) {
+      price = freePlan.price.find((p) => p.amount === 0);
+    }
+
+    if (!price) {
+      throw new Error(
+        `No free price found for plan "${freePlan.name}". Ensure the plan has a price with amount: 0`
+      );
+    }
+
+    if (!price.id) {
+      throw new Error(
+        `Price ID not set for plan "${freePlan.name}" with interval "${price.interval}". Run stripe-sync to sync price IDs.`
+      );
+    }
+
+    // Create the subscription programmatically
+    const subscription = await this.stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: price.id }],
+      metadata: {
+        user_id: userId,
+        auto_assigned_free_plan: "true",
+      },
+    });
+
+    return subscription;
   }
 
   private resolveStripeCustomerId = async (options: {
@@ -342,6 +454,7 @@ export class Billing {
     // Use handler-level overrides if provided, otherwise use instance-level
     const resolveUser = handlerResolveUser ?? this.resolveUser;
     const resolveOrg = handlerResolveOrg ?? this.resolveOrg;
+    const loginUrl = this.loginUrl;
 
     // Merge callbacks: handler-level overrides instance-level
     const callbacks = { ...this.callbacks, ...handlerCallbacks };
@@ -395,6 +508,7 @@ export class Billing {
       tax: taxConfig,
       resolveUser,
       resolveOrg,
+      loginUrl,
       resolveStripeCustomerId: this.resolveStripeCustomerId,
     };
 

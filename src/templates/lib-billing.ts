@@ -1,6 +1,6 @@
 import { Billing } from "stripe-no-webhooks";
 import billingConfig from "../billing.config";
-// import type { Stripe } from "stripe";
+import type { Stripe } from "stripe";
 
 // TODO: Import your auth library - see some examples below
 // import { currentUser } from "@clerk/nextjs/server";
@@ -36,6 +36,20 @@ export const billing = new Billing({
     return null; // TODO: Replace with your auth
   },
 
+  // OPTIONAL: Add callbacks for subscription/credit events
+  // See full list of callbacks in docs/reference.md
+  callbacks: {
+    onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
+      console.log("New subscription:", subscription.id);
+    },
+    onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
+      console.log("Subscription cancelled:", subscription.id);
+    },
+    onCreditsGranted: ({ userId, creditType, amount }) => {
+      console.log(`Granted ${amount} ${creditType} to ${userId}`);
+    },
+  },
+
   // OPTIONAL: Resolve org for team/org billing
   // resolveOrg: async () => {
   //   const session = await getSession();
@@ -47,15 +61,5 @@ export const billing = new Billing({
   //   automaticTax: true,
   //   billingAddressCollection: "required",
   //   taxIdCollection: true,
-  // },
-
-  // OPTIONAL: Add callbacks for subscription/credit events
-  // callbacks: {
-  //   onSubscriptionCreated: async (subscription: Stripe.Subscription) => {
-  //     console.log("New subscription:", subscription.id);
-  //   },
-  //   onCreditsGranted: ({ userId, creditType, amount }) => {
-  //     console.log(`Granted ${amount} ${creditType} to ${userId}`);
-  //   },
   // },
 });

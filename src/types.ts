@@ -212,6 +212,12 @@ export interface StripeConfig {
   mapUserIdToStripeCustomerId?: (
     userId: string
   ) => string | Promise<string> | null | Promise<string | null>;
+
+  /**
+   * URL to redirect to when resolveUser returns null (user not logged in).
+   * If not set, handlers will return a 401 error response instead.
+   */
+  loginUrl?: string;
 }
 
 /**
@@ -263,6 +269,7 @@ export interface HandlerContext {
   tax: TaxConfig;
   resolveUser?: HandlerConfig["resolveUser"];
   resolveOrg?: HandlerConfig["resolveOrg"];
+  loginUrl?: string;
   resolveStripeCustomerId: (options: {
     user: User;
     createIfNotFound?: boolean;
