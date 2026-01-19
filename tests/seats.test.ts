@@ -162,8 +162,8 @@ describe("Seats: Add Seat (seat-users mode)", () => {
     }
 
     // Verify user has credits
-    const apiBalance = await credits.getBalance("user_alice", "api_calls");
-    const storageBalance = await credits.getBalance("user_alice", "storage_gb");
+    const apiBalance = await credits.getBalance({ userId: "user_alice", key: "api_calls" });
+    const storageBalance = await credits.getBalance({ userId: "user_alice", key: "storage_gb" });
     expect(apiBalance).toBe(5000);
     expect(storageBalance).toBe(50);
   });
@@ -185,9 +185,9 @@ describe("Seats: Add Seat (seat-users mode)", () => {
     await seatsApi.add({ userId: "user_carol", orgId: "org_1" });
 
     // Each user should have their own credits
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(5000);
-    expect(await credits.getBalance("user_bob", "api_calls")).toBe(5000);
-    expect(await credits.getBalance("user_carol", "api_calls")).toBe(5000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(5000);
+    expect(await credits.getBalance({ userId: "user_bob", key: "api_calls" })).toBe(5000);
+    expect(await credits.getBalance({ userId: "user_carol", key: "api_calls" })).toBe(5000);
   });
 
   test("idempotent: adding same seat twice returns success without double-granting", async () => {
@@ -210,7 +210,7 @@ describe("Seats: Add Seat (seat-users mode)", () => {
     expect(result2.success).toBe(true);
 
     // Should only have one allocation's worth of credits
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(5000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(5000);
   });
 
   test("fails if org has no Stripe customer", async () => {
@@ -302,8 +302,8 @@ describe("Seats: Add Seat (subscriber mode)", () => {
     expect(result.success).toBe(true);
 
     // Org should have credits, not user
-    expect(await credits.getBalance("org_1", "api_calls")).toBe(5000);
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "org_1", key: "api_calls" })).toBe(5000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(0);
   });
 
   test("multiple seats add to org's shared pool", async () => {
@@ -322,7 +322,7 @@ describe("Seats: Add Seat (subscriber mode)", () => {
     await seatsApi.add({ userId: "user_bob", orgId: "org_1" });
 
     // Org should have 2x credits (one per seat)
-    expect(await credits.getBalance("org_1", "api_calls")).toBe(10000);
+    expect(await credits.getBalance({ userId: "org_1", key: "api_calls" })).toBe(10000);
   });
 });
 
@@ -345,7 +345,7 @@ describe("Seats: Remove Seat", () => {
 
     // Add seat
     await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(5000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(5000);
 
     // Remove seat
     const result = await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
@@ -357,8 +357,8 @@ describe("Seats: Remove Seat", () => {
     }
 
     // User should have no credits
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(0);
-    expect(await credits.getBalance("user_alice", "storage_gb")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(0);
+    expect(await credits.getBalance({ userId: "user_alice", key: "storage_gb" })).toBe(0);
   });
 
   test("only revokes credits from this subscription (preserves top-ups)", async () => {
@@ -379,19 +379,19 @@ describe("Seats: Remove Seat", () => {
     // User also has a top-up
     await credits.grant({
       userId: "user_alice",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 1000,
       source: "topup",
       sourceId: "topup_123",
     });
 
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(6000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(6000);
 
     // Remove seat - should only revoke seat credits, not top-up
     await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     // User should still have top-up credits
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(1000);
   });
 
   test("revokes partial balance if user consumed some credits", async () => {
@@ -412,12 +412,12 @@ describe("Seats: Remove Seat", () => {
     // User consumes some credits
     await credits.consume({
       userId: "user_alice",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 3000,
       description: "API usage",
     });
 
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(2000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(2000);
 
     // Remove seat - should revoke remaining balance
     const result = await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
@@ -427,7 +427,7 @@ describe("Seats: Remove Seat", () => {
       expect(result.creditsRevoked.api_calls).toBe(2000);
     }
 
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(0);
   });
 });
 
@@ -526,8 +526,8 @@ describe("Seats: Manual Mode", () => {
     }
 
     // No credits granted
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(0);
-    expect(await credits.getBalance("org_1", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(0);
+    expect(await credits.getBalance({ userId: "org_1", key: "api_calls" })).toBe(0);
   });
 });
 
@@ -539,7 +539,7 @@ describe("Seats: Callbacks", () => {
   test("fires onCreditsGranted callback when seat added", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const grantedCredits: Array<{ userId: string; creditType: string; amount: number }> = [];
+    const grantedCredits: Array<{ userId: string; key: string; amount: number }> = [];
 
     const seatsApi = createSeatsApi({
       stripe: stripe as any,
@@ -552,7 +552,7 @@ describe("Seats: Callbacks", () => {
         onCreditsGranted: (params) => {
           grantedCredits.push({
             userId: params.userId,
-            creditType: params.creditType,
+            key: params.key,
             amount: params.amount,
           });
         },
@@ -562,14 +562,14 @@ describe("Seats: Callbacks", () => {
     await seatsApi.add({ userId: "user_alice", orgId: "org_1" });
 
     expect(grantedCredits).toHaveLength(2);
-    expect(grantedCredits).toContainEqual({ userId: "user_alice", creditType: "api_calls", amount: 5000 });
-    expect(grantedCredits).toContainEqual({ userId: "user_alice", creditType: "storage_gb", amount: 50 });
+    expect(grantedCredits).toContainEqual({ userId: "user_alice", key: "api_calls", amount: 5000 });
+    expect(grantedCredits).toContainEqual({ userId: "user_alice", key: "storage_gb", amount: 50 });
   });
 
   test("fires onCreditsRevoked callback when seat removed", async () => {
     await setupOrgWithSubscription("org_1", "cus_org_1", "sub_team_1", "price_team_monthly");
 
-    const revokedCredits: Array<{ userId: string; creditType: string; amount: number }> = [];
+    const revokedCredits: Array<{ userId: string; key: string; amount: number }> = [];
 
     const seatsApi = createSeatsApi({
       stripe: stripe as any,
@@ -582,7 +582,7 @@ describe("Seats: Callbacks", () => {
         onCreditsRevoked: (params) => {
           revokedCredits.push({
             userId: params.userId,
-            creditType: params.creditType,
+            key: params.key,
             amount: params.amount,
           });
         },
@@ -593,8 +593,8 @@ describe("Seats: Callbacks", () => {
     await seatsApi.remove({ userId: "user_alice", orgId: "org_1" });
 
     expect(revokedCredits).toHaveLength(2);
-    expect(revokedCredits).toContainEqual({ userId: "user_alice", creditType: "api_calls", amount: 5000 });
-    expect(revokedCredits).toContainEqual({ userId: "user_alice", creditType: "storage_gb", amount: 50 });
+    expect(revokedCredits).toContainEqual({ userId: "user_alice", key: "api_calls", amount: 5000 });
+    expect(revokedCredits).toContainEqual({ userId: "user_alice", key: "storage_gb", amount: 50 });
   });
 });
 

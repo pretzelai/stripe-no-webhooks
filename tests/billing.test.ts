@@ -289,7 +289,7 @@ describe("Billing Class", () => {
       });
 
       // User without subscription
-      const isActive = await billing.subscriptions.isActive("unknown_user");
+      const isActive = await billing.subscriptions.isActive({ userId: "unknown_user" });
       expect(isActive).toBe(false);
     });
 
@@ -322,7 +322,7 @@ describe("Billing Class", () => {
         status: "active",
       });
 
-      const subscription = await billing.subscriptions.get("user_123");
+      const subscription = await billing.subscriptions.get({ userId: "user_123" });
       expect(subscription).not.toBeNull();
       expect(subscription?.status).toBe("active");
       expect(subscription?.plan?.name).toBe("Pro");

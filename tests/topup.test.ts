@@ -142,7 +142,7 @@ describe("TopUp: On-Demand", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -154,7 +154,7 @@ describe("TopUp: On-Demand", () => {
     }
 
     // Verify credits were granted
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
   });
 
   test("fails without payment method and returns recovery URL", async () => {
@@ -172,7 +172,7 @@ describe("TopUp: On-Demand", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -199,7 +199,7 @@ describe("TopUp: On-Demand", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 50, // Min is 100
     });
 
@@ -225,7 +225,7 @@ describe("TopUp: On-Demand", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 50000, // Max is 10000
     });
 
@@ -251,7 +251,7 @@ describe("TopUp: On-Demand", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -282,7 +282,7 @@ describe("TopUp: On-Demand", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -308,7 +308,7 @@ describe("TopUp: On-Demand", () => {
     // First top-up
     const result1 = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
       idempotencyKey: "topup_123",
     });
@@ -316,7 +316,7 @@ describe("TopUp: On-Demand", () => {
     // Second top-up with same key
     const result2 = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
       idempotencyKey: "topup_123",
     });
@@ -325,7 +325,7 @@ describe("TopUp: On-Demand", () => {
     expect(result2.success).toBe(true);
 
     // Should only have one top-up worth of credits
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
   });
 });
 
@@ -340,7 +340,7 @@ describe("TopUp: Auto Top-Up", () => {
     // Give user some initial credits
     await credits.grant({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 400, // Below threshold of 500
       source: "subscription",
       sourceId: "sub_pro_1",
@@ -358,7 +358,7 @@ describe("TopUp: Auto Top-Up", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 400,
     });
 
@@ -368,7 +368,7 @@ describe("TopUp: Auto Top-Up", () => {
     }
 
     // Should have 400 + 1000 (auto top-up amount) = 1400
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1400);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1400);
   });
 
   test("does not trigger when balance above threshold", async () => {
@@ -386,7 +386,7 @@ describe("TopUp: Auto Top-Up", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 600, // Above threshold of 500
     });
 
@@ -413,7 +413,7 @@ describe("TopUp: Auto Top-Up", () => {
     for (let i = 0; i < 3; i++) {
       const result = await topUpHandler.triggerAutoTopUpIfNeeded({
         userId: "user_1",
-        creditType: "api_calls",
+        key: "api_calls",
         currentBalance: 100,
       });
       expect(result.triggered).toBe(true);
@@ -422,7 +422,7 @@ describe("TopUp: Auto Top-Up", () => {
     // Fourth should be blocked
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
@@ -447,7 +447,7 @@ describe("TopUp: Auto Top-Up", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
@@ -484,7 +484,7 @@ describe("TopUp: Payment Intent Webhook", () => {
       currency: "usd",
       status: "succeeded",
       metadata: {
-        top_up_credit_type: "api_calls",
+        top_up_key: "api_calls",
         top_up_amount: "500",
         user_id: "user_1",
       },
@@ -492,7 +492,7 @@ describe("TopUp: Payment Intent Webhook", () => {
 
     await topUpHandler.handlePaymentIntentSucceeded(paymentIntent as any);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
   });
 
   test("idempotent: duplicate webhook does not double-grant", async () => {
@@ -515,7 +515,7 @@ describe("TopUp: Payment Intent Webhook", () => {
       currency: "usd",
       status: "succeeded",
       metadata: {
-        top_up_credit_type: "api_calls",
+        top_up_key: "api_calls",
         top_up_amount: "500",
         user_id: "user_1",
       },
@@ -526,7 +526,7 @@ describe("TopUp: Payment Intent Webhook", () => {
     await topUpHandler.handlePaymentIntentSucceeded(paymentIntent as any);
 
     // Should only have 500 credits
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
   });
 
   test("ignores payment intents without top-up metadata", async () => {
@@ -578,14 +578,14 @@ describe("TopUp: Checkout Session Webhook", () => {
       amount_total: 500,
       currency: "usd",
       metadata: {
-        top_up_credit_type: "api_calls",
+        top_up_key: "api_calls",
         top_up_amount: "500",
       },
     };
 
     await topUpHandler.handleTopUpCheckoutCompleted(session as any);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
   });
 
   test("ignores unpaid checkout sessions", async () => {
@@ -607,7 +607,7 @@ describe("TopUp: Checkout Session Webhook", () => {
       customer: "cus_user_1",
       payment_status: "unpaid", // Not paid
       metadata: {
-        top_up_credit_type: "api_calls",
+        top_up_key: "api_calls",
         top_up_amount: "500",
       },
     };
@@ -615,7 +615,7 @@ describe("TopUp: Checkout Session Webhook", () => {
     await topUpHandler.handleTopUpCheckoutCompleted(session as any);
 
     // No credits granted
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);
   });
 });
 
@@ -644,13 +644,13 @@ describe("TopUp: Callbacks", () => {
 
     await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
     expect(grantedParams).not.toBeNull();
     expect(grantedParams.userId).toBe("user_1");
-    expect(grantedParams.creditType).toBe("api_calls");
+    expect(grantedParams.key).toBe("api_calls");
     expect(grantedParams.amount).toBe(500);
     expect(grantedParams.source).toBe("topup");
   });
@@ -675,13 +675,13 @@ describe("TopUp: Callbacks", () => {
 
     await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
     expect(completedParams).not.toBeNull();
     expect(completedParams.userId).toBe("user_1");
-    expect(completedParams.creditType).toBe("api_calls");
+    expect(completedParams.key).toBe("api_calls");
     expect(completedParams.creditsAdded).toBe(500);
     expect(completedParams.amountCharged).toBe(500);
   });
@@ -706,13 +706,13 @@ describe("TopUp: Callbacks", () => {
 
     await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
     expect(lowParams).not.toBeNull();
     expect(lowParams.userId).toBe("user_1");
-    expect(lowParams.creditType).toBe("api_calls");
+    expect(lowParams.key).toBe("api_calls");
     expect(lowParams.balance).toBe(100);
     expect(lowParams.threshold).toBe(500);
   });
@@ -737,14 +737,14 @@ describe("TopUp: Callbacks", () => {
 
     await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
     expect(failedParams).not.toBeNull();
     expect(failedParams.userId).toBe("user_1");
-    expect(failedParams.creditType).toBe("api_calls");
-    expect(failedParams.reason).toBe("no_payment_method");
+    expect(failedParams.key).toBe("api_calls");
+    expect(failedParams.trigger).toBe("no_payment_method");
   });
 });
 
@@ -766,7 +766,7 @@ describe("TopUp: hasPaymentMethod", () => {
       cancelUrl: "https://example.com/cancel",
     });
 
-    const has = await topUpHandler.hasPaymentMethod("user_1");
+    const has = await topUpHandler.hasPaymentMethod({ userId: "user_1" });
     expect(has).toBe(true);
   });
 
@@ -783,7 +783,7 @@ describe("TopUp: hasPaymentMethod", () => {
       cancelUrl: "https://example.com/cancel",
     });
 
-    const has = await topUpHandler.hasPaymentMethod("user_1");
+    const has = await topUpHandler.hasPaymentMethod({ userId: "user_1" });
     expect(has).toBe(false);
   });
 
@@ -798,7 +798,7 @@ describe("TopUp: hasPaymentMethod", () => {
       cancelUrl: "https://example.com/cancel",
     });
 
-    const has = await topUpHandler.hasPaymentMethod("nonexistent");
+    const has = await topUpHandler.hasPaymentMethod({ userId: "nonexistent" });
     expect(has).toBe(false);
   });
 });
@@ -829,7 +829,7 @@ describe("TopUp: B2B Mode (with tax config)", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -861,7 +861,7 @@ describe("TopUp: B2B Mode (with tax config)", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -888,7 +888,7 @@ describe("TopUp: B2B Mode (with tax config)", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -915,7 +915,7 @@ describe("TopUp: B2B Mode (with tax config)", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
@@ -943,7 +943,7 @@ describe("TopUp: B2B Mode (with tax config)", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -951,8 +951,8 @@ describe("TopUp: B2B Mode (with tax config)", () => {
     if (!result.success) {
       expect(result.error.code).toBe("NO_PAYMENT_METHOD");
       expect(result.error.recoveryUrl).toBeDefined();
-      // B2B recovery URL should be hosted invoice URL
-      expect(result.error.recoveryUrl).toContain("invoice.stripe.com");
+      // Recovery always uses Checkout (even B2B) for card saving and redirect support
+      expect(result.error.recoveryUrl).toContain("checkout.stripe.com");
     }
   });
 
@@ -972,7 +972,7 @@ describe("TopUp: B2B Mode (with tax config)", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -1015,7 +1015,7 @@ describe("TopUp: Invoice Paid Webhook (B2B)", () => {
       amount_paid: 500,
       currency: "usd",
       metadata: {
-        top_up_credit_type: "api_calls",
+        top_up_key: "api_calls",
         top_up_amount: "500",
         user_id: "user_1",
       },
@@ -1023,7 +1023,7 @@ describe("TopUp: Invoice Paid Webhook (B2B)", () => {
 
     await topUpHandler.handleInvoicePaid(invoice as any);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
   });
 
   test("idempotent: duplicate invoice.paid does not double-grant", async () => {
@@ -1049,7 +1049,7 @@ describe("TopUp: Invoice Paid Webhook (B2B)", () => {
       amount_paid: 500,
       currency: "usd",
       metadata: {
-        top_up_credit_type: "api_calls",
+        top_up_key: "api_calls",
         top_up_amount: "500",
         user_id: "user_1",
       },
@@ -1060,7 +1060,7 @@ describe("TopUp: Invoice Paid Webhook (B2B)", () => {
     await topUpHandler.handleInvoicePaid(invoice as any);
 
     // Should only have 500 credits
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
   });
 
   test("ignores invoices without top-up metadata", async () => {
@@ -1118,7 +1118,7 @@ describe("TopUp: Invoice Paid Webhook (B2B)", () => {
       amount_paid: 1000,
       currency: "usd",
       metadata: {
-        top_up_credit_type: "api_calls",
+        top_up_key: "api_calls",
         top_up_amount: "1000",
         user_id: "user_1",
         top_up_auto: "true",
@@ -1127,7 +1127,7 @@ describe("TopUp: Invoice Paid Webhook (B2B)", () => {
 
     await topUpHandler.handleInvoicePaid(invoice as any);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
     expect(grantedParams).not.toBeNull();
     expect(grantedParams.source).toBe("auto_topup");
   });
@@ -1195,7 +1195,7 @@ describe("TopUp: Payment Failure Handling", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -1245,7 +1245,7 @@ describe("TopUp: Payment Failure Handling", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -1287,7 +1287,7 @@ describe("TopUp: Payment Failure Handling", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -1330,7 +1330,7 @@ describe("TopUp: Payment Failure Handling", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 100,
     });
 
@@ -1384,7 +1384,7 @@ describe("TopUp: Stripe Minimum Charge", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 50, // 50 cents < 60 cents minimum
     });
 
@@ -1424,7 +1424,7 @@ describe("TopUp: Deleted Customer", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_deleted",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -1489,7 +1489,7 @@ describe("TopUp: Auto Top-Up Failure Scenarios", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
@@ -1499,7 +1499,7 @@ describe("TopUp: Auto Top-Up Failure Scenarios", () => {
     }
     expect(voidCalled).toBe(true);
     expect(failedParams).not.toBeNull();
-    expect(failedParams.reason).toBe("payment_failed");
+    expect(failedParams.trigger).toBe("stripe_declined_payment");
   });
 
   test("B2C auto top-up fails with requires_action status", async () => {
@@ -1535,16 +1535,16 @@ describe("TopUp: Auto Top-Up Failure Scenarios", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
     expect(result.triggered).toBe(false);
     if (!result.triggered) {
-      expect(result.reason).toBe("payment_requires_action");
+      expect(result.reason).toBe("payment_failed");
     }
     expect(failedParams).not.toBeNull();
-    expect(failedParams.reason).toBe("payment_requires_action");
+    expect(failedParams.trigger).toBe("stripe_declined_payment");
   });
 
   test("auto top-up returns user_not_found for non-existent user", async () => {
@@ -1560,7 +1560,7 @@ describe("TopUp: Auto Top-Up Failure Scenarios", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "nonexistent_user",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
@@ -1586,7 +1586,7 @@ describe("TopUp: Auto Top-Up Failure Scenarios", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
@@ -1618,7 +1618,7 @@ describe("TopUp: Credit Type Without Top-Up", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "storage_gb",
+      key: "storage_gb",
       currentBalance: 10,
     });
 
@@ -1643,7 +1643,7 @@ describe("TopUp: Credit Type Without Top-Up", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "nonexistent_credits",
+      key: "nonexistent_credits",
       amount: 500,
     });
 
@@ -1674,12 +1674,12 @@ describe("TopUp: Boundary Cases", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 100, // Exactly at minPerPurchase
     });
 
     expect(result.success).toBe(true);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(100);
   });
 
   test("succeeds with amount exactly at maxPerPurchase", async () => {
@@ -1697,12 +1697,12 @@ describe("TopUp: Boundary Cases", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 10000, // Exactly at maxPerPurchase
     });
 
     expect(result.success).toBe(true);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(10000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(10000);
   });
 
   test("fails with amount one below minPerPurchase", async () => {
@@ -1720,7 +1720,7 @@ describe("TopUp: Boundary Cases", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 99, // One below min
     });
 
@@ -1742,7 +1742,7 @@ describe("TopUp: Boundary Cases", () => {
 
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 10001, // One above max
     });
 
@@ -1765,7 +1765,7 @@ describe("TopUp: Boundary Cases", () => {
     // Threshold is 500, balance equals threshold
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 500, // Exactly at threshold
     });
 
@@ -1791,7 +1791,7 @@ describe("TopUp: Boundary Cases", () => {
     // Threshold is 500, balance is 499 (one below)
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 499,
     });
 
@@ -1821,7 +1821,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // Should be able to do on-demand top-up even though auto is configured
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
@@ -1849,7 +1849,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // But need to ensure it meets Stripe's 60 cent minimum
     const result = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 100, // 100 * $0.01 = $1.00, above Stripe minimum
     });
 
@@ -1862,7 +1862,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // Start with low balance
     await credits.grant({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 100, // Below threshold of 500
       source: "subscription",
       sourceId: "sub_pro_1",
@@ -1881,20 +1881,20 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // User manually tops up 500 credits
     const manualResult = await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
     });
 
     expect(manualResult.success).toBe(true);
 
     // Now balance is 600, which is above threshold of 500
-    const currentBalance = await credits.getBalance("user_1", "api_calls");
+    const currentBalance = await credits.getBalance({ userId: "user_1", key: "api_calls" });
     expect(currentBalance).toBe(600);
 
     // Auto top-up should NOT trigger since balance is above threshold
     const autoResult = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: currentBalance,
     });
 
@@ -1921,7 +1921,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     for (let i = 0; i < 5; i++) {
       const result = await topUpHandler.topUp({
         userId: "user_1",
-        creditType: "api_calls",
+        key: "api_calls",
         amount: 100,
       });
       expect(result.success).toBe(true);
@@ -1930,7 +1930,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // Auto top-up should still work (max is 3 per month for auto, but manual doesn't count)
     const autoResult = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100, // Below threshold of 500
     });
 
@@ -1961,14 +1961,14 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // Manual top-up
     await topUpHandler.topUp({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 200,
     });
 
     // Auto top-up
     await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 100,
     });
 
@@ -2020,7 +2020,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // Should fail with amount=1 since 1 credit * $0.10 = $0.10 < $0.60 Stripe minimum
     const result = await topUpHandler.topUp({
       userId: "user_defaults",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 1,
     });
 
@@ -2033,7 +2033,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     // Should succeed with amount=10 ($1.00)
     const result2 = await topUpHandler.topUp({
       userId: "user_defaults",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 10,
     });
 
@@ -2086,7 +2086,7 @@ describe("TopUp: Auto Top-Up with Custom Configs", () => {
 
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_valid",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 50,
     });
 
@@ -2135,13 +2135,13 @@ describe("TopUp: Auto Top-Up with Custom Configs", () => {
     // Balance at 199 (below threshold of 200), should trigger
     const result = await topUpHandler.triggerAutoTopUpIfNeeded({
       userId: "user_custom",
-      creditType: "api_calls",
+      key: "api_calls",
       currentBalance: 199,
     });
 
     expect(result.triggered).toBe(true);
 
     // Verify 500 credits were added
-    expect(await credits.getBalance("user_custom", "api_calls")).toBe(500);
+    expect(await credits.getBalance({ userId: "user_custom", key: "api_calls" })).toBe(500);
   });
 });

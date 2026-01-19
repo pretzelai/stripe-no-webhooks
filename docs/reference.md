@@ -16,6 +16,13 @@ const billing = new Billing({
   billingConfig: BillingConfig,
   successUrl: string,
   cancelUrl: string,
+
+  // REQUIRED: Resolve authenticated user from request
+  resolveUser: (request: Request) => User | null | Promise<User | null>,
+
+  // OPTIONAL: Resolve org for team/org billing
+  resolveOrg: (request: Request) => string | null | Promise<string | null>,
+
   credits: {
     grantTo: "subscriber" | "organization" | "seat-users" | "manual",
   },
@@ -47,15 +54,21 @@ billing.getPlans()  // Returns plans for current mode
 ## Handler
 
 ```typescript
-// Create HTTP handler with request-specific config
+// Create HTTP handler - typically zero-config since resolveUser is on Billing instance
+const handler = billing.createHandler();
+
+export const POST = handler;
+export const GET = handler;
+
+// Or with optional overrides (rarely needed)
 export const POST = billing.createHandler({
-  // REQUIRED: Resolve authenticated user from request
+  // Override resolveUser for this specific handler
   resolveUser: (request: Request) => User | null | Promise<User | null>,
 
-  // OPTIONAL: Resolve org for team/org billing
+  // Override resolveOrg for this specific handler
   resolveOrg: (request: Request) => string | null | Promise<string | null>,
 
-  // OPTIONAL: Override instance-level callbacks (prefer defining on Billing instance)
+  // Override callbacks for this specific handler
   callbacks: StripeWebhookCallbacks,
 });
 
@@ -67,7 +80,7 @@ type User = {
 };
 ```
 
-Callbacks can be defined either on the `Billing` instance (recommended) or in `createHandler()`. Handler-level callbacks override instance-level ones.
+All config should be defined on the `Billing` instance. Handler-level overrides are only needed for special cases (e.g., different auth for a specific route).
 
 ## Routes
 
@@ -113,13 +126,30 @@ window.location.href = url;
 
 ```typescript
 // Check if user has active subscription
-await billing.subscriptions.isActive(userId: string): Promise<boolean>
+await billing.subscriptions.isActive({ userId: string }): Promise<boolean>
 
 // Get current subscription
-await billing.subscriptions.get(userId: string): Promise<Subscription | null>
+await billing.subscriptions.get({ userId: string }): Promise<Subscription | null>
 
 // List all subscriptions
-await billing.subscriptions.list(userId: string): Promise<Subscription[]>
+await billing.subscriptions.list({ userId: string }): Promise<Subscription[]>
+
+// Check payment status (for showing warnings in UI)
+await billing.subscriptions.getPaymentStatus({ userId: string }): Promise<SubscriptionPaymentStatus>
+```
+
+```typescript
+type SubscriptionPaymentStatus = {
+  status: "ok" | "past_due" | "unpaid" | "no_subscription";
+  failedInvoice?: {
+    id: string;
+    amountDue: number;
+    currency: string;
+    attemptCount: number;
+    nextPaymentAttempt: Date | null;
+    hostedInvoiceUrl: string | null;  // Direct link for user to pay
+  };
+};
 ```
 
 ```typescript
@@ -158,23 +188,33 @@ All methods on `billing.credits`:
 
 ```typescript
 // Get balance for one credit type
-await billing.credits.getBalance(userId: string, creditType: string): Promise<number>
+await billing.credits.getBalance({ userId: string, key: string }): Promise<number>
 
 // Get all balances
-await billing.credits.getAllBalances(userId: string): Promise<Record<string, number>>
+await billing.credits.getAllBalances({ userId: string }): Promise<Record<string, number>>
 
 // Check if user has enough
-await billing.credits.hasCredits(userId: string, creditType: string, amount: number): Promise<boolean>
+await billing.credits.hasCredits({ userId: string, key: string, amount: number }): Promise<boolean>
 
 // Get transaction history
-await billing.credits.getHistory(userId: string, options?: {
-  creditType?: string,
+await billing.credits.getHistory({
+  userId: string,
+  key?: string,
   limit?: number,
   offset?: number,
 }): Promise<CreditTransaction[]>
 
 // Check for saved payment method
-await billing.credits.hasPaymentMethod(userId: string): Promise<boolean>
+await billing.credits.hasPaymentMethod({ userId: string }): Promise<boolean>
+
+// Check if auto top-up is blocked (and why)
+await billing.credits.getAutoTopUpStatus({ userId: string, key: string }): Promise<AutoTopUpStatus | null>
+
+// Unblock auto top-up after user updates payment method
+await billing.credits.unblockAutoTopUp({ userId: string, key: string }): Promise<void>
+
+// Unblock all auto top-ups for user
+await billing.credits.unblockAllAutoTopUps({ userId: string }): Promise<void>
 ```
 
 ### Write
@@ -183,7 +223,7 @@ await billing.credits.hasPaymentMethod(userId: string): Promise<boolean>
 // Consume credits (with auto top-up if configured)
 await billing.credits.consume({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   description?: string,
   metadata?: Record<string, unknown>,
@@ -193,7 +233,7 @@ await billing.credits.consume({
 // Grant credits
 await billing.credits.grant({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   source?: TransactionSource,
   sourceId?: string,
@@ -204,7 +244,7 @@ await billing.credits.grant({
 // Revoke specific amount
 await billing.credits.revoke({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   source?: "cancellation" | "manual" | "seat_revoke",
   sourceId?: string,
@@ -213,13 +253,13 @@ await billing.credits.revoke({
 // Revoke all of a credit type
 await billing.credits.revokeAll({
   userId: string,
-  creditType: string,
+  key: string,
 }): Promise<{ amountRevoked: number }>
 
 // Set exact balance
 await billing.credits.setBalance({
   userId: string,
-  creditType: string,
+  key: string,
   balance: number,
   reason?: string,
 }): Promise<{ previousBalance: number }>
@@ -227,7 +267,7 @@ await billing.credits.setBalance({
 // Purchase credits
 await billing.credits.topUp({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
 }): Promise<TopUpResult>
 ```
@@ -263,9 +303,25 @@ const billing = new Billing({
     onSubscriptionCancelled?: (subscription: Stripe.Subscription) => void,
     onSubscriptionRenewed?: (subscription: Stripe.Subscription) => void,
 
+    onSubscriptionPaymentFailed?: (params: {
+      userId: string,
+      stripeCustomerId: string,
+      subscriptionId: string,
+      invoiceId: string,
+      amountDue: number,
+      currency: string,
+      stripeDeclineCode?: string,
+      failureMessage?: string,
+      attemptCount: number,
+      nextPaymentAttempt: Date | null,  // null if final attempt
+      willRetry: boolean,
+      planName?: string,
+      priceId: string,
+    }) => void,
+
     onCreditsGranted?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       amount: number,
       newBalance: number,
       source: TransactionSource,
@@ -274,7 +330,7 @@ const billing = new Billing({
 
     onCreditsRevoked?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       amount: number,
       previousBalance: number,
       newBalance: number,
@@ -283,14 +339,14 @@ const billing = new Billing({
 
     onCreditsLow?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       balance: number,
       threshold: number,
     }) => void,
 
     onTopUpCompleted?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       creditsAdded: number,
       amountCharged: number,
       currency: string,
@@ -300,9 +356,15 @@ const billing = new Billing({
 
     onAutoTopUpFailed?: (params: {
       userId: string,
-      creditType: string,
-      reason: "no_payment_method" | "payment_failed" | "monthly_limit_reached" | "unexpected_error",
-      error?: string,
+      stripeCustomerId: string,
+      key: string,
+      trigger: "stripe_declined_payment" | "waiting_for_retry_cooldown"
+             | "blocked_until_card_updated" | "no_payment_method"
+             | "monthly_limit_reached" | "unexpected_error",
+      status: "will_retry" | "action_required",
+      nextAttemptAt?: Date,
+      failureCount: number,
+      stripeDeclineCode?: string,
     }) => void,
   },
 });
@@ -504,7 +566,7 @@ type TransactionSource =
 type CreditTransaction = {
   id: string;
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
   balanceAfter: number;
   transactionType: TransactionType;

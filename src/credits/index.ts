@@ -5,13 +5,17 @@ import {
   getAllBalances,
   hasCredits,
   getHistory,
+  unblockAutoTopUp,
+  unblockAllAutoTopUps,
+  getAutoTopUpStatus,
+  type AutoTopUpStatus,
 } from "./db";
 import {
   consume,
   grant,
   revoke,
   revokeAll,
-  revokeAllCreditTypesForUser,
+  revokeAllCreditsForUser,
   setBalance,
 } from "./grant";
 
@@ -22,6 +26,7 @@ export type {
   TransactionType,
   TransactionSource,
 } from "./types";
+export type { AutoTopUpStatus };
 
 export function initCredits(pool: Pool | null, schema = "stripe") {
   setPool(pool, schema);
@@ -35,7 +40,11 @@ export const credits = {
   grant,
   revoke,
   revokeAll,
-  revokeAllCreditTypesForUser,
+  revokeAllCreditsForUser,
   setBalance,
   getHistory,
+  // Auto top-up management
+  getAutoTopUpStatus,
+  unblockAutoTopUp,
+  unblockAllAutoTopUps,
 };

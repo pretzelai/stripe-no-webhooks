@@ -2,7 +2,12 @@ import { StripeSync } from "@pretzelai/stripe-sync-engine";
 import Stripe from "stripe";
 import { Pool } from "pg";
 import { getMode } from "./helpers";
-import { initCredits, credits, type ConsumeResult } from "./credits";
+import {
+  initCredits,
+  credits,
+  type ConsumeResult,
+  type AutoTopUpStatus,
+} from "./credits";
 import {
   createCreditLifecycle,
   type CreditsGrantTo,
@@ -13,7 +18,7 @@ import {
   type TopUpResult,
   type TopUpPending,
   type AutoTopUpResult,
-  type AutoTopUpFailedReason,
+  type AutoTopUpFailedCallbackParams,
 } from "./credits/topup";
 import {
   createSeatsApi,
@@ -26,6 +31,7 @@ import {
   createSubscriptionsApi,
   type Subscription,
   type SubscriptionStatus,
+  type SubscriptionPaymentStatus,
 } from "./subscriptions";
 
 import type {
@@ -47,6 +53,8 @@ export type {
   TopUpResult,
   TopUpPending,
   AutoTopUpResult,
+  AutoTopUpFailedCallbackParams,
+  AutoTopUpStatus,
   ConsumeResult,
   AddSeatParams,
   AddSeatResult,
@@ -54,6 +62,7 @@ export type {
   RemoveSeatResult,
   Subscription,
   SubscriptionStatus,
+  SubscriptionPaymentStatus,
 };
 export type {
   User,
@@ -86,6 +95,9 @@ export class Billing {
   private readonly creditsConfig?: StripeConfig["credits"];
   private readonly callbacks?: StripeConfig["callbacks"];
   private readonly tax: TaxConfig;
+  private readonly resolveUser?: StripeConfig["resolveUser"];
+  private readonly resolveOrg?: StripeConfig["resolveOrg"];
+  private readonly loginUrl?: string;
 
   constructor(config: StripeConfig = {}) {
     const {
@@ -100,6 +112,9 @@ export class Billing {
       callbacks,
       mapUserIdToStripeCustomerId,
       tax,
+      resolveUser,
+      resolveOrg,
+      loginUrl,
     } = config;
 
     this.stripe = new Stripe(stripeSecretKey);
@@ -117,6 +132,9 @@ export class Billing {
     this.creditsConfig = creditsConfig;
     this.callbacks = callbacks;
     this.tax = tax ?? {};
+    this.resolveUser = resolveUser;
+    this.resolveOrg = resolveOrg;
+    this.loginUrl = loginUrl;
 
     initCredits(this.pool, this.schema);
 
@@ -130,6 +148,7 @@ export class Billing {
       : null;
 
     this.subscriptions = createSubscriptionsApi({
+      stripe: this.stripe,
       pool: this.pool,
       schema: this.schema,
       billingConfig: this.billingConfig,
@@ -170,7 +189,7 @@ export class Billing {
   /**
    * Assign a user to a free plan if they don't already have a subscription.
    * Call this when a user logs in to ensure they have access to the free plan.
-   * 
+   *
    * @param options.userId - The user ID to assign to the free plan
    * @param options.planName - Name of the free plan (optional - auto-detects if only one free plan exists)
    * @param options.interval - Billing interval for the free plan (default: "month")
@@ -324,15 +343,12 @@ export class Billing {
   };
 
   private createCreditsApi(callbacks?: {
-    onAutoTopUpFailed?: (params: {
-      userId: string;
-      creditType: string;
-      reason: AutoTopUpFailedReason;
-      error?: string;
-    }) => void | Promise<void>;
+    onAutoTopUpFailed?: (
+      params: AutoTopUpFailedCallbackParams
+    ) => void | Promise<void>;
     onTopUpCompleted?: (params: {
       userId: string;
-      creditType: string;
+      key: string;
       creditsAdded: number;
       amountCharged: number;
       currency: string;
@@ -341,7 +357,7 @@ export class Billing {
     }) => void | Promise<void>;
     onCreditsLow?: (params: {
       userId: string;
-      creditType: string;
+      key: string;
       balance: number;
       threshold: number;
     }) => void | Promise<void>;
@@ -360,9 +376,23 @@ export class Billing {
       onCreditsLow: callbacks?.onCreditsLow,
     });
 
+    // Helper to look up Stripe customer ID for error callbacks
+    const getStripeCustomerId = async (userId: string): Promise<string> => {
+      if (!this.pool) return "";
+      try {
+        const result = await this.pool.query(
+          `SELECT stripe_customer_id FROM ${this.schema}.user_stripe_customer_map WHERE user_id = $1`,
+          [userId]
+        );
+        return result.rows[0]?.stripe_customer_id ?? "";
+      } catch {
+        return "";
+      }
+    };
+
     const consumeCredits = async (params: {
       userId: string;
-      creditType: string;
+      key: string;
       amount: number;
       description?: string;
       metadata?: Record<string, unknown>;
@@ -374,18 +404,20 @@ export class Billing {
         topUpHandler
           .triggerAutoTopUpIfNeeded({
             userId: params.userId,
-            creditType: params.creditType,
+            key: params.key,
             currentBalance: result.balance,
           })
-          .catch((err) => {
-            const message =
-              err instanceof Error ? err.message : "Unknown error";
+          .catch(async (err) => {
             console.error("Auto top-up error:", err);
+            // Look up the customer ID for the callback
+            const stripeCustomerId = await getStripeCustomerId(params.userId);
             callbacks?.onAutoTopUpFailed?.({
               userId: params.userId,
-              creditType: params.creditType,
-              reason: "unexpected_error",
-              error: message,
+              stripeCustomerId,
+              key: params.key,
+              trigger: "unexpected_error",
+              status: "action_required",
+              failureCount: 0,
             });
           });
       }
@@ -405,16 +437,24 @@ export class Billing {
       getHistory: credits.getHistory,
       topUp: topUpHandler.topUp,
       hasPaymentMethod: topUpHandler.hasPaymentMethod,
+      // Auto top-up management
+      getAutoTopUpStatus: credits.getAutoTopUpStatus,
+      unblockAutoTopUp: credits.unblockAutoTopUp,
+      unblockAllAutoTopUps: credits.unblockAllAutoTopUps,
     };
   }
 
   createHandler(handlerConfig: HandlerConfig = {}) {
     const {
-      resolveUser,
-      resolveOrg,
-      loginUrl,
+      resolveUser: handlerResolveUser,
+      resolveOrg: handlerResolveOrg,
       callbacks: handlerCallbacks,
     } = handlerConfig;
+
+    // Use handler-level overrides if provided, otherwise use instance-level
+    const resolveUser = handlerResolveUser ?? this.resolveUser;
+    const resolveOrg = handlerResolveOrg ?? this.resolveOrg;
+    const loginUrl = this.loginUrl;
 
     // Merge callbacks: handler-level overrides instance-level
     const callbacks = { ...this.callbacks, ...handlerCallbacks };
@@ -479,11 +519,52 @@ export class Billing {
       creditLifecycle,
       topUpHandler,
       callbacks,
+      pool: this.pool,
+      schema: this.schema,
     };
 
     return async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       const action = url.pathname.split("/").filter(Boolean).pop();
+
+      // Recovery endpoint accepts GET (clicked from email links)
+      if (action === "recovery" && request.method === "GET") {
+        const userId = url.searchParams.get("userId");
+        const returnUrl =
+          url.searchParams.get("returnUrl") || this.defaultSuccessUrl;
+
+        if (!userId) {
+          return new Response(
+            JSON.stringify({ error: "Missing userId parameter" }),
+            { status: 400, headers: { "Content-Type": "application/json" } }
+          );
+        }
+
+        try {
+          const customerId = await this.resolveStripeCustomerId({
+            user: { id: userId },
+          });
+          if (!customerId) {
+            return new Response(
+              JSON.stringify({ error: "Customer not found" }),
+              { status: 404, headers: { "Content-Type": "application/json" } }
+            );
+          }
+
+          const session = await this.stripe.billingPortal.sessions.create({
+            customer: customerId,
+            return_url: returnUrl || url.origin,
+          });
+
+          return Response.redirect(session.url, 302);
+        } catch (err) {
+          console.error("Recovery redirect error:", err);
+          return new Response(
+            JSON.stringify({ error: "Failed to create portal session" }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          );
+        }
+      }
 
       if (request.method !== "POST") {
         return new Response(JSON.stringify({ error: "Method not allowed" }), {
@@ -504,7 +585,7 @@ export class Billing {
         default:
           return new Response(
             JSON.stringify({
-              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing`,
+              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing, recovery (GET)`,
             }),
             { status: 404, headers: { "Content-Type": "application/json" } }
           );

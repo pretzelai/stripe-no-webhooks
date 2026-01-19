@@ -81,3 +81,16 @@ export async function getUserIdFromCustomer(
   );
   return result.rows[0]?.user_id ?? null;
 }
+
+export async function getUserIdFromStripeCustomer(
+  pool: Pool | null,
+  schema: string,
+  stripeCustomerId: string
+): Promise<string | null> {
+  if (!pool) return null;
+  const result = await pool.query(
+    `SELECT user_id FROM ${schema}.user_stripe_customer_map WHERE stripe_customer_id = $1`,
+    [stripeCustomerId]
+  );
+  return result.rows[0]?.user_id ?? null;
+}

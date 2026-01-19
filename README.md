@@ -90,13 +90,18 @@ This will create the products/prices in Stripe and update your config with their
 
 ### 5. Update your billing client
 
-Specify how to get the `userId` in the `resolveUser` function. For example, with Clerk:
+Update `lib/billing.ts` to specify how to get the `userId` in the `resolveUser` function. For example, with Clerk:
 
 ```typescript
-import { billing } from "@/lib/billing";
+// lib/billing.ts
+import { Billing } from "stripe-no-webhooks";
 import { auth } from "@clerk/nextjs/server"; // or your auth library
+import billingConfig from "../billing.config";
 
-export const POST = billing.createHandler({
+export const billing = new Billing({
+  billingConfig,
+  successUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+  cancelUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
   resolveUser: async () => {
     const { userId } = await auth();
     return userId ? { id: userId } : null;
@@ -104,7 +109,19 @@ export const POST = billing.createHandler({
 });
 ```
 
-There are many other options you can specify for the createHandler function. See [API Reference](./docs/reference.md) for more details.
+Then your route handler is zero-config:
+
+```typescript
+// app/api/stripe/[...all]/route.ts
+import { billing } from "@/lib/billing";
+
+const handler = billing.createHandler();
+
+export const POST = handler;
+export const GET = handler;
+```
+
+See [API Reference](./docs/reference.md) for more options.
 
 ### 6. Test your setup
 
@@ -153,20 +170,20 @@ On the server, check if a user has an active subscription and how many credits (
 import { billing } from "@/lib/billing";
 
 // Get the subscription
-const subscription = await billing.subscriptions.get(userId);
+const subscription = await billing.subscriptions.get({ userId });
 
 if (subscription?.status === "active") {
   // User has an active subscription
   console.log("Plan:", subscription.plan.name);
 
   // Check credits for a specific type (if enabled in your config)
-  const apiCredits = await billing.credits.getBalance(userId, "api_calls");
+  const apiCredits = await billing.credits.getBalance({ userId, key: "api_calls" });
   console.log("API credits remaining:", apiCredits);
 
   // Consume credits when user performs an action
   const creditsResult = await billing.credits.consume({
     userId,
-    creditType: "api_calls",
+    key: "api_calls",
     amount: 1,
   });
 
@@ -183,7 +200,7 @@ When a user completes checkout:
 
 1. Stripe sends a webhook to your app
 2. The library receives it and syncs the data to your database. If credits are enabled, it will also update the credits balance
-3. `billing.subscriptions.get(userId)` now returns the subscription based on the Stripe data that's synced to your database
+3. `billing.subscriptions.get({ userId })` now returns the subscription based on the Stripe data that's synced to your database
 4. Credits are tracked automatically through a credit balance and a ledger of transactions via the library's internal APIs. These APIs are all idempotent and you don't have to worry about double counting or missing transactions
 
 You can verify this by checking your database's `stripe.subscriptions` and `stripe.credit_balances` and `stripe.credit_ledger` tables.
@@ -325,9 +342,23 @@ export const billing = new Billing({
 });
 ```
 
-Available callbacks: `onSubscriptionCreated`, `onSubscriptionCancelled`, `onSubscriptionRenewed`, `onSubscriptionPlanChanged`, `onCreditsGranted`, `onCreditsRevoked`, `onTopUpCompleted`, `onAutoTopUpFailed`, `onCreditsLow`
+Available callbacks: `onSubscriptionCreated`, `onSubscriptionCancelled`, `onSubscriptionRenewed`, `onSubscriptionPlanChanged`, `onSubscriptionPaymentFailed`, `onCreditsGranted`, `onCreditsRevoked`, `onTopUpCompleted`, `onAutoTopUpFailed`, `onCreditsLow`
 
 See [API Reference](./docs/reference.md) for more details.
+
+---
+
+## Handling Payment Failures
+
+Payments fail. Cards expire, get declined, or run out of funds. The library helps you handle this gracefully:
+
+**Subscription failures:** Use `onSubscriptionPaymentFailed` callback to send custom emails when renewal payments fail. Stripe handles retries automatically.
+
+**On-demand top-ups:** When `topUp()` fails, it returns a `recoveryUrl`. Redirect users there to enter a new card.
+
+**Auto top-ups:** If you enable auto top-ups, be aware that failed payments are automatically rate-limited (24h cooldown, max 3 retries) to protect your users' cards from being flagged for fraud. Use `onAutoTopUpFailed` to notify users when their card needs attention.
+
+See [Payment Failures](./docs/payment-failures.md) for the complete guide.
 
 ---
 
@@ -348,6 +379,7 @@ See [API Reference](./docs/reference.md) for more details.
 This README only covers the basics. The library supports more features than what is covered here. For more details, see the following docs:
 
 - [Credits System](./docs/credits.md) - Consumable credits with auto top-up
+- [Payment Failures](./docs/payment-failures.md) - Handle declined cards and failed payments
 - [Team Billing](./docs/team-billing.md) - Organization subscriptions with seats
 - [Tax & Business Billing](./docs/tax.md) - Automatic tax calculation and VAT/tax ID collection
 - [API Reference](./docs/reference.md) - Full API documentation

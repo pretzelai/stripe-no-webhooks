@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import type { BillingConfig, PriceInterval } from "./BillingConfig";
 import type { TransactionSource } from "./credits";
 import type { CreditsGrantTo } from "./credits/lifecycle";
-import type { AutoTopUpFailedReason } from "./credits/topup";
+import type { AutoTopUpFailedCallbackParams } from "./credits/topup";
 
 export interface User {
   id: string;
@@ -29,9 +29,25 @@ export interface StripeWebhookCallbacks {
     previousPriceId: string
   ) => void | Promise<void>;
 
+  onSubscriptionPaymentFailed?: (params: {
+    userId: string;
+    stripeCustomerId: string;
+    subscriptionId: string;
+    invoiceId: string;
+    amountDue: number;
+    currency: string;
+    stripeDeclineCode?: string;
+    failureMessage?: string;
+    attemptCount: number;
+    nextPaymentAttempt: Date | null;
+    willRetry: boolean;
+    planName?: string;
+    priceId: string;
+  }) => void | Promise<void>;
+
   onCreditsGranted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     newBalance: number;
     source: TransactionSource;
@@ -40,7 +56,7 @@ export interface StripeWebhookCallbacks {
 
   onCreditsRevoked?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     previousBalance: number;
     newBalance: number;
@@ -54,7 +70,7 @@ export interface StripeWebhookCallbacks {
 
   onTopUpCompleted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     creditsAdded: number;
     amountCharged: number;
     currency: string;
@@ -62,16 +78,13 @@ export interface StripeWebhookCallbacks {
     sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
   }) => void | Promise<void>;
 
-  onAutoTopUpFailed?: (params: {
-    userId: string;
-    creditType: string;
-    reason: AutoTopUpFailedReason;
-    error?: string;
-  }) => void | Promise<void>;
+  onAutoTopUpFailed?: (
+    params: AutoTopUpFailedCallbackParams
+  ) => void | Promise<void>;
 
   onCreditsLow?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     balance: number;
     threshold: number;
   }) => void | Promise<void>;
@@ -119,33 +132,25 @@ export interface CreditsConfig {
   grantTo?: CreditsGrantTo;
   onTopUpCompleted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     creditsAdded: number;
     amountCharged: number;
     currency: string;
     newBalance: number;
     sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
   }) => void | Promise<void>;
-  onAutoTopUpFailed?: (params: {
-    userId: string;
-    creditType: string;
-    reason:
-      | "max_per_month_reached"
-      | "no_payment_method"
-      | "payment_failed"
-      | "payment_requires_action"
-      | "unexpected_error";
-    error?: string;
-  }) => void | Promise<void>;
+  onAutoTopUpFailed?: (
+    params: AutoTopUpFailedCallbackParams
+  ) => void | Promise<void>;
   onCreditsLow?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     balance: number;
     threshold: number;
   }) => void | Promise<void>;
   onCreditsGranted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     newBalance: number;
     source: TransactionSource;
@@ -153,7 +158,7 @@ export interface CreditsConfig {
   }) => void | Promise<void>;
   onCreditsRevoked?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     previousBalance: number;
     newBalance: number;
@@ -183,18 +188,29 @@ export interface StripeConfig {
    */
   tax?: TaxConfig;
 
-  mapUserIdToStripeCustomerId?: (
-    userId: string
-  ) => string | Promise<string> | null | Promise<string | null>;
-}
-
-export interface HandlerConfig {
+  /**
+   * Resolve the current user from an incoming request.
+   * Used by the HTTP handler to determine who is making the request.
+   * @example
+   * resolveUser: async (req) => {
+   *   const session = await auth(); // Your auth library
+   *   return session?.user ? { id: session.user.id, email: session.user.email } : null;
+   * }
+   */
   resolveUser?: (
     request: Request
   ) => User | Promise<User> | null | Promise<User | null>;
 
+  /**
+   * Resolve the organization ID from an incoming request (optional).
+   * Used for multi-tenant setups where subscriptions are per-organization.
+   */
   resolveOrg?: (
     request: Request
+  ) => string | Promise<string> | null | Promise<string | null>;
+
+  mapUserIdToStripeCustomerId?: (
+    userId: string
   ) => string | Promise<string> | null | Promise<string | null>;
 
   /**
@@ -202,7 +218,25 @@ export interface HandlerConfig {
    * If not set, handlers will return a 401 error response instead.
    */
   loginUrl?: string;
+}
 
+/**
+ * Optional overrides for createHandler().
+ * Most config should be set in the Billing constructor.
+ * Use this only if you need route-specific overrides.
+ */
+export interface HandlerConfig {
+  /** Override resolveUser for this handler (rarely needed) */
+  resolveUser?: (
+    request: Request
+  ) => User | Promise<User> | null | Promise<User | null>;
+
+  /** Override resolveOrg for this handler (rarely needed) */
+  resolveOrg?: (
+    request: Request
+  ) => string | Promise<string> | null | Promise<string | null>;
+
+  /** Override callbacks for this handler (rarely needed) */
   callbacks?: StripeWebhookCallbacks;
 }
 

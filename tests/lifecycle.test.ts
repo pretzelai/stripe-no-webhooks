@@ -169,8 +169,8 @@ describe("Lifecycle: New Subscription", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // Pro plan: 10,000 api_calls, 100 storage_gb
-    const apiBalance = await credits.getBalance("user_1", "api_calls");
-    const storageBalance = await credits.getBalance("user_1", "storage_gb");
+    const apiBalance = await credits.getBalance({ userId: "user_1", key: "api_calls" });
+    const storageBalance = await credits.getBalance({ userId: "user_1", key: "storage_gb" });
 
     expect(apiBalance).toBe(10000);
     expect(storageBalance).toBe(100);
@@ -195,7 +195,7 @@ describe("Lifecycle: New Subscription", () => {
 
     await lifecycle.onSubscriptionCreated(subscription);
 
-    const allBalances = await credits.getAllBalances("user_1");
+    const allBalances = await credits.getAllBalances({ userId: "user_1" });
     expect(Object.keys(allBalances).length).toBe(0);
   });
 
@@ -219,9 +219,9 @@ describe("Lifecycle: New Subscription", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // Enterprise: 100,000 api_calls, 1000 storage_gb, 50 seats
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(100000);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1000);
-    expect(await credits.getBalance("user_1", "seats")).toBe(50);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(100000);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "seats" })).toBe(50);
   });
 
   test("idempotency: duplicate subscription created events throw error (caught by webhook handler)", async () => {
@@ -243,7 +243,7 @@ describe("Lifecycle: New Subscription", () => {
 
     // First call succeeds
     await lifecycle.onSubscriptionCreated(subscription);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
 
     // Second call throws idempotency error (webhook handler catches this)
     let error: Error | null = null;
@@ -257,7 +257,7 @@ describe("Lifecycle: New Subscription", () => {
     expect(error?.message).toContain("already processed");
 
     // Balance unchanged
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
   });
 
   test("does nothing when grantTo is 'manual'", async () => {
@@ -280,7 +280,7 @@ describe("Lifecycle: New Subscription", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // No credits should be granted
-    const allBalances = await credits.getAllBalances("user_1");
+    const allBalances = await credits.getAllBalances({ userId: "user_1" });
     expect(Object.keys(allBalances).length).toBe(0);
   });
 });
@@ -309,7 +309,7 @@ describe("Lifecycle: Upgrade Free → Paid", () => {
     });
     await lifecycle.onSubscriptionCreated(freeSub);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(100);
 
     // Upgrade to Pro (Free → Paid)
     const upgradedSub = createMockSubscription({
@@ -325,8 +325,8 @@ describe("Lifecycle: Upgrade Free → Paid", () => {
     await lifecycle.onSubscriptionPlanChanged(upgradedSub, "price_free_monthly");
 
     // Should have Pro credits only (not 100 + 10000)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(10000);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(10000);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(100);
   });
 
   test("revokes only remaining free credits if some were consumed", async () => {
@@ -349,8 +349,8 @@ describe("Lifecycle: Upgrade Free → Paid", () => {
     await lifecycle.onSubscriptionCreated(freeSub);
 
     // Consume 60 of 100 credits
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 60 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(40);
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 60 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(40);
 
     // Upgrade to Basic
     const upgradedSub = createMockSubscription({
@@ -366,7 +366,7 @@ describe("Lifecycle: Upgrade Free → Paid", () => {
     await lifecycle.onSubscriptionPlanChanged(upgradedSub, "price_free_monthly");
 
     // Should have Basic credits only (1000), remaining 40 revoked
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
   });
 });
 
@@ -394,11 +394,11 @@ describe("Lifecycle: Upgrade Paid → Paid", () => {
     });
     await lifecycle.onSubscriptionCreated(basicSub);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
 
     // Consume some credits
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 300 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(700);
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 300 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(700);
 
     // Upgrade to Pro (Paid → Paid)
     const upgradedSub = createMockSubscription({
@@ -414,9 +414,9 @@ describe("Lifecycle: Upgrade Paid → Paid", () => {
     await lifecycle.onSubscriptionPlanChanged(upgradedSub, "price_basic_monthly");
 
     // Should keep 700 + get 10000 = 10700
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(10700);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(10700);
     // Should also get storage credits (new credit type)
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(100);
   });
 
   test("adds new credit types that did not exist in old plan", async () => {
@@ -452,9 +452,9 @@ describe("Lifecycle: Upgrade Paid → Paid", () => {
     await lifecycle.onSubscriptionPlanChanged(upgradedSub, "price_basic_monthly");
 
     // Should have all Enterprise credits added
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000 + 100000);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1000);
-    expect(await credits.getBalance("user_1", "seats")).toBe(50);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000 + 100000);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "seats" })).toBe(50);
   });
 });
 
@@ -482,8 +482,8 @@ describe("Lifecycle: Downgrade", () => {
     });
     await lifecycle.onSubscriptionCreated(proSub);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(10000);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(10000);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(100);
 
     // Downgrade to Basic (scheduled for period end)
     const downgradedSub = createMockSubscription({
@@ -499,8 +499,8 @@ describe("Lifecycle: Downgrade", () => {
     await lifecycle.onSubscriptionPlanChanged(downgradedSub, "price_pro_monthly");
 
     // Credits should be UNCHANGED (defer to renewal)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(10000);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(10000);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(100);
   });
 
   test("applies downgrade at renewal: revokes extra credit types, resets to new allocation", async () => {
@@ -515,12 +515,12 @@ describe("Lifecycle: Downgrade", () => {
     });
 
     // Start with Pro credits (granted manually to simulate existing state)
-    await credits.grant({ userId: "user_1", creditType: "api_calls", amount: 10000, source: "subscription", sourceId: "sub_downgrade_2" });
-    await credits.grant({ userId: "user_1", creditType: "storage_gb", amount: 100, source: "subscription", sourceId: "sub_downgrade_2" });
+    await credits.grant({ userId: "user_1", key: "api_calls", amount: 10000, source: "subscription", sourceId: "sub_downgrade_2" });
+    await credits.grant({ userId: "user_1", key: "storage_gb", amount: 100, source: "subscription", sourceId: "sub_downgrade_2" });
 
     // Consume some
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 3000 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(7000);
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 3000 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(7000);
 
     // Downgrade applied at renewal
     const downgradedSub = createMockSubscription({
@@ -532,9 +532,9 @@ describe("Lifecycle: Downgrade", () => {
     await lifecycle.onDowngradeApplied(downgradedSub, "price_basic_monthly");
 
     // api_calls: reset to Basic allocation (1000) because onRenewal: "reset"
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
     // storage_gb: revoked entirely (not in Basic plan)
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(0);
   });
 
   test("downgrade respects onRenewal: add mode", async () => {
@@ -569,7 +569,7 @@ describe("Lifecycle: Downgrade", () => {
     });
 
     // Start with 7000 credits remaining
-    await credits.grant({ userId: "user_1", creditType: "api_calls", amount: 7000, source: "subscription", sourceId: "sub_add" });
+    await credits.grant({ userId: "user_1", key: "api_calls", amount: 7000, source: "subscription", sourceId: "sub_add" });
 
     const downgradedSub = createMockSubscription({
       id: "sub_add",
@@ -580,7 +580,7 @@ describe("Lifecycle: Downgrade", () => {
     await lifecycle.onDowngradeApplied(downgradedSub, "price_basic_add");
 
     // With onRenewal: "add", should keep 7000 + add 500 = 7500
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(7500);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(7500);
   });
 });
 
@@ -601,9 +601,9 @@ describe("Lifecycle: Renewal", () => {
     });
 
     // User has 500 remaining of 1000 Basic credits
-    await credits.grant({ userId: "user_1", creditType: "api_calls", amount: 1000, source: "subscription", sourceId: "sub_renew" });
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 500 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(500);
+    await credits.grant({ userId: "user_1", key: "api_calls", amount: 1000, source: "subscription", sourceId: "sub_renew" });
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 500 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
 
     const subscription = createMockSubscription({
       id: "sub_renew",
@@ -614,7 +614,7 @@ describe("Lifecycle: Renewal", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_renewal_1");
 
     // Should reset to 1000 (unused 500 lost)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
   });
 
   test("accumulates credits on renewal with onRenewal: add", async () => {
@@ -629,14 +629,14 @@ describe("Lifecycle: Renewal", () => {
     });
 
     // User has 50 storage_gb remaining (Pro plan has onRenewal: "add" for storage)
-    await credits.grant({ userId: "user_1", creditType: "storage_gb", amount: 100, source: "subscription", sourceId: "sub_add_renew" });
-    await credits.consume({ userId: "user_1", creditType: "storage_gb", amount: 50 });
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(50);
+    await credits.grant({ userId: "user_1", key: "storage_gb", amount: 100, source: "subscription", sourceId: "sub_add_renew" });
+    await credits.consume({ userId: "user_1", key: "storage_gb", amount: 50 });
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(50);
 
     // Also set up api_calls which uses "reset"
-    await credits.grant({ userId: "user_1", creditType: "api_calls", amount: 10000, source: "subscription", sourceId: "sub_add_renew" });
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 3000 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(7000);
+    await credits.grant({ userId: "user_1", key: "api_calls", amount: 10000, source: "subscription", sourceId: "sub_add_renew" });
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 3000 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(7000);
 
     const subscription = createMockSubscription({
       id: "sub_add_renew",
@@ -647,9 +647,9 @@ describe("Lifecycle: Renewal", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_renewal_2");
 
     // api_calls: reset to 10000 (7000 lost)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(10000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(10000);
     // storage_gb: add 100 to existing 50 = 150
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(150);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(150);
   });
 
   test("renewal idempotency: same invoice throws error on duplicate", async () => {
@@ -671,21 +671,13 @@ describe("Lifecycle: Renewal", () => {
 
     // First renewal succeeds
     await lifecycle.onSubscriptionRenewed(subscription, "inv_same");
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
 
-    // Second call with same invoice throws idempotency error
-    let error: Error | null = null;
-    try {
-      await lifecycle.onSubscriptionRenewed(subscription, "inv_same");
-    } catch (e) {
-      error = e as Error;
-    }
+    // Second call with same invoice returns gracefully (no error, to avoid webhook retry loops)
+    await lifecycle.onSubscriptionRenewed(subscription, "inv_same");
 
-    expect(error).not.toBeNull();
-    expect(error?.message).toContain("already processed");
-
-    // Balance unchanged
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    // Balance unchanged - credits not granted twice
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
   });
 });
 
@@ -706,14 +698,14 @@ describe("Lifecycle: Cancellation", () => {
     });
 
     // User has credits from subscription
-    await credits.grant({ userId: "user_1", creditType: "api_calls", amount: 5000, source: "subscription", sourceId: "sub_cancel" });
-    await credits.grant({ userId: "user_1", creditType: "storage_gb", amount: 100, source: "subscription", sourceId: "sub_cancel" });
+    await credits.grant({ userId: "user_1", key: "api_calls", amount: 5000, source: "subscription", sourceId: "sub_cancel" });
+    await credits.grant({ userId: "user_1", key: "storage_gb", amount: 100, source: "subscription", sourceId: "sub_cancel" });
 
     // User also has top-up credits
-    await credits.grant({ userId: "user_1", creditType: "api_calls", amount: 1000, source: "topup", sourceId: "topup_1" });
+    await credits.grant({ userId: "user_1", key: "api_calls", amount: 1000, source: "topup", sourceId: "topup_1" });
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(6000);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(6000);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(100);
 
     const subscription = createMockSubscription({
       id: "sub_cancel",
@@ -725,8 +717,8 @@ describe("Lifecycle: Cancellation", () => {
     await lifecycle.onSubscriptionCancelled(subscription);
 
     // ALL credits revoked (including top-ups) because user loses service access
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(0);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(0);
   });
 
   test("does nothing if user has no credits", async () => {
@@ -750,7 +742,7 @@ describe("Lifecycle: Cancellation", () => {
     // Should not throw
     await lifecycle.onSubscriptionCancelled(subscription);
 
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);
   });
 });
 
@@ -780,7 +772,7 @@ describe("Lifecycle: Edge Cases", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // No credits granted
-    const allBalances = await credits.getAllBalances("unknown_user");
+    const allBalances = await credits.getAllBalances({ userId: "unknown_user" });
     expect(Object.keys(allBalances).length).toBe(0);
   });
 
@@ -805,14 +797,14 @@ describe("Lifecycle: Edge Cases", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // No credits granted
-    const allBalances = await credits.getAllBalances("user_1");
+    const allBalances = await credits.getAllBalances({ userId: "user_1" });
     expect(Object.keys(allBalances).length).toBe(0);
   });
 
   test("callbacks are invoked on credit changes", async () => {
     await setupTestUser("user_1", "cus_test_user");
 
-    const grantedCredits: Array<{ creditType: string; amount: number }> = [];
+    const grantedCredits: Array<{ key: string; amount: number }> = [];
 
     const lifecycle = createCreditLifecycle({
       pool,
@@ -821,8 +813,8 @@ describe("Lifecycle: Edge Cases", () => {
       mode: "test",
       grantTo: "subscriber",
       callbacks: {
-        onCreditsGranted: ({ creditType, amount }) => {
-          grantedCredits.push({ creditType, amount });
+        onCreditsGranted: ({ key, amount }) => {
+          grantedCredits.push({ key, amount });
         },
       },
     });
@@ -835,8 +827,8 @@ describe("Lifecycle: Edge Cases", () => {
 
     await lifecycle.onSubscriptionCreated(subscription);
 
-    expect(grantedCredits).toContainEqual({ creditType: "api_calls", amount: 10000 });
-    expect(grantedCredits).toContainEqual({ creditType: "storage_gb", amount: 100 });
+    expect(grantedCredits).toContainEqual({ key: "api_calls", amount: 10000 });
+    expect(grantedCredits).toContainEqual({ key: "storage_gb", amount: 100 });
   });
 
   test("same plan change does nothing", async () => {
@@ -857,13 +849,13 @@ describe("Lifecycle: Edge Cases", () => {
       customerId: "cus_test_user",
     });
     await lifecycle.onSubscriptionCreated(basicSub);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
 
     // "Change" to same plan (e.g., billing interval change within same plan)
     await lifecycle.onSubscriptionPlanChanged(basicSub, "price_basic_monthly");
 
     // Credits should be unchanged
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
   });
 });
 
@@ -895,8 +887,8 @@ describe("Lifecycle: Seat-Users Mode", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // Credits should go to user_alice, not org_1
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(1000);
-    expect(await credits.getBalance("org_1", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(1000);
+    expect(await credits.getBalance({ userId: "org_1", key: "api_calls" })).toBe(0);
   });
 
   test("onSubscriptionCreated does nothing without first_seat_user_id in seat-users mode", async () => {
@@ -920,7 +912,7 @@ describe("Lifecycle: Seat-Users Mode", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // No credits granted - developer will manually add seats
-    expect(await credits.getBalance("org_1", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "org_1", key: "api_calls" })).toBe(0);
   });
 
   test("onSubscriptionRenewed grants to all active seat users", async () => {
@@ -930,14 +922,14 @@ describe("Lifecycle: Seat-Users Mode", () => {
     // These users would be found via getActiveSeatUsers
     await credits.grant({
       userId: "user_alice",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
       source: "seat_grant",
       sourceId: "sub_seat_renewal",
     });
     await credits.grant({
       userId: "user_bob",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 500,
       source: "seat_grant",
       sourceId: "sub_seat_renewal",
@@ -960,8 +952,8 @@ describe("Lifecycle: Seat-Users Mode", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_renewal_1");
 
     // Both users should get renewed credits (reset to 1000 each)
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(1000);
-    expect(await credits.getBalance("user_bob", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_bob", key: "api_calls" })).toBe(1000);
   });
 
   test("onSubscriptionCancelled revokes from all seat users", async () => {
@@ -970,14 +962,14 @@ describe("Lifecycle: Seat-Users Mode", () => {
     // Give credits to seat users
     await credits.grant({
       userId: "user_alice",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 1000,
       source: "seat_grant",
       sourceId: "sub_seat_cancel",
     });
     await credits.grant({
       userId: "user_bob",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 1000,
       source: "seat_grant",
       sourceId: "sub_seat_cancel",
@@ -1001,8 +993,8 @@ describe("Lifecycle: Seat-Users Mode", () => {
     await lifecycle.onSubscriptionCancelled(subscription);
 
     // All seat users should have credits revoked
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(0);
-    expect(await credits.getBalance("user_bob", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(0);
+    expect(await credits.getBalance({ userId: "user_bob", key: "api_calls" })).toBe(0);
   });
 
   test("manual mode does nothing in lifecycle hooks", async () => {
@@ -1026,7 +1018,7 @@ describe("Lifecycle: Seat-Users Mode", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_manual");
 
     // No credits granted in manual mode
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);
   });
 });
 
@@ -1056,7 +1048,7 @@ describe("Lifecycle: Yearly Plans - New Subscription", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // Basic plan: 1000 api_calls monthly → 12000 yearly
-    const balance = await credits.getBalance("user_1", "api_calls");
+    const balance = await credits.getBalance({ userId: "user_1", key: "api_calls" });
     expect(balance).toBe(12000);
   });
 
@@ -1081,8 +1073,8 @@ describe("Lifecycle: Yearly Plans - New Subscription", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // Pro plan: 10000 api_calls, 100 storage_gb → 120000, 1200
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(120000);
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1200);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(120000);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(1200);
   });
 
   test("weekly subscription grants 0.25x monthly allocation (rounded up)", async () => {
@@ -1106,7 +1098,7 @@ describe("Lifecycle: Yearly Plans - New Subscription", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // Basic plan: 1000 api_calls monthly → ceil(1000/4) = 250 weekly
-    const balance = await credits.getBalance("user_1", "api_calls");
+    const balance = await credits.getBalance({ userId: "user_1", key: "api_calls" });
     expect(balance).toBe(250);
   });
 
@@ -1149,10 +1141,10 @@ describe("Lifecycle: Yearly Plans - New Subscription", () => {
     });
 
     await lifecycle.onSubscriptionCreated(sub1);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(25); // ceil(100/4)
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(25); // ceil(100/4)
 
     // Clean up for next test
-    await credits.revokeAll({ userId: "user_1", creditType: "api_calls", source: "manual" });
+    await credits.revokeAll({ userId: "user_1", key: "api_calls", source: "manual" });
 
     const sub2 = createMockSubscription({
       id: "sub_odd2",
@@ -1162,7 +1154,7 @@ describe("Lifecycle: Yearly Plans - New Subscription", () => {
     });
 
     await lifecycle.onSubscriptionCreated(sub2);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(25); // ceil(99/4) = 25
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(25); // ceil(99/4) = 25
   });
 });
 
@@ -1185,7 +1177,7 @@ describe("Lifecycle: Yearly Plans - Renewal", () => {
     // User has 5000 remaining from previous year
     await credits.grant({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 5000,
       source: "subscription",
       sourceId: "sub_yearly_renew",
@@ -1201,7 +1193,7 @@ describe("Lifecycle: Yearly Plans - Renewal", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_yearly_1");
 
     // Should reset to 12000 (unused 5000 lost)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(12000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(12000);
   });
 
   test("yearly renewal with onRenewal: add accumulates 12x", async () => {
@@ -1218,7 +1210,7 @@ describe("Lifecycle: Yearly Plans - Renewal", () => {
     // User has 500 storage remaining (Pro has onRenewal: "add" for storage)
     await credits.grant({
       userId: "user_1",
-      creditType: "storage_gb",
+      key: "storage_gb",
       amount: 500,
       source: "subscription",
       sourceId: "sub_yearly_add",
@@ -1234,9 +1226,9 @@ describe("Lifecycle: Yearly Plans - Renewal", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_yearly_add");
 
     // storage_gb: 500 existing + 1200 (100 * 12) = 1700
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1700);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(1700);
     // api_calls: reset to 120000
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(120000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(120000);
   });
 
   test("weekly renewal grants 0.25x credits", async () => {
@@ -1253,7 +1245,7 @@ describe("Lifecycle: Yearly Plans - Renewal", () => {
     // User has 100 remaining from previous week
     await credits.grant({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 100,
       source: "subscription",
       sourceId: "sub_weekly_renew",
@@ -1269,7 +1261,7 @@ describe("Lifecycle: Yearly Plans - Renewal", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_weekly_1");
 
     // Should reset to 250 (ceil(1000/4))
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(250);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(250);
   });
 });
 
@@ -1297,11 +1289,11 @@ describe("Lifecycle: Yearly Plans - Same-Plan Interval Changes", () => {
       interval: "month",
     });
     await lifecycle.onSubscriptionCreated(monthlySub);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
 
     // Consume some credits
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 300 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(700);
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 300 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(700);
 
     // Upgrade to Basic Yearly (same plan, different interval)
     const yearlySub = createMockSubscription({
@@ -1318,7 +1310,7 @@ describe("Lifecycle: Yearly Plans - Same-Plan Interval Changes", () => {
     await lifecycle.onSubscriptionPlanChanged(yearlySub, "price_basic_monthly");
 
     // Should keep 700 + get 12000 = 12700
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(12700);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(12700);
   });
 
   test("yearly to monthly downgrade: scheduled, grants monthly at period end", async () => {
@@ -1335,15 +1327,15 @@ describe("Lifecycle: Yearly Plans - Same-Plan Interval Changes", () => {
     // User has yearly credits
     await credits.grant({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 12000,
       source: "subscription",
       sourceId: "sub_yearly_downgrade",
     });
 
     // Consume some
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 4000 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(8000);
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 4000 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(8000);
 
     // Schedule downgrade (credits unchanged immediately)
     const scheduledSub = createMockSubscription({
@@ -1360,7 +1352,7 @@ describe("Lifecycle: Yearly Plans - Same-Plan Interval Changes", () => {
     await lifecycle.onSubscriptionPlanChanged(scheduledSub, "price_basic_yearly");
 
     // Credits unchanged (still 8000)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(8000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(8000);
 
     // At period end, downgrade applied
     const appliedSub = createMockSubscription({
@@ -1373,7 +1365,7 @@ describe("Lifecycle: Yearly Plans - Same-Plan Interval Changes", () => {
     await lifecycle.onDowngradeApplied(appliedSub, "price_basic_monthly");
 
     // Should reset to monthly allocation (1000)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
   });
 });
 
@@ -1401,11 +1393,11 @@ describe("Lifecycle: Yearly Plans - Cross-Plan Upgrades", () => {
       interval: "month",
     });
     await lifecycle.onSubscriptionCreated(basicSub);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
 
     // Consume some
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 400 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(600);
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 400 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(600);
 
     // Upgrade to Pro Yearly
     const proYearlySub = createMockSubscription({
@@ -1422,9 +1414,9 @@ describe("Lifecycle: Yearly Plans - Cross-Plan Upgrades", () => {
     await lifecycle.onSubscriptionPlanChanged(proYearlySub, "price_basic_monthly");
 
     // api_calls: 600 (kept) + 120000 (Pro yearly) = 120600
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(120600);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(120600);
     // storage_gb: new credit type, 100 * 12 = 1200
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1200);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(1200);
   });
 
   test("Free Monthly to Pro Yearly: revokes free, grants 12x Pro", async () => {
@@ -1446,7 +1438,7 @@ describe("Lifecycle: Yearly Plans - Cross-Plan Upgrades", () => {
       interval: "month",
     });
     await lifecycle.onSubscriptionCreated(freeSub);
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(100);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(100);
 
     // Upgrade to Pro Yearly (Free → Paid)
     const proYearlySub = createMockSubscription({
@@ -1463,9 +1455,9 @@ describe("Lifecycle: Yearly Plans - Cross-Plan Upgrades", () => {
     await lifecycle.onSubscriptionPlanChanged(proYearlySub, "price_free_monthly");
 
     // api_calls: revoked free 100, granted 120000
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(120000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(120000);
     // storage_gb: 1200 (new credit type)
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(1200);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(1200);
   });
 });
 
@@ -1488,22 +1480,22 @@ describe("Lifecycle: Yearly Plans - Downgrades", () => {
     // User has Pro yearly credits
     await credits.grant({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 120000,
       source: "subscription",
       sourceId: "sub_yearly_to_monthly",
     });
     await credits.grant({
       userId: "user_1",
-      creditType: "storage_gb",
+      key: "storage_gb",
       amount: 1200,
       source: "subscription",
       sourceId: "sub_yearly_to_monthly",
     });
 
     // Consume some
-    await credits.consume({ userId: "user_1", creditType: "api_calls", amount: 50000 });
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(70000);
+    await credits.consume({ userId: "user_1", key: "api_calls", amount: 50000 });
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(70000);
 
     // Downgrade applied at period end to Basic Monthly
     const downgradedSub = createMockSubscription({
@@ -1516,9 +1508,9 @@ describe("Lifecycle: Yearly Plans - Downgrades", () => {
     await lifecycle.onDowngradeApplied(downgradedSub, "price_basic_monthly");
 
     // api_calls: reset to monthly Basic (1000)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(1000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
     // storage_gb: revoked (not in Basic plan)
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(0);
   });
 
   test("Pro Yearly to Basic Yearly downgrade: resets to yearly Basic allocation", async () => {
@@ -1535,14 +1527,14 @@ describe("Lifecycle: Yearly Plans - Downgrades", () => {
     // User has Pro yearly credits
     await credits.grant({
       userId: "user_1",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 120000,
       source: "subscription",
       sourceId: "sub_yearly_to_yearly",
     });
     await credits.grant({
       userId: "user_1",
-      creditType: "storage_gb",
+      key: "storage_gb",
       amount: 1200,
       source: "subscription",
       sourceId: "sub_yearly_to_yearly",
@@ -1559,9 +1551,9 @@ describe("Lifecycle: Yearly Plans - Downgrades", () => {
     await lifecycle.onDowngradeApplied(downgradedSub, "price_basic_yearly");
 
     // api_calls: reset to yearly Basic (1000 * 12 = 12000)
-    expect(await credits.getBalance("user_1", "api_calls")).toBe(12000);
+    expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(12000);
     // storage_gb: revoked (not in Basic plan)
-    expect(await credits.getBalance("user_1", "storage_gb")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_1", key: "storage_gb" })).toBe(0);
   });
 });
 
@@ -1592,8 +1584,8 @@ describe("Lifecycle: Yearly Plans - Seat-Users Mode", () => {
     await lifecycle.onSubscriptionCreated(subscription);
 
     // user_alice should get 12x credits
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(12000);
-    expect(await credits.getBalance("org_1", "api_calls")).toBe(0);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(12000);
+    expect(await credits.getBalance({ userId: "org_1", key: "api_calls" })).toBe(0);
   });
 
   test("yearly renewal grants 12x to all seat users", async () => {
@@ -1602,14 +1594,14 @@ describe("Lifecycle: Yearly Plans - Seat-Users Mode", () => {
     // Set up existing seat users
     await credits.grant({
       userId: "user_alice",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 5000,
       source: "seat_grant",
       sourceId: "sub_seat_yearly_renew",
     });
     await credits.grant({
       userId: "user_bob",
-      creditType: "api_calls",
+      key: "api_calls",
       amount: 3000,
       source: "seat_grant",
       sourceId: "sub_seat_yearly_renew",
@@ -1633,7 +1625,7 @@ describe("Lifecycle: Yearly Plans - Seat-Users Mode", () => {
     await lifecycle.onSubscriptionRenewed(subscription, "inv_seat_yearly");
 
     // Both users should get reset to 12000 each
-    expect(await credits.getBalance("user_alice", "api_calls")).toBe(12000);
-    expect(await credits.getBalance("user_bob", "api_calls")).toBe(12000);
+    expect(await credits.getBalance({ userId: "user_alice", key: "api_calls" })).toBe(12000);
+    expect(await credits.getBalance({ userId: "user_bob", key: "api_calls" })).toBe(12000);
   });
 });
