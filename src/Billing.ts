@@ -2,7 +2,12 @@ import { StripeSync } from "@pretzelai/stripe-sync-engine";
 import Stripe from "stripe";
 import { Pool } from "pg";
 import { getMode } from "./helpers";
-import { initCredits, credits, type ConsumeResult } from "./credits";
+import {
+  initCredits,
+  credits,
+  type ConsumeResult,
+  type TopUpFailureRecord,
+} from "./credits";
 import {
   createCreditLifecycle,
   type CreditsGrantTo,
@@ -13,7 +18,7 @@ import {
   type TopUpResult,
   type TopUpPending,
   type AutoTopUpResult,
-  type AutoTopUpFailedReason,
+  type AutoTopUpFailedCallbackParams,
 } from "./credits/topup";
 import {
   createSeatsApi,
@@ -46,6 +51,8 @@ export type {
   TopUpResult,
   TopUpPending,
   AutoTopUpResult,
+  AutoTopUpFailedCallbackParams,
+  TopUpFailureRecord,
   ConsumeResult,
   AddSeatParams,
   AddSeatResult,
@@ -215,12 +222,9 @@ export class Billing {
   };
 
   private createCreditsApi(callbacks?: {
-    onAutoTopUpFailed?: (params: {
-      userId: string;
-      creditType: string;
-      reason: AutoTopUpFailedReason;
-      error?: string;
-    }) => void | Promise<void>;
+    onAutoTopUpFailed?: (
+      params: AutoTopUpFailedCallbackParams
+    ) => void | Promise<void>;
     onTopUpCompleted?: (params: {
       userId: string;
       creditType: string;
@@ -269,14 +273,15 @@ export class Billing {
             currentBalance: result.balance,
           })
           .catch((err) => {
-            const message =
-              err instanceof Error ? err.message : "Unknown error";
             console.error("Auto top-up error:", err);
+            // For unexpected errors, we don't have stripeCustomerId
             callbacks?.onAutoTopUpFailed?.({
               userId: params.userId,
+              stripeCustomerId: "",
               creditType: params.creditType,
-              reason: "unexpected_error",
-              error: message,
+              trigger: "unexpected_error",
+              status: "action_required",
+              failureCount: 0,
             });
           });
       }
@@ -296,6 +301,10 @@ export class Billing {
       getHistory: credits.getHistory,
       topUp: topUpHandler.topUp,
       hasPaymentMethod: topUpHandler.hasPaymentMethod,
+      // Top-up failure management
+      resetTopUpFailure: credits.resetTopUpFailure,
+      resetAllTopUpFailures: credits.resetAllTopUpFailures,
+      getTopUpFailure: credits.getTopUpFailure,
     };
   }
 
@@ -374,6 +383,45 @@ export class Billing {
       const url = new URL(request.url);
       const action = url.pathname.split("/").filter(Boolean).pop();
 
+      // Recovery endpoint accepts GET (clicked from email links)
+      if (action === "recovery" && request.method === "GET") {
+        const userId = url.searchParams.get("userId");
+        const returnUrl =
+          url.searchParams.get("returnUrl") || this.defaultSuccessUrl;
+
+        if (!userId) {
+          return new Response(
+            JSON.stringify({ error: "Missing userId parameter" }),
+            { status: 400, headers: { "Content-Type": "application/json" } }
+          );
+        }
+
+        try {
+          const customerId = await this.resolveStripeCustomerId({
+            user: { id: userId },
+          });
+          if (!customerId) {
+            return new Response(
+              JSON.stringify({ error: "Customer not found" }),
+              { status: 404, headers: { "Content-Type": "application/json" } }
+            );
+          }
+
+          const session = await this.stripe.billingPortal.sessions.create({
+            customer: customerId,
+            return_url: returnUrl || url.origin,
+          });
+
+          return Response.redirect(session.url, 302);
+        } catch (err) {
+          console.error("Recovery redirect error:", err);
+          return new Response(
+            JSON.stringify({ error: "Failed to create portal session" }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          );
+        }
+      }
+
       if (request.method !== "POST") {
         return new Response(JSON.stringify({ error: "Method not allowed" }), {
           status: 405,
@@ -393,7 +441,7 @@ export class Billing {
         default:
           return new Response(
             JSON.stringify({
-              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing`,
+              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing, recovery (GET)`,
             }),
             { status: 404, headers: { "Content-Type": "application/json" } }
           );

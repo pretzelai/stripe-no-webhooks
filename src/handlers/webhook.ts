@@ -402,5 +402,16 @@ async function handleEvent(
       await ctx.topUpHandler.handlePaymentIntentSucceeded(paymentIntent);
       break;
     }
+
+    case "customer.updated": {
+      const customer = event.data.object as Stripe.Customer;
+      const previousAttributes = event.data.previous_attributes as
+        | Partial<Stripe.Customer>
+        | undefined;
+
+      // Clear top-up failures if payment method changed
+      await ctx.topUpHandler.handleCustomerUpdated(customer, previousAttributes);
+      break;
+    }
   }
 }

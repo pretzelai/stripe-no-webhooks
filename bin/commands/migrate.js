@@ -95,6 +95,22 @@ async function migrate(dbUrl, options = {}) {
     `);
     success("Created indexes");
 
+    // Top-up failure tracking for cooldown logic
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${SCHEMA}.topup_failures (
+        user_id TEXT NOT NULL,
+        credit_type TEXT NOT NULL,
+        payment_method_id TEXT,
+        decline_type TEXT NOT NULL,
+        decline_code TEXT,
+        failure_count INTEGER DEFAULT 1,
+        last_failure_at TIMESTAMPTZ DEFAULT NOW(),
+        disabled BOOLEAN DEFAULT FALSE,
+        PRIMARY KEY (user_id, credit_type)
+      );
+    `);
+    success("Created stripe.topup_failures");
+
     await client.end();
 
     if (!env.DATABASE_URL) {

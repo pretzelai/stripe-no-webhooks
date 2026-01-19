@@ -51,7 +51,7 @@ export default async function stripeHandler(
   const request = new Request(`https://${req.headers.host}${req.url}`, {
     method: req.method || "POST",
     headers: new Headers(req.headers as Record<string, string>),
-    body,
+    ...(req.method !== "GET" && { body }),
   });
 
   const response = await handler(request);

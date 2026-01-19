@@ -6,6 +6,43 @@ import { credits } from "./index";
 import * as db from "./db";
 import { CreditError } from "./types";
 
+// Hard declines: card is unusable, stop immediately
+const HARD_DECLINE_CODES = new Set([
+  "expired_card",
+  "stolen_card",
+  "lost_card",
+  "pickup_card",
+  "fraudulent",
+  "invalid_account",
+  "restricted_card",
+  "invalid_cvc",
+  "incorrect_cvc",
+  "invalid_number",
+  "incorrect_number",
+]);
+
+// Soft declines: temporary, might succeed later
+const SOFT_DECLINE_CODES = new Set([
+  "insufficient_funds",
+  "card_velocity_exceeded",
+  "withdrawal_count_limit_exceeded",
+  "authentication_required",
+  "issuer_not_available",
+  "processing_error",
+  "try_again_later",
+  "do_not_honor",
+  "generic_decline",
+  "call_issuer",
+  "duplicate_transaction",
+]);
+
+function classifyDeclineCode(code: string | undefined): "hard" | "soft" {
+  if (!code) return "soft";
+  if (HARD_DECLINE_CODES.has(code)) return "hard";
+  // Unknown codes default to soft (allow retry after cooldown)
+  return "soft";
+}
+
 export type TopUpSuccess = {
   success: true;
   balance: number;
@@ -60,13 +97,18 @@ export type AutoTopUpSkipped = {
     | "max_per_month_reached"
     | "no_payment_method"
     | "no_subscription"
-    | "user_not_found";
+    | "user_not_found"
+    | "disabled_hard_decline"
+    | "in_cooldown";
+  retriesAt?: Date;
 };
 
 export type AutoTopUpFailed = {
   triggered: false;
   reason: "payment_failed" | "payment_requires_action";
   error: string;
+  declineCode?: string;
+  declineType?: "hard" | "soft";
 };
 
 export type AutoTopUpResult =
@@ -74,12 +116,26 @@ export type AutoTopUpResult =
   | AutoTopUpSkipped
   | AutoTopUpFailed;
 
-export type AutoTopUpFailedReason =
-  | "max_per_month_reached"
-  | "no_payment_method"
-  | "payment_failed"
-  | "payment_requires_action"
-  | "unexpected_error";
+export type AutoTopUpFailedTrigger =
+  | "stripe_declined_payment"      // We charged, Stripe said no
+  | "waiting_for_retry_cooldown"   // In 24h cooldown, will retry after
+  | "blocked_until_card_updated"   // Permanently blocked, needs new card
+  | "no_payment_method"            // No card on file
+  | "monthly_limit_reached"        // Hit max auto top-ups this month
+  | "unexpected_error";            // Unexpected error (network, code bug, etc.)
+
+export type AutoTopUpFailedCallbackParams = {
+  userId: string;
+  stripeCustomerId: string;
+  creditType: string;
+
+  trigger: AutoTopUpFailedTrigger;
+  status: "will_retry" | "action_required";
+  nextAttemptAt?: Date;
+
+  failureCount: number;
+  stripeDeclineCode?: string;
+};
 
 export type TopUpHandler = {
   topUp: (params: TopUpParams) => Promise<TopUpResult>;
@@ -92,6 +148,7 @@ export type TopUpHandler = {
   handlePaymentIntentSucceeded: (paymentIntent: Stripe.PaymentIntent) => Promise<void>;
   handleTopUpCheckoutCompleted: (session: Stripe.Checkout.Session) => Promise<void>;
   handleInvoicePaid: (invoice: Stripe.Invoice) => Promise<void>;
+  handleCustomerUpdated: (customer: Stripe.Customer, previousAttributes?: Partial<Stripe.Customer>) => Promise<void>;
 };
 
 export function createTopUpHandler(deps: {
@@ -120,12 +177,9 @@ export function createTopUpHandler(deps: {
     newBalance: number;
     sourceId: string;
   }) => void | Promise<void>;
-  onAutoTopUpFailed?: (params: {
-    userId: string;
-    creditType: string;
-    reason: AutoTopUpFailedReason;
-    error?: string;
-  }) => void | Promise<void>;
+  onAutoTopUpFailed?: (
+    params: AutoTopUpFailedCallbackParams
+  ) => void | Promise<void>;
   onCreditsLow?: (params: {
     userId: string;
     creditType: string;
@@ -217,6 +271,9 @@ export function createTopUpHandler(deps: {
       customer: customerId,
       mode: "payment",
       payment_method_types: ["card"],
+      payment_intent_data: {
+        setup_future_usage: "off_session",
+      },
       line_items: [
         {
           price_data: {
@@ -824,10 +881,18 @@ export function createTopUpHandler(deps: {
   async function handlePaymentIntentSucceeded(
     paymentIntent: Stripe.PaymentIntent
   ): Promise<void> {
-    if (!paymentIntent.metadata?.top_up_credit_type) {
+    const creditType = paymentIntent.metadata?.top_up_credit_type;
+    const userId = paymentIntent.metadata?.user_id;
+    if (!creditType) {
       return;
     }
     await grantCreditsFromPayment(paymentIntent);
+
+    // Clear any failure record on successful payment
+    // This handles the "processing" -> "succeeded" path
+    if (userId && creditType) {
+      await db.clearTopUpFailure(userId, creditType);
+    }
   }
 
   async function handleTopUpCheckoutCompleted(
@@ -884,6 +949,31 @@ export function createTopUpHandler(deps: {
         ? session.payment_intent
         : session.payment_intent?.id ?? session.id;
 
+    // Update default payment method from the recovery checkout
+    // This ensures future charges use the new card the customer just provided
+    if (session.payment_intent) {
+      try {
+        const paymentIntent = await stripe.paymentIntents.retrieve(
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : session.payment_intent.id
+        );
+        if (paymentIntent.payment_method) {
+          await stripe.customers.update(customerId, {
+            invoice_settings: {
+              default_payment_method:
+                typeof paymentIntent.payment_method === "string"
+                  ? paymentIntent.payment_method
+                  : paymentIntent.payment_method.id,
+            },
+          });
+        }
+      } catch (updateErr) {
+        // Log but don't fail - credits should still be granted
+        console.error("Failed to update default payment method:", updateErr);
+      }
+    }
+
     let newBalance: number;
     try {
       // Use same idempotency key format as grantCreditsFromPayment
@@ -924,6 +1014,9 @@ export function createTopUpHandler(deps: {
       newBalance,
       sourceId: paymentIntentId,
     });
+
+    // Clear any failure record - recovery checkout succeeded
+    await db.clearTopUpFailure(userId, creditType);
   }
 
   /**
@@ -933,12 +1026,54 @@ export function createTopUpHandler(deps: {
    */
   async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
     // Only process top-up invoices (not subscription invoices)
-    if (!invoice.metadata?.top_up_credit_type) {
+    const creditType = invoice.metadata?.top_up_credit_type;
+    const userId = invoice.metadata?.user_id;
+    if (!creditType) {
       return;
     }
 
     try {
       await grantCreditsFromInvoice(invoice);
+
+      // Update default payment method from the invoice payment
+      // This ensures future charges use the card the customer just paid with
+      const customerId =
+        typeof invoice.customer === "string"
+          ? invoice.customer
+          : invoice.customer?.id;
+
+      if (customerId && invoice.payment_intent) {
+        try {
+          const paymentIntentId =
+            typeof invoice.payment_intent === "string"
+              ? invoice.payment_intent
+              : invoice.payment_intent.id;
+          const paymentIntent =
+            await stripe.paymentIntents.retrieve(paymentIntentId);
+
+          if (paymentIntent.payment_method) {
+            const paymentMethodId =
+              typeof paymentIntent.payment_method === "string"
+                ? paymentIntent.payment_method
+                : paymentIntent.payment_method.id;
+
+            await stripe.customers.update(customerId, {
+              invoice_settings: { default_payment_method: paymentMethodId },
+            });
+          }
+        } catch (updateErr) {
+          // Log but don't fail - credits should still be granted
+          console.error(
+            "Failed to update default payment method from invoice:",
+            updateErr
+          );
+        }
+      }
+
+      // Clear any failure record on successful payment
+      if (userId && creditType) {
+        await db.clearTopUpFailure(userId, creditType);
+      }
     } catch (err) {
       // Idempotency conflict = already granted inline, which is expected
       if (err instanceof CreditError && err.code === "IDEMPOTENCY_CONFLICT") {
@@ -958,6 +1093,11 @@ export function createTopUpHandler(deps: {
   /**
    * Check if auto top-up should be triggered and execute it if needed.
    * Called after credits are consumed to replenish when balance drops below threshold.
+   *
+   * Implements failure tracking with cooldown:
+   * - Hard declines (expired, stolen, etc.) disable auto top-up until payment method changes
+   * - Soft declines (insufficient funds, etc.) have 24h cooldown before retry
+   * - After 3 soft declines, escalates to hard (permanent disable)
    */
   async function triggerAutoTopUpIfNeeded(params: {
     userId: string;
@@ -1011,6 +1151,45 @@ export function createTopUpHandler(deps: {
       return { triggered: false, reason: "balance_above_threshold" };
     }
 
+    // Check for existing failure record (cooldown/disabled)
+    const failure = await db.getTopUpFailure(userId, creditType);
+    if (failure?.disabled) {
+      // Hard decline or escalated soft decline (3+ failures) - blocked permanently
+      if (failure.declineType === "hard" || failure.failureCount >= 3) {
+        await onAutoTopUpFailed?.({
+          userId,
+          stripeCustomerId: customer.id,
+          creditType,
+          trigger: "blocked_until_card_updated",
+          status: "action_required",
+          failureCount: failure.failureCount,
+          stripeDeclineCode: failure.declineCode ?? undefined,
+        });
+        return { triggered: false, reason: "disabled_hard_decline" };
+      }
+
+      // Soft decline - check if 24h cooldown has passed
+      const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+      const cooldownEnd = new Date(failure.lastFailureAt.getTime() + COOLDOWN_MS);
+      if (new Date() < cooldownEnd) {
+        await onAutoTopUpFailed?.({
+          userId,
+          stripeCustomerId: customer.id,
+          creditType,
+          trigger: "waiting_for_retry_cooldown",
+          status: "will_retry",
+          nextAttemptAt: cooldownEnd,
+          failureCount: failure.failureCount,
+          stripeDeclineCode: failure.declineCode ?? undefined,
+        });
+        return {
+          triggered: false,
+          reason: "in_cooldown",
+          retriesAt: cooldownEnd,
+        };
+      }
+    }
+
     // Fire onCreditsLow before attempting auto top-up
     await onCreditsLow?.({
       userId,
@@ -1022,8 +1201,11 @@ export function createTopUpHandler(deps: {
     if (!customer.defaultPaymentMethod) {
       await onAutoTopUpFailed?.({
         userId,
+        stripeCustomerId: customer.id,
         creditType,
-        reason: "no_payment_method",
+        trigger: "no_payment_method",
+        status: "action_required",
+        failureCount: failure?.failureCount ?? 0,
       });
       return { triggered: false, reason: "no_payment_method" };
     }
@@ -1035,8 +1217,11 @@ export function createTopUpHandler(deps: {
     if (autoTopUpsThisMonth >= maxPerMonth) {
       await onAutoTopUpFailed?.({
         userId,
+        stripeCustomerId: customer.id,
         creditType,
-        reason: "max_per_month_reached",
+        trigger: "monthly_limit_reached",
+        status: "will_retry", // Resets next month
+        failureCount: failure?.failureCount ?? 0,
       });
       return { triggered: false, reason: "max_per_month_reached" };
     }
@@ -1047,18 +1232,72 @@ export function createTopUpHandler(deps: {
     // Idempotency key prevents duplicate charges from concurrent triggers.
     // Two concurrent consume() calls that both trigger auto top-up will use
     // the same key (based on current count), and Stripe will dedupe one.
+    // Include payment method ID so a new card gets a fresh key after recovery.
     const now = new Date();
     const yearMonth = `${now.getUTCFullYear()}-${String(
       now.getUTCMonth() + 1
     ).padStart(2, "0")}`;
+    const pmSuffix = customer.defaultPaymentMethod?.slice(-8) ?? "nopm";
     const idempotencyKey = `auto_topup_${userId}_${creditType}_${yearMonth}_${
       autoTopUpsThisMonth + 1
-    }`;
+    }_${pmSuffix}`;
 
     // Use configured displayName if available, otherwise construct from ID
     const displayName =
       creditConfig.displayName ||
       creditType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+    // Helper to record failure and fire callback
+    async function handlePaymentFailure(
+      declineCode: string | undefined,
+      errorMessage: string
+    ): Promise<AutoTopUpFailed> {
+      const declineType = classifyDeclineCode(declineCode);
+      const failureRecord = await db.recordTopUpFailure({
+        userId,
+        creditType,
+        paymentMethodId: customer!.defaultPaymentMethod,
+        declineType,
+        declineCode: declineCode ?? null,
+      });
+
+      // Determine status: action_required if hard decline or 3+ failures
+      const isActionRequired =
+        declineType === "hard" || failureRecord.failureCount >= 3;
+
+      // Calculate next retry time for soft declines that haven't escalated
+      const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+      const nextAttemptAt = !isActionRequired
+        ? new Date(failureRecord.lastFailureAt.getTime() + COOLDOWN_MS)
+        : undefined;
+
+      await onAutoTopUpFailed?.({
+        userId,
+        stripeCustomerId: customer!.id,
+        creditType,
+        trigger: "stripe_declined_payment",
+        status: isActionRequired ? "action_required" : "will_retry",
+        nextAttemptAt,
+        failureCount: failureRecord.failureCount,
+        stripeDeclineCode: declineCode,
+      });
+
+      return {
+        triggered: false,
+        reason: "payment_failed",
+        error: errorMessage,
+        declineCode,
+        declineType,
+      };
+    }
+
+    // Helper to handle success
+    async function handlePaymentSuccess(): Promise<void> {
+      // Clear any existing failure record on success
+      if (failure) {
+        await db.clearTopUpFailure(userId, creditType);
+      }
+    }
 
     try {
       if (useInvoices) {
@@ -1110,6 +1349,7 @@ export function createTopUpHandler(deps: {
         }
 
         if (paidInvoice.status === "paid") {
+          await handlePaymentSuccess();
           await grantCreditsFromInvoice(paidInvoice);
           return {
             triggered: true,
@@ -1120,18 +1360,10 @@ export function createTopUpHandler(deps: {
 
         // Invoice not paid (unusual status) - void it
         await stripe.invoices.voidInvoice(invoice.id).catch(() => {});
-        const message = `Invoice status: ${paidInvoice.status}`;
-        await onAutoTopUpFailed?.({
-          userId,
-          creditType,
-          reason: "payment_requires_action",
-          error: message,
-        });
-        return {
-          triggered: false,
-          reason: "payment_requires_action",
-          error: message,
-        };
+        return handlePaymentFailure(
+          undefined,
+          `Invoice status: ${paidInvoice.status}`
+        );
       } else {
         // B2C MODE: Use PaymentIntent directly (cheaper, no Invoicing fee)
         const paymentIntent = await stripe.paymentIntents.create(
@@ -1153,6 +1385,7 @@ export function createTopUpHandler(deps: {
         );
 
         if (paymentIntent.status === "succeeded") {
+          await handlePaymentSuccess();
           await grantCreditsFromPayment(paymentIntent); // this call is also idempotent
           return {
             triggered: true,
@@ -1163,6 +1396,7 @@ export function createTopUpHandler(deps: {
 
         if (paymentIntent.status === "processing") {
           // Webhook will handle granting credits when payment completes
+          // Don't clear failure yet - wait for actual success
           return {
             triggered: true,
             status: "pending",
@@ -1171,33 +1405,84 @@ export function createTopUpHandler(deps: {
         }
 
         // requires_action, requires_payment_method, etc. - user not present to handle
-        const message = `Payment requires action: ${paymentIntent.status}`;
-        await onAutoTopUpFailed?.({
-          userId,
-          creditType,
-          reason: "payment_requires_action",
-          error: message,
-        });
-        return {
-          triggered: false,
-          reason: "payment_requires_action",
-          error: message,
-        };
+        const declineCode = paymentIntent.last_payment_error?.decline_code;
+        return handlePaymentFailure(
+          declineCode ?? undefined,
+          `Payment requires action: ${paymentIntent.status}`
+        );
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Payment failed";
-      await onAutoTopUpFailed?.({
-        userId,
-        creditType,
-        reason: "payment_failed",
-        error: message,
-      });
-      return {
-        triggered: false,
-        reason: "payment_failed",
-        error: message,
+      // Extract decline code from Stripe error if available
+      // Stripe errors can have decline_code at top level or nested in raw
+      const stripeError = err as {
+        type?: string;
+        code?: string;
+        decline_code?: string;
+        message?: string;
+        raw?: {
+          code?: string;
+          decline_code?: string;
+        };
       };
+
+      // Try multiple locations for the decline code
+      const declineCode =
+        stripeError.decline_code ??
+        stripeError.raw?.decline_code ??
+        stripeError.code ??
+        stripeError.raw?.code;
+
+      const message = stripeError.message ?? "Payment failed";
+
+      // Log for debugging
+      console.error("Auto top-up payment error:", {
+        type: stripeError.type,
+        code: stripeError.code,
+        decline_code: stripeError.decline_code,
+        raw_code: stripeError.raw?.code,
+        raw_decline_code: stripeError.raw?.decline_code,
+        resolved_decline_code: declineCode,
+      });
+
+      return handlePaymentFailure(declineCode, message);
     }
+  }
+
+  async function handleCustomerUpdated(
+    customer: Stripe.Customer,
+    previousAttributes?: Partial<Stripe.Customer>
+  ): Promise<void> {
+    // Only care about payment method changes
+    const prevDefaultPM = (
+      previousAttributes?.invoice_settings as
+        | { default_payment_method?: string | null }
+        | undefined
+    )?.default_payment_method;
+
+    // If previous attributes don't include invoice_settings, this wasn't a payment method change
+    if (prevDefaultPM === undefined) {
+      return;
+    }
+
+    const newDefaultPM =
+      typeof customer.invoice_settings?.default_payment_method === "string"
+        ? customer.invoice_settings.default_payment_method
+        : customer.invoice_settings?.default_payment_method?.id;
+
+    // No actual change
+    if (prevDefaultPM === newDefaultPM) {
+      return;
+    }
+
+    // Get user_id from customer metadata
+    const userId = customer.metadata?.user_id;
+    if (!userId) {
+      return;
+    }
+
+    // Payment method changed - clear all failures for this user
+    // (they've taken action to fix their payment method)
+    await db.clearAllTopUpFailuresForUser(userId);
   }
 
   return {
@@ -1207,5 +1492,6 @@ export function createTopUpHandler(deps: {
     handlePaymentIntentSucceeded,
     handleTopUpCheckoutCompleted,
     handleInvoicePaid,
+    handleCustomerUpdated,
   };
 }

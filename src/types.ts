@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import type { BillingConfig, PriceInterval } from "./BillingConfig";
 import type { TransactionSource } from "./credits";
 import type { CreditsGrantTo } from "./credits/lifecycle";
-import type { AutoTopUpFailedReason } from "./credits/topup";
+import type { AutoTopUpFailedCallbackParams } from "./credits/topup";
 
 export interface User {
   id: string;
@@ -62,12 +62,9 @@ export interface StripeWebhookCallbacks {
     sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
   }) => void | Promise<void>;
 
-  onAutoTopUpFailed?: (params: {
-    userId: string;
-    creditType: string;
-    reason: AutoTopUpFailedReason;
-    error?: string;
-  }) => void | Promise<void>;
+  onAutoTopUpFailed?: (
+    params: AutoTopUpFailedCallbackParams
+  ) => void | Promise<void>;
 
   onCreditsLow?: (params: {
     userId: string;
@@ -126,17 +123,9 @@ export interface CreditsConfig {
     newBalance: number;
     sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
   }) => void | Promise<void>;
-  onAutoTopUpFailed?: (params: {
-    userId: string;
-    creditType: string;
-    reason:
-      | "max_per_month_reached"
-      | "no_payment_method"
-      | "payment_failed"
-      | "payment_requires_action"
-      | "unexpected_error";
-    error?: string;
-  }) => void | Promise<void>;
+  onAutoTopUpFailed?: (
+    params: AutoTopUpFailedCallbackParams
+  ) => void | Promise<void>;
   onCreditsLow?: (params: {
     userId: string;
     creditType: string;

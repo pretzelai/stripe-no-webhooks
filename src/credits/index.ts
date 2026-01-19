@@ -5,6 +5,10 @@ import {
   getAllBalances,
   hasCredits,
   getHistory,
+  clearTopUpFailure,
+  clearAllTopUpFailuresForUser,
+  getTopUpFailure,
+  type TopUpFailureRecord,
 } from "./db";
 import {
   consume,
@@ -22,6 +26,7 @@ export type {
   TransactionType,
   TransactionSource,
 } from "./types";
+export type { TopUpFailureRecord };
 
 export function initCredits(pool: Pool | null, schema = "stripe") {
   setPool(pool, schema);
@@ -38,4 +43,8 @@ export const credits = {
   revokeAllCreditTypesForUser,
   setBalance,
   getHistory,
+  // Top-up failure management
+  resetTopUpFailure: clearTopUpFailure,
+  resetAllTopUpFailures: clearAllTopUpFailuresForUser,
+  getTopUpFailure,
 };

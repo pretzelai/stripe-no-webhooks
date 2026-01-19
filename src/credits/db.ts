@@ -458,3 +458,102 @@ export async function getCreditsGrantedBySource(
   }
   return net;
 }
+
+// Top-up failure tracking
+
+export type TopUpFailureRecord = {
+  userId: string;
+  creditType: string;
+  paymentMethodId: string | null;
+  declineType: "hard" | "soft";
+  declineCode: string | null;
+  failureCount: number;
+  lastFailureAt: Date;
+  disabled: boolean;
+};
+
+export async function getTopUpFailure(
+  userId: string,
+  creditType: string
+): Promise<TopUpFailureRecord | null> {
+  const p = ensurePool();
+  const result = await p.query(
+    `SELECT user_id, credit_type, payment_method_id, decline_type, decline_code,
+            failure_count, last_failure_at, disabled
+     FROM ${schema}.topup_failures
+     WHERE user_id = $1 AND credit_type = $2`,
+    [userId, creditType]
+  );
+  if (!result.rows[0]) return null;
+  const row = result.rows[0];
+  return {
+    userId: row.user_id,
+    creditType: row.credit_type,
+    paymentMethodId: row.payment_method_id,
+    declineType: row.decline_type as "hard" | "soft",
+    declineCode: row.decline_code,
+    failureCount: row.failure_count,
+    lastFailureAt: new Date(row.last_failure_at),
+    disabled: row.disabled,
+  };
+}
+
+export async function recordTopUpFailure(params: {
+  userId: string;
+  creditType: string;
+  paymentMethodId: string | null;
+  declineType: "hard" | "soft";
+  declineCode: string | null;
+}): Promise<TopUpFailureRecord> {
+  const { userId, creditType, paymentMethodId, declineType, declineCode } =
+    params;
+  const p = ensurePool();
+
+  const result = await p.query(
+    `INSERT INTO ${schema}.topup_failures
+       (user_id, credit_type, payment_method_id, decline_type, decline_code, failure_count, last_failure_at, disabled)
+     VALUES ($1, $2, $3, $4, $5, 1, NOW(), TRUE)
+     ON CONFLICT (user_id, credit_type) DO UPDATE SET
+       payment_method_id = $3,
+       decline_type = $4,
+       decline_code = $5,
+       failure_count = ${schema}.topup_failures.failure_count + 1,
+       last_failure_at = NOW(),
+       disabled = TRUE
+     RETURNING user_id, credit_type, payment_method_id, decline_type, decline_code,
+               failure_count, last_failure_at, disabled`,
+    [userId, creditType, paymentMethodId, declineType, declineCode]
+  );
+
+  const row = result.rows[0];
+  return {
+    userId: row.user_id,
+    creditType: row.credit_type,
+    paymentMethodId: row.payment_method_id,
+    declineType: row.decline_type as "hard" | "soft",
+    declineCode: row.decline_code,
+    failureCount: row.failure_count,
+    lastFailureAt: new Date(row.last_failure_at),
+    disabled: row.disabled,
+  };
+}
+
+export async function clearTopUpFailure(
+  userId: string,
+  creditType: string
+): Promise<void> {
+  const p = ensurePool();
+  await p.query(
+    `DELETE FROM ${schema}.topup_failures WHERE user_id = $1 AND credit_type = $2`,
+    [userId, creditType]
+  );
+}
+
+export async function clearAllTopUpFailuresForUser(
+  userId: string
+): Promise<void> {
+  const p = ensurePool();
+  await p.query(`DELETE FROM ${schema}.topup_failures WHERE user_id = $1`, [
+    userId,
+  ]);
+}

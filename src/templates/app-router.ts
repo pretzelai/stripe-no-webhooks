@@ -6,7 +6,7 @@ import { billing } from "@/lib/billing";
 // import { auth as betterAuth } from "@/lib/auth";
 // import { headers } from "next/headers";
 
-export const POST = billing.createHandler({
+const handler = billing.createHandler({
   // REQUIRED: Return { id, email?, name? } or null if not authenticated
   // Email/name are used when creating a new Stripe customer
   resolveUser: async () => {
@@ -29,3 +29,6 @@ export const POST = billing.createHandler({
   //   return session.currentOrgId ?? null;
   // },
 });
+
+export const POST = handler;
+export const GET = handler;
