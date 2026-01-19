@@ -47,7 +47,7 @@ export interface StripeWebhookCallbacks {
 
   onCreditsGranted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     newBalance: number;
     source: TransactionSource;
@@ -56,7 +56,7 @@ export interface StripeWebhookCallbacks {
 
   onCreditsRevoked?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     previousBalance: number;
     newBalance: number;
@@ -70,7 +70,7 @@ export interface StripeWebhookCallbacks {
 
   onTopUpCompleted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     creditsAdded: number;
     amountCharged: number;
     currency: string;
@@ -84,7 +84,7 @@ export interface StripeWebhookCallbacks {
 
   onCreditsLow?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     balance: number;
     threshold: number;
   }) => void | Promise<void>;
@@ -132,7 +132,7 @@ export interface CreditsConfig {
   grantTo?: CreditsGrantTo;
   onTopUpCompleted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     creditsAdded: number;
     amountCharged: number;
     currency: string;
@@ -144,13 +144,13 @@ export interface CreditsConfig {
   ) => void | Promise<void>;
   onCreditsLow?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     balance: number;
     threshold: number;
   }) => void | Promise<void>;
   onCreditsGranted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     newBalance: number;
     source: TransactionSource;
@@ -158,7 +158,7 @@ export interface CreditsConfig {
   }) => void | Promise<void>;
   onCreditsRevoked?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     previousBalance: number;
     newBalance: number;

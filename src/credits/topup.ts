@@ -77,7 +77,7 @@ export type TopUpResult = TopUpSuccess | TopUpPending | TopUpFailure;
 
 export type TopUpParams = {
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
   /** Idempotency key to prevent duplicate charges on retry. */
   idempotencyKey?: string;
@@ -127,7 +127,7 @@ export type AutoTopUpFailedTrigger =
 export type AutoTopUpFailedCallbackParams = {
   userId: string;
   stripeCustomerId: string;
-  creditType: string;
+  key: string;
 
   trigger: AutoTopUpFailedTrigger;
   status: "will_retry" | "action_required";
@@ -142,7 +142,7 @@ export type TopUpHandler = {
   hasPaymentMethod: (params: { userId: string }) => Promise<boolean>;
   triggerAutoTopUpIfNeeded: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     currentBalance: number;
   }) => Promise<AutoTopUpResult>;
   handlePaymentIntentSucceeded: (paymentIntent: Stripe.PaymentIntent) => Promise<void>;
@@ -162,7 +162,7 @@ export function createTopUpHandler(deps: {
   tax?: TaxConfig;
   onCreditsGranted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     newBalance: number;
     source: "topup" | "auto_topup";
@@ -170,7 +170,7 @@ export function createTopUpHandler(deps: {
   }) => void | Promise<void>;
   onTopUpCompleted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     creditsAdded: number;
     amountCharged: number;
     currency: string;
@@ -182,7 +182,7 @@ export function createTopUpHandler(deps: {
   ) => void | Promise<void>;
   onCreditsLow?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     balance: number;
     threshold: number;
   }) => void | Promise<void>;
@@ -252,7 +252,7 @@ export function createTopUpHandler(deps: {
 
   async function createRecoveryCheckout(
     customerId: string,
-    creditType: string,
+    key: string,
     amount: number,
     totalCents: number,
     currency: string
@@ -264,7 +264,7 @@ export function createTopUpHandler(deps: {
       );
     }
 
-    const displayName = creditType
+    const displayName = key
       .replace(/_/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase());
     const session = await stripe.checkout.sessions.create({
@@ -288,7 +288,7 @@ export function createTopUpHandler(deps: {
         },
       ],
       metadata: {
-        top_up_credit_type: creditType,
+        top_up_key: key,
         top_up_amount: String(amount),
       },
       success_url: successUrl,
@@ -324,7 +324,7 @@ export function createTopUpHandler(deps: {
    */
   async function tryCreateRecoveryUrl(
     customerId: string,
-    creditType: string,
+    key: string,
     amount: number,
     totalCents: number,
     currency: string
@@ -332,7 +332,7 @@ export function createTopUpHandler(deps: {
     try {
       return await createRecoveryCheckout(
         customerId,
-        creditType,
+        key,
         amount,
         totalCents,
         currency
@@ -350,12 +350,12 @@ export function createTopUpHandler(deps: {
   async function grantCreditsFromInvoice(
     invoice: Stripe.Invoice
   ): Promise<number> {
-    const creditType = invoice.metadata?.top_up_credit_type;
+    const key = invoice.metadata?.top_up_key;
     const amountStr = invoice.metadata?.top_up_amount;
     const userId = invoice.metadata?.user_id;
     const isAuto = invoice.metadata?.top_up_auto === "true";
 
-    if (!creditType || !amountStr || !userId) {
+    if (!key || !amountStr || !userId) {
       throw new CreditError(
         "INVALID_METADATA",
         "Missing top-up metadata on Invoice"
@@ -377,7 +377,7 @@ export function createTopUpHandler(deps: {
     try {
       newBalance = await credits.grant({
         userId,
-        creditType,
+        key,
         amount,
         source,
         sourceId: invoice.id,
@@ -388,7 +388,7 @@ export function createTopUpHandler(deps: {
         grantErr instanceof CreditError &&
         grantErr.code === "IDEMPOTENCY_CONFLICT"
       ) {
-        newBalance = await credits.getBalance({ userId, creditType });
+        newBalance = await credits.getBalance({ userId, key });
         alreadyGranted = true;
       } else {
         throw grantErr;
@@ -398,7 +398,7 @@ export function createTopUpHandler(deps: {
     if (!alreadyGranted) {
       await onCreditsGranted?.({
         userId,
-        creditType,
+        key,
         amount,
         newBalance,
         source,
@@ -406,7 +406,7 @@ export function createTopUpHandler(deps: {
       });
       await onTopUpCompleted?.({
         userId,
-        creditType,
+        key,
         creditsAdded: amount,
         amountCharged: invoice.amount_paid,
         currency: invoice.currency,
@@ -420,7 +420,7 @@ export function createTopUpHandler(deps: {
 
   // for on-demand top-ups
   async function topUp(params: TopUpParams): Promise<TopUpResult> {
-    const { userId, creditType, amount, idempotencyKey } = params;
+    const { userId, key, amount, idempotencyKey } = params;
 
     const customer = await getCustomerByUserId(userId);
     if (!customer) {
@@ -463,13 +463,13 @@ export function createTopUpHandler(deps: {
       };
     }
 
-    const creditConfig = plan.credits?.[creditType];
+    const creditConfig = plan.credits?.[key];
     if (!creditConfig?.pricePerCreditCents) {
       return {
         success: false,
         error: {
           code: "TOPUP_NOT_CONFIGURED",
-          message: `Top-up not configured for ${creditType}`,
+          message: `Top-up not configured for ${key}`,
         },
       };
     }
@@ -516,12 +516,12 @@ export function createTopUpHandler(deps: {
     // Use configured displayName if available, otherwise construct from ID
     const displayName =
       creditConfig.displayName ||
-      creditType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     if (!customer.defaultPaymentMethod) {
       const recoveryUrl = await tryCreateRecoveryUrl(
         customer.id,
-        creditType,
+        key,
         amount,
         totalCents,
         currency
@@ -555,7 +555,7 @@ export function createTopUpHandler(deps: {
             // Enable automatic tax if configured
             ...(tax?.automaticTax && { automatic_tax: { enabled: true } }),
             metadata: {
-              top_up_credit_type: creditType,
+              top_up_key: key,
               top_up_amount: String(amount),
               user_id: userId,
             },
@@ -612,7 +612,7 @@ export function createTopUpHandler(deps: {
         await stripe.invoices.voidInvoice(invoice.id).catch(() => {});
         const recoveryUrl = await tryCreateRecoveryUrl(
           customer.id,
-          creditType,
+          key,
           amount,
           totalCents,
           currency
@@ -636,7 +636,7 @@ export function createTopUpHandler(deps: {
             confirm: true,
             off_session: true,
             metadata: {
-              top_up_credit_type: creditType,
+              top_up_key: key,
               top_up_amount: String(amount),
               user_id: userId,
             },
@@ -667,7 +667,7 @@ export function createTopUpHandler(deps: {
         // Payment needs action or failed - offer recovery
         const recoveryUrl = await tryCreateRecoveryUrl(
           customer.id,
-          creditType,
+          key,
           amount,
           totalCents,
           currency
@@ -710,7 +710,7 @@ export function createTopUpHandler(deps: {
       // Offer recovery URL so user can complete purchase with different method
       const recoveryUrl = await tryCreateRecoveryUrl(
         customer.id,
-        creditType,
+        key,
         amount,
         totalCents,
         currency
@@ -730,12 +730,12 @@ export function createTopUpHandler(deps: {
   async function grantCreditsFromPayment(
     paymentIntent: Stripe.PaymentIntent
   ): Promise<number> {
-    const creditType = paymentIntent.metadata?.top_up_credit_type;
+    const key = paymentIntent.metadata?.top_up_key;
     const amountStr = paymentIntent.metadata?.top_up_amount;
     const userId = paymentIntent.metadata?.user_id;
     const isAuto = paymentIntent.metadata?.top_up_auto === "true";
 
-    if (!creditType || !amountStr || !userId) {
+    if (!key || !amountStr || !userId) {
       throw new CreditError(
         "INVALID_METADATA",
         "Missing top-up metadata on PaymentIntent"
@@ -756,7 +756,7 @@ export function createTopUpHandler(deps: {
     try {
       newBalance = await credits.grant({
         userId,
-        creditType,
+        key,
         amount,
         source,
         sourceId: paymentIntent.id,
@@ -768,7 +768,7 @@ export function createTopUpHandler(deps: {
         grantErr instanceof CreditError &&
         grantErr.code === "IDEMPOTENCY_CONFLICT"
       ) {
-        newBalance = await credits.getBalance({ userId, creditType });
+        newBalance = await credits.getBalance({ userId, key });
         alreadyGranted = true;
       } else {
         throw grantErr;
@@ -779,7 +779,7 @@ export function createTopUpHandler(deps: {
     if (!alreadyGranted) {
       await onCreditsGranted?.({
         userId,
-        creditType,
+        key,
         amount,
         newBalance,
         source,
@@ -787,7 +787,7 @@ export function createTopUpHandler(deps: {
       });
       await onTopUpCompleted?.({
         userId,
-        creditType,
+        key,
         creditsAdded: amount,
         amountCharged: paymentIntent.amount,
         currency: paymentIntent.currency,
@@ -802,26 +802,26 @@ export function createTopUpHandler(deps: {
   async function handlePaymentIntentSucceeded(
     paymentIntent: Stripe.PaymentIntent
   ): Promise<void> {
-    const creditType = paymentIntent.metadata?.top_up_credit_type;
+    const key = paymentIntent.metadata?.top_up_key;
     const userId = paymentIntent.metadata?.user_id;
-    if (!creditType) {
+    if (!key) {
       return;
     }
     await grantCreditsFromPayment(paymentIntent);
 
     // Clear any failure record on successful payment
     // This handles the "processing" -> "succeeded" path
-    if (userId && creditType) {
-      await db.unblockAutoTopUp({ userId, creditType });
+    if (userId && key) {
+      await db.unblockAutoTopUp({ userId, key });
     }
   }
 
   async function handleTopUpCheckoutCompleted(
     session: Stripe.Checkout.Session
   ): Promise<void> {
-    const creditType = session.metadata?.top_up_credit_type;
+    const key = session.metadata?.top_up_key;
     const amountStr = session.metadata?.top_up_amount;
-    if (!creditType || !amountStr) return; // Not a top-up checkout
+    if (!key || !amountStr) return; // Not a top-up checkout
 
     if (session.payment_status !== "paid") {
       console.warn(
@@ -902,7 +902,7 @@ export function createTopUpHandler(deps: {
       // fire for the same payment, only one grant occurs
       newBalance = await credits.grant({
         userId,
-        creditType,
+        key,
         amount,
         source: "topup",
         sourceId: paymentIntentId,
@@ -920,7 +920,7 @@ export function createTopUpHandler(deps: {
 
     await onCreditsGranted?.({
       userId,
-      creditType,
+      key,
       amount,
       newBalance,
       source: "topup",
@@ -928,7 +928,7 @@ export function createTopUpHandler(deps: {
     });
     await onTopUpCompleted?.({
       userId,
-      creditType,
+      key,
       creditsAdded: amount,
       amountCharged: session.amount_total ?? 0,
       currency: session.currency ?? "usd",
@@ -937,7 +937,7 @@ export function createTopUpHandler(deps: {
     });
 
     // Clear any failure record - recovery checkout succeeded
-    await db.unblockAutoTopUp({ userId, creditType });
+    await db.unblockAutoTopUp({ userId, key });
   }
 
   /**
@@ -947,9 +947,9 @@ export function createTopUpHandler(deps: {
    */
   async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
     // Only process top-up invoices (not subscription invoices)
-    const creditType = invoice.metadata?.top_up_credit_type;
+    const key = invoice.metadata?.top_up_key;
     const userId = invoice.metadata?.user_id;
-    if (!creditType) {
+    if (!key) {
       return;
     }
 
@@ -992,8 +992,8 @@ export function createTopUpHandler(deps: {
       }
 
       // Clear any failure record on successful payment
-      if (userId && creditType) {
-        await db.unblockAutoTopUp({ userId, creditType });
+      if (userId && key) {
+        await db.unblockAutoTopUp({ userId, key });
       }
     } catch (err) {
       // Idempotency conflict = already granted inline, which is expected
@@ -1023,10 +1023,10 @@ export function createTopUpHandler(deps: {
    */
   async function triggerAutoTopUpIfNeeded(params: {
     userId: string;
-    creditType: string;
+    key: string;
     currentBalance: number;
   }): Promise<AutoTopUpResult> {
-    const { userId, creditType, currentBalance } = params;
+    const { userId, key, currentBalance } = params;
 
     const customer = await getCustomerByUserId(userId);
     if (!customer || customer.deleted) {
@@ -1049,7 +1049,7 @@ export function createTopUpHandler(deps: {
       return { triggered: false, reason: "not_configured" };
     }
 
-    const creditConfig = plan.credits?.[creditType];
+    const creditConfig = plan.credits?.[key];
     if (!creditConfig?.pricePerCreditCents || !creditConfig.autoTopUp) {
       return { triggered: false, reason: "not_configured" };
     }
@@ -1068,7 +1068,7 @@ export function createTopUpHandler(deps: {
       pricePerCreditCents <= 0
     ) {
       console.error(
-        `Invalid auto top-up config for ${creditType}: purchaseAmount=${purchaseAmount}, balanceThreshold=${balanceThreshold}, pricePerCreditCents=${pricePerCreditCents}`
+        `Invalid auto top-up config for ${key}: purchaseAmount=${purchaseAmount}, balanceThreshold=${balanceThreshold}, pricePerCreditCents=${pricePerCreditCents}`
       );
       return { triggered: false, reason: "not_configured" };
     }
@@ -1078,14 +1078,14 @@ export function createTopUpHandler(deps: {
     }
 
     // Check for existing failure record (cooldown/disabled)
-    const failure = await db.getAutoTopUpStatus({ userId, creditType });
+    const failure = await db.getAutoTopUpStatus({ userId, key });
     if (failure?.disabled) {
       // Hard decline or escalated soft decline (3+ failures) - blocked permanently
       if (failure.declineType === "hard" || failure.failureCount >= 3) {
         await onAutoTopUpFailed?.({
           userId,
           stripeCustomerId: customerId,
-          creditType,
+          key,
           trigger: "blocked_until_card_updated",
           status: "action_required",
           failureCount: failure.failureCount,
@@ -1101,7 +1101,7 @@ export function createTopUpHandler(deps: {
         await onAutoTopUpFailed?.({
           userId,
           stripeCustomerId: customerId,
-          creditType,
+          key,
           trigger: "waiting_for_retry_cooldown",
           status: "will_retry",
           nextAttemptAt: cooldownEnd,
@@ -1119,7 +1119,7 @@ export function createTopUpHandler(deps: {
     // Fire onCreditsLow before attempting auto top-up
     await onCreditsLow?.({
       userId,
-      creditType,
+      key,
       balance: currentBalance,
       threshold: balanceThreshold,
     });
@@ -1128,7 +1128,7 @@ export function createTopUpHandler(deps: {
       await onAutoTopUpFailed?.({
         userId,
         stripeCustomerId: customerId,
-        creditType,
+        key,
         trigger: "no_payment_method",
         status: "action_required",
         failureCount: failure?.failureCount ?? 0,
@@ -1138,13 +1138,13 @@ export function createTopUpHandler(deps: {
 
     const autoTopUpsThisMonth = await db.countAutoTopUpsThisMonth(
       userId,
-      creditType
+      key
     );
     if (autoTopUpsThisMonth >= maxPerMonth) {
       await onAutoTopUpFailed?.({
         userId,
         stripeCustomerId: customerId,
-        creditType,
+        key,
         trigger: "monthly_limit_reached",
         status: "will_retry", // Resets next month
         failureCount: failure?.failureCount ?? 0,
@@ -1164,14 +1164,14 @@ export function createTopUpHandler(deps: {
       now.getUTCMonth() + 1
     ).padStart(2, "0")}`;
     const pmSuffix = customerDefaultPM.slice(-8);
-    const idempotencyKey = `auto_topup_${userId}_${creditType}_${yearMonth}_${
+    const idempotencyKey = `auto_topup_${userId}_${key}_${yearMonth}_${
       autoTopUpsThisMonth + 1
     }_${pmSuffix}`;
 
     // Use configured displayName if available, otherwise construct from ID
     const displayName =
       creditConfig.displayName ||
-      creditType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     // Helper to record failure and fire callback
     async function handlePaymentFailure(
@@ -1181,7 +1181,7 @@ export function createTopUpHandler(deps: {
       const declineType = classifyDeclineCode(declineCode);
       const failureRecord = await db.recordTopUpFailure({
         userId,
-        creditType,
+        key,
         paymentMethodId: customerDefaultPM,
         declineType,
         declineCode: declineCode ?? null,
@@ -1200,7 +1200,7 @@ export function createTopUpHandler(deps: {
       await onAutoTopUpFailed?.({
         userId,
         stripeCustomerId: customerId,
-        creditType,
+        key,
         trigger: "stripe_declined_payment",
         status: isActionRequired ? "action_required" : "will_retry",
         nextAttemptAt,
@@ -1221,7 +1221,7 @@ export function createTopUpHandler(deps: {
     async function handlePaymentSuccess(): Promise<void> {
       // Clear any existing failure record on success
       if (failure) {
-        await db.unblockAutoTopUp({ userId, creditType });
+        await db.unblockAutoTopUp({ userId, key });
       }
     }
 
@@ -1238,7 +1238,7 @@ export function createTopUpHandler(deps: {
             // Enable automatic tax if configured
             ...(tax?.automaticTax && { automatic_tax: { enabled: true } }),
             metadata: {
-              top_up_credit_type: creditType,
+              top_up_key: key,
               top_up_amount: String(purchaseAmount),
               user_id: userId,
               top_up_auto: "true",
@@ -1301,7 +1301,7 @@ export function createTopUpHandler(deps: {
             confirm: true,
             off_session: true,
             metadata: {
-              top_up_credit_type: creditType,
+              top_up_key: key,
               top_up_amount: String(purchaseAmount),
               user_id: userId,
               top_up_auto: "true",

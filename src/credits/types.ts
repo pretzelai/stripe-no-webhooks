@@ -15,7 +15,7 @@ export type TransactionSource =
 export type CreditTransaction = {
   id: string;
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
   balanceAfter: number;
   transactionType: TransactionType;

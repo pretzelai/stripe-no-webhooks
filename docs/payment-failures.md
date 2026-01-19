@@ -91,7 +91,7 @@ When you call `topUp()` and the payment fails:
 ```typescript
 const result = await billing.credits.topUp({
   userId,
-  creditType: "api_calls",
+  key: "api_calls",
   amount: 500,
 });
 
@@ -192,14 +192,14 @@ const billing = new Billing({
 
 ```typescript
 // Check if auto top-up is blocked
-const status = await billing.credits.getAutoTopUpStatus({ userId, creditType: "api_calls" });
+const status = await billing.credits.getAutoTopUpStatus({ userId, key: "api_calls" });
 if (status?.disabled) {
   // Show UI to update payment method
 }
 
 // Manually unblock (e.g., after user updates card via your own UI in case
 // you're not using the Stripe Customer Portal)
-await billing.credits.unblockAutoTopUp({ userId, creditType: "api_calls" });
+await billing.credits.unblockAutoTopUp({ userId, key: "api_calls" });
 ```
 
 ## Recovery Endpoint

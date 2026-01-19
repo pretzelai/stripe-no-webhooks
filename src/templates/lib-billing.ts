@@ -45,8 +45,8 @@ export const billing = new Billing({
     onSubscriptionCancelled: async (subscription: Stripe.Subscription) => {
       console.log("Subscription cancelled:", subscription.id);
     },
-    onCreditsGranted: ({ userId, creditType, amount }) => {
-      console.log(`Granted ${amount} ${creditType} to ${userId}`);
+    onCreditsGranted: ({ userId, key, amount }) => {
+      console.log(`Granted ${amount} ${key} to ${userId}`);
     },
   },
 

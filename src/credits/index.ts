@@ -15,7 +15,7 @@ import {
   grant,
   revoke,
   revokeAll,
-  revokeAllCreditTypesForUser,
+  revokeAllCreditsForUser,
   setBalance,
 } from "./grant";
 
@@ -40,7 +40,7 @@ export const credits = {
   grant,
   revoke,
   revokeAll,
-  revokeAllCreditTypesForUser,
+  revokeAllCreditsForUser,
   setBalance,
   getHistory,
   // Auto top-up management

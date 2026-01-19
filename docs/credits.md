@@ -70,7 +70,7 @@ import { billing } from "@/lib/billing";
 
 const result = await billing.credits.consume({
   userId: "user_123",
-  creditType: "api_calls",
+  key: "api_calls",
   amount: 1,
 });
 
@@ -83,9 +83,9 @@ if (!result.success) {
 ## Check Balance
 
 ```typescript
-const balance = await billing.credits.getBalance({ userId: "user_123", creditType: "api_calls" });
+const balance = await billing.credits.getBalance({ userId: "user_123", key: "api_calls" });
 const allBalances = await billing.credits.getAllBalances({ userId: "user_123" });
-const hasEnough = await billing.credits.hasCredits({ userId: "user_123", creditType: "api_calls", amount: 10 });
+const hasEnough = await billing.credits.hasCredits({ userId: "user_123", key: "api_calls", amount: 10 });
 ```
 
 ## Top-Ups
@@ -112,7 +112,7 @@ credits: {
 // In your API route
 const result = await billing.credits.topUp({
   userId: "user_123",
-  creditType: "api_calls",
+  key: "api_calls",
   amount: 500,
 });
 
@@ -314,7 +314,7 @@ const price = plan?.price.find(pr => pr.id === priceId);
 const interval = price?.interval ?? "month";
 
 // Get credit balance
-const balance = await billing.credits.getBalance({ userId, creditType: "api_calls" });
+const balance = await billing.credits.getBalance({ userId, key: "api_calls" });
 const baseAllocation = plan?.credits?.api_calls?.allocation ?? 0;
 
 // Scale allocation based on interval
@@ -335,8 +335,8 @@ const bonusCredits = Math.max(0, balance - scaledAllocation);
 **Tip:** Create a helper function to avoid repeating this logic:
 
 ```typescript
-function getScaledAllocation(plan: Plan, interval: string, creditType: string): number {
-  const base = plan.credits?.[creditType]?.allocation ?? 0;
+function getScaledAllocation(plan: Plan, interval: string, key: string): number {
+  const base = plan.credits?.[key]?.allocation ?? 0;
   if (interval === "year") return base * 12;
   if (interval === "week") return Math.ceil(base / 4);
   return base;
@@ -362,11 +362,11 @@ import billingConfig from "../billing.config";
 export const billing = new Billing({
   billingConfig,
   callbacks: {
-    onCreditsGranted: ({ userId, creditType, amount }) => {},
-    onCreditsRevoked: ({ userId, creditType, amount }) => {},
-    onCreditsLow: ({ userId, creditType, balance, threshold }) => {},
-    onTopUpCompleted: ({ userId, creditType, creditsAdded, amountCharged }) => {},
-    onAutoTopUpFailed: ({ userId, creditType, trigger, status }) => {
+    onCreditsGranted: ({ userId, key, amount }) => {},
+    onCreditsRevoked: ({ userId, key, amount }) => {},
+    onCreditsLow: ({ userId, key, balance, threshold }) => {},
+    onTopUpCompleted: ({ userId, key, creditsAdded, amountCharged }) => {},
+    onAutoTopUpFailed: ({ userId, key, trigger, status }) => {
       // trigger: "stripe_declined_payment" | "blocked_until_card_updated" | ...
       // status: "will_retry" | "action_required"
       // See docs/payment-failures.md for full details

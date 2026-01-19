@@ -177,13 +177,13 @@ if (subscription?.status === "active") {
   console.log("Plan:", subscription.plan.name);
 
   // Check credits for a specific type (if enabled in your config)
-  const apiCredits = await billing.credits.getBalance({ userId, creditType: "api_calls" });
+  const apiCredits = await billing.credits.getBalance({ userId, key: "api_calls" });
   console.log("API credits remaining:", apiCredits);
 
   // Consume credits when user performs an action
   const creditsResult = await billing.credits.consume({
     userId,
-    creditType: "api_calls",
+    key: "api_calls",
     amount: 1,
   });
 

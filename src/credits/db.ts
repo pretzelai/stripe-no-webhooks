@@ -23,13 +23,13 @@ function ensurePool(): Pool {
 
 export async function getBalance(params: {
   userId: string;
-  creditType: string;
+  key: string;
 }): Promise<number> {
-  const { userId, creditType } = params;
+  const { userId, key } = params;
   const p = ensurePool();
   const result = await p.query(
-    `SELECT balance FROM ${schema}.credit_balances WHERE user_id = $1 AND credit_type_id = $2`,
-    [userId, creditType]
+    `SELECT balance FROM ${schema}.credit_balances WHERE user_id = $1 AND key = $2`,
+    [userId, key]
   );
   return result.rows.length > 0 ? Number(result.rows[0].balance) : 0;
 }
@@ -40,23 +40,23 @@ export async function getAllBalances(params: {
   const { userId } = params;
   const p = ensurePool();
   const result = await p.query(
-    `SELECT credit_type_id, balance FROM ${schema}.credit_balances WHERE user_id = $1`,
+    `SELECT key, balance FROM ${schema}.credit_balances WHERE user_id = $1`,
     [userId]
   );
   const balances: Record<string, number> = {};
   for (const row of result.rows) {
-    balances[row.credit_type_id] = Number(row.balance);
+    balances[row.key] = Number(row.balance);
   }
   return balances;
 }
 
 export async function hasCredits(params: {
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
 }): Promise<boolean> {
-  const { userId, creditType, amount } = params;
-  const balance = await getBalance({ userId, creditType });
+  const { userId, key, amount } = params;
+  const balance = await getBalance({ userId, key });
   return balance >= amount;
 }
 
@@ -80,16 +80,16 @@ export async function checkIdempotencyKeyPrefix(prefix: string): Promise<boolean
 
 export async function countAutoTopUpsThisMonth(
   userId: string,
-  creditType: string
+  key: string
 ): Promise<number> {
   const p = ensurePool();
   const result = await p.query(
     `SELECT COUNT(*) FROM ${schema}.credit_ledger
      WHERE user_id = $1
-       AND credit_type_id = $2
+       AND key = $2
        AND source = 'auto_topup'
        AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC')`,
-    [userId, creditType]
+    [userId, key]
   );
   return parseInt(result.rows[0].count, 10);
 }
@@ -114,7 +114,7 @@ function isUniqueViolation(error: unknown): boolean {
 async function writeLedgerEntry(
   client: PoolClient,
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   balanceAfter: number,
   params: LedgerEntryParams
@@ -122,11 +122,11 @@ async function writeLedgerEntry(
   try {
     await client.query(
       `INSERT INTO ${schema}.credit_ledger
-       (user_id, credit_type_id, amount, balance_after, transaction_type, source, source_id, description, metadata, idempotency_key)
+       (user_id, key, amount, balance_after, transaction_type, source, source_id, description, metadata, idempotency_key)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         userId,
-        creditType,
+        key,
         amount,
         balanceAfter,
         params.transactionType,
@@ -154,29 +154,29 @@ async function writeLedgerEntry(
 async function ensureBalanceRowExists(
   client: PoolClient,
   userId: string,
-  creditType: string
+  key: string
 ): Promise<void> {
   await client.query(
-    `INSERT INTO ${schema}.credit_balances (user_id, credit_type_id, balance)
+    `INSERT INTO ${schema}.credit_balances (user_id, key, balance)
      VALUES ($1, $2, 0)
      ON CONFLICT DO NOTHING`,
-    [userId, creditType]
+    [userId, key]
   );
 }
 
 async function getBalanceForUpdate(
   client: PoolClient,
   userId: string,
-  creditType: string
+  key: string
 ): Promise<number> {
   // Ensure row exists first so FOR UPDATE has something to lock
-  await ensureBalanceRowExists(client, userId, creditType);
+  await ensureBalanceRowExists(client, userId, key);
 
   const result = await client.query(
     `SELECT balance FROM ${schema}.credit_balances
-     WHERE user_id = $1 AND credit_type_id = $2
+     WHERE user_id = $1 AND key = $2
      FOR UPDATE`,
-    [userId, creditType]
+    [userId, key]
   );
   return Number(result.rows[0].balance);
 }
@@ -184,20 +184,20 @@ async function getBalanceForUpdate(
 async function setBalanceValue(
   client: PoolClient,
   userId: string,
-  creditType: string,
+  key: string,
   newBalance: number
 ): Promise<void> {
   await client.query(
     `UPDATE ${schema}.credit_balances
      SET balance = $3, updated_at = now()
-     WHERE user_id = $1 AND credit_type_id = $2`,
-    [userId, creditType, newBalance]
+     WHERE user_id = $1 AND key = $2`,
+    [userId, key, newBalance]
   );
 }
 
 export async function atomicAdd(
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   params: LedgerEntryParams
 ): Promise<number> {
@@ -209,15 +209,15 @@ export async function atomicAdd(
     const currentBalance = await getBalanceForUpdate(
       client,
       userId,
-      creditType
+      key
     );
     const newBalance = currentBalance + amount;
 
-    await setBalanceValue(client, userId, creditType, newBalance);
+    await setBalanceValue(client, userId, key, newBalance);
     await writeLedgerEntry(
       client,
       userId,
-      creditType,
+      key,
       amount,
       newBalance,
       params
@@ -235,7 +235,7 @@ export async function atomicAdd(
 
 export async function atomicConsume(
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   params: LedgerEntryParams
 ): Promise<
@@ -250,7 +250,7 @@ export async function atomicConsume(
     const currentBalance = await getBalanceForUpdate(
       client,
       userId,
-      creditType
+      key
     );
 
     if (currentBalance < amount) {
@@ -259,11 +259,11 @@ export async function atomicConsume(
     }
 
     const newBalance = currentBalance - amount;
-    await setBalanceValue(client, userId, creditType, newBalance);
+    await setBalanceValue(client, userId, key, newBalance);
     await writeLedgerEntry(
       client,
       userId,
-      creditType,
+      key,
       -amount,
       newBalance,
       params
@@ -281,7 +281,7 @@ export async function atomicConsume(
 
 export async function atomicRevoke(
   userId: string,
-  creditType: string,
+  key: string,
   maxAmount: number,
   params: LedgerEntryParams
 ): Promise<{ newBalance: number; amountRevoked: number }> {
@@ -293,17 +293,17 @@ export async function atomicRevoke(
     const currentBalance = await getBalanceForUpdate(
       client,
       userId,
-      creditType
+      key
     );
     const amountRevoked = Math.min(maxAmount, currentBalance);
     const newBalance = currentBalance - amountRevoked;
 
     if (amountRevoked > 0) {
-      await setBalanceValue(client, userId, creditType, newBalance);
+      await setBalanceValue(client, userId, key, newBalance);
       await writeLedgerEntry(
         client,
         userId,
-        creditType,
+        key,
         -amountRevoked,
         newBalance,
         params
@@ -322,7 +322,7 @@ export async function atomicRevoke(
 
 export async function atomicSet(
   userId: string,
-  creditType: string,
+  key: string,
   newBalance: number,
   params: LedgerEntryParams
 ): Promise<{ previousBalance: number }> {
@@ -334,16 +334,16 @@ export async function atomicSet(
     const previousBalance = await getBalanceForUpdate(
       client,
       userId,
-      creditType
+      key
     );
     const adjustment = newBalance - previousBalance;
 
     if (adjustment !== 0) {
-      await setBalanceValue(client, userId, creditType, newBalance);
+      await setBalanceValue(client, userId, key, newBalance);
       await writeLedgerEntry(
         client,
         userId,
-        creditType,
+        key,
         adjustment,
         newBalance,
         params
@@ -362,24 +362,24 @@ export async function atomicSet(
 
 export async function getHistory(params: {
   userId: string;
-  creditType?: string;
+  key?: string;
   limit?: number;
   offset?: number;
 }): Promise<CreditTransaction[]> {
-  const { userId, creditType, limit = 50, offset = 0 } = params;
+  const { userId, key, limit = 50, offset = 0 } = params;
   const p = ensurePool();
 
   let query = `
-    SELECT id, user_id, credit_type_id, amount, balance_after,
+    SELECT id, user_id, key, amount, balance_after,
            transaction_type, source, source_id, description, metadata, created_at
     FROM ${schema}.credit_ledger
     WHERE user_id = $1
   `;
   const queryParams: (string | number)[] = [userId];
 
-  if (creditType) {
-    query += ` AND credit_type_id = $2`;
-    queryParams.push(creditType);
+  if (key) {
+    query += ` AND key = $2`;
+    queryParams.push(key);
   }
 
   query += ` ORDER BY created_at DESC LIMIT $${queryParams.length + 1} OFFSET $${
@@ -392,7 +392,7 @@ export async function getHistory(params: {
   return result.rows.map((row) => ({
     id: row.id,
     userId: row.user_id,
-    creditType: row.credit_type_id,
+    key: row.key,
     amount: Number(row.amount),
     balanceAfter: Number(row.balance_after),
     transactionType: row.transaction_type as TransactionType,
@@ -448,18 +448,18 @@ export async function getCreditsGrantedBySource(
 ): Promise<Record<string, number>> {
   const p = ensurePool();
   const result = await p.query(
-    `SELECT credit_type_id, SUM(amount) as net_amount
+    `SELECT key, SUM(amount) as net_amount
      FROM ${schema}.credit_ledger
      WHERE user_id = $1
        AND source_id = $2
        AND source IN ('subscription', 'renewal', 'seat_grant', 'plan_change', 'cancellation', 'seat_revoke')
-     GROUP BY credit_type_id
+     GROUP BY key
      HAVING SUM(amount) > 0`,
     [userId, sourceId]
   );
   const net: Record<string, number> = {};
   for (const row of result.rows) {
-    net[row.credit_type_id] = Number(row.net_amount);
+    net[row.key] = Number(row.net_amount);
   }
   return net;
 }
@@ -468,7 +468,7 @@ export async function getCreditsGrantedBySource(
 
 export type AutoTopUpStatus = {
   userId: string;
-  creditType: string;
+  key: string;
   paymentMethodId: string | null;
   declineType: "hard" | "soft";
   declineCode: string | null;
@@ -479,22 +479,22 @@ export type AutoTopUpStatus = {
 
 export async function getAutoTopUpStatus(params: {
   userId: string;
-  creditType: string;
+  key: string;
 }): Promise<AutoTopUpStatus | null> {
-  const { userId, creditType } = params;
+  const { userId, key } = params;
   const p = ensurePool();
   const result = await p.query(
-    `SELECT user_id, credit_type, payment_method_id, decline_type, decline_code,
+    `SELECT user_id, key, payment_method_id, decline_type, decline_code,
             failure_count, last_failure_at, disabled
      FROM ${schema}.topup_failures
-     WHERE user_id = $1 AND credit_type = $2`,
-    [userId, creditType]
+     WHERE user_id = $1 AND key = $2`,
+    [userId, key]
   );
   if (!result.rows[0]) return null;
   const row = result.rows[0];
   return {
     userId: row.user_id,
-    creditType: row.credit_type,
+    key: row.key,
     paymentMethodId: row.payment_method_id,
     declineType: row.decline_type as "hard" | "soft",
     declineCode: row.decline_code,
@@ -506,35 +506,35 @@ export async function getAutoTopUpStatus(params: {
 
 export async function recordTopUpFailure(params: {
   userId: string;
-  creditType: string;
+  key: string;
   paymentMethodId: string | null;
   declineType: "hard" | "soft";
   declineCode: string | null;
 }): Promise<AutoTopUpStatus> {
-  const { userId, creditType, paymentMethodId, declineType, declineCode } =
+  const { userId, key, paymentMethodId, declineType, declineCode } =
     params;
   const p = ensurePool();
 
   const result = await p.query(
     `INSERT INTO ${schema}.topup_failures
-       (user_id, credit_type, payment_method_id, decline_type, decline_code, failure_count, last_failure_at, disabled)
+       (user_id, key, payment_method_id, decline_type, decline_code, failure_count, last_failure_at, disabled)
      VALUES ($1, $2, $3, $4, $5, 1, NOW(), TRUE)
-     ON CONFLICT (user_id, credit_type) DO UPDATE SET
+     ON CONFLICT (user_id, key) DO UPDATE SET
        payment_method_id = $3,
        decline_type = $4,
        decline_code = $5,
        failure_count = ${schema}.topup_failures.failure_count + 1,
        last_failure_at = NOW(),
        disabled = TRUE
-     RETURNING user_id, credit_type, payment_method_id, decline_type, decline_code,
+     RETURNING user_id, key, payment_method_id, decline_type, decline_code,
                failure_count, last_failure_at, disabled`,
-    [userId, creditType, paymentMethodId, declineType, declineCode]
+    [userId, key, paymentMethodId, declineType, declineCode]
   );
 
   const row = result.rows[0];
   return {
     userId: row.user_id,
-    creditType: row.credit_type,
+    key: row.key,
     paymentMethodId: row.payment_method_id,
     declineType: row.decline_type as "hard" | "soft",
     declineCode: row.decline_code,
@@ -546,13 +546,13 @@ export async function recordTopUpFailure(params: {
 
 export async function unblockAutoTopUp(params: {
   userId: string;
-  creditType: string;
+  key: string;
 }): Promise<void> {
-  const { userId, creditType } = params;
+  const { userId, key } = params;
   const p = ensurePool();
   await p.query(
-    `DELETE FROM ${schema}.topup_failures WHERE user_id = $1 AND credit_type = $2`,
-    [userId, creditType]
+    `DELETE FROM ${schema}.topup_failures WHERE user_id = $1 AND key = $2`,
+    [userId, key]
   );
 }
 

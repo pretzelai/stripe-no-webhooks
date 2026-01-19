@@ -4,13 +4,13 @@ import { CreditError } from "./types";
 
 export async function consume(params: {
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
   description?: string;
   metadata?: Record<string, unknown>;
   idempotencyKey?: string;
 }): Promise<ConsumeResult> {
-  const { userId, creditType, amount, description, metadata, idempotencyKey } = params;
+  const { userId, key, amount, description, metadata, idempotencyKey } = params;
 
   if (amount <= 0) {
     throw new CreditError("INVALID_AMOUNT", "Amount must be positive");
@@ -23,7 +23,7 @@ export async function consume(params: {
     }
   }
 
-  const result = await db.atomicConsume(userId, creditType, amount, {
+  const result = await db.atomicConsume(userId, key, amount, {
     transactionType: "consume",
     source: "usage",
     description,
@@ -40,7 +40,7 @@ export async function consume(params: {
 
 export async function grant(params: {
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
   source?: TransactionSource;
   sourceId?: string;
@@ -50,7 +50,7 @@ export async function grant(params: {
 }): Promise<number> {
   const {
     userId,
-    creditType,
+    key,
     amount,
     source = "manual",
     sourceId,
@@ -74,7 +74,7 @@ export async function grant(params: {
     }
   }
 
-  return db.atomicAdd(userId, creditType, amount, {
+  return db.atomicAdd(userId, key, amount, {
     transactionType: "grant",
     source,
     sourceId,
@@ -86,7 +86,7 @@ export async function grant(params: {
 
 export async function revoke(params: {
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
   source?: TransactionSource;
   sourceId?: string;
@@ -96,7 +96,7 @@ export async function revoke(params: {
 }): Promise<{ balance: number; amountRevoked: number }> {
   const {
     userId,
-    creditType,
+    key,
     amount,
     source = "manual",
     sourceId,
@@ -120,7 +120,7 @@ export async function revoke(params: {
     }
   }
 
-  const result = await db.atomicRevoke(userId, creditType, amount, {
+  const result = await db.atomicRevoke(userId, key, amount, {
     transactionType: "revoke",
     source,
     sourceId,
@@ -134,13 +134,13 @@ export async function revoke(params: {
 
 export async function revokeAll(params: {
   userId: string;
-  creditType: string;
+  key: string;
   source?: TransactionSource;
   sourceId?: string;
   description?: string;
   metadata?: Record<string, unknown>;
 }): Promise<{ previousBalance: number; amountRevoked: number }> {
-  const currentBalance = await db.getBalance({ userId: params.userId, creditType: params.creditType });
+  const currentBalance = await db.getBalance({ userId: params.userId, key: params.key });
 
   if (currentBalance === 0) {
     return { previousBalance: 0, amountRevoked: 0 };
@@ -156,7 +156,7 @@ export async function revokeAll(params: {
   };
 }
 
-export async function revokeAllCreditTypesForUser(params: {
+export async function revokeAllCreditsForUser(params: {
   userId: string;
   source?: TransactionSource;
   description?: string;
@@ -170,17 +170,17 @@ export async function revokeAllCreditTypesForUser(params: {
     { previousBalance: number; amountRevoked: number }
   > = {};
 
-  for (const [creditType, balance] of Object.entries(allBalances)) {
+  for (const [key, balance] of Object.entries(allBalances)) {
     if (balance > 0) {
       const result = await revoke({
         userId: params.userId,
-        creditType,
+        key,
         amount: balance,
         source: params.source,
         description: params.description,
         metadata: params.metadata,
       });
-      results[creditType] = {
+      results[key] = {
         previousBalance: balance,
         amountRevoked: result.amountRevoked,
       };
@@ -192,13 +192,13 @@ export async function revokeAllCreditTypesForUser(params: {
 
 export async function setBalance(params: {
   userId: string;
-  creditType: string;
+  key: string;
   balance: number;
   reason?: string;
   metadata?: Record<string, unknown>;
   idempotencyKey?: string;
 }): Promise<{ balance: number; previousBalance: number }> {
-  const { userId, creditType, balance, reason, metadata, idempotencyKey } =
+  const { userId, key, balance, reason, metadata, idempotencyKey } =
     params;
 
   if (balance < 0) {
@@ -216,7 +216,7 @@ export async function setBalance(params: {
     }
   }
 
-  const result = await db.atomicSet(userId, creditType, balance, {
+  const result = await db.atomicSet(userId, key, balance, {
     transactionType: "adjust",
     source: "manual",
     description: reason,

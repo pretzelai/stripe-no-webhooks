@@ -86,7 +86,7 @@ import { billing } from "@/lib/billing";
 // All team members consume from org's balance
 await billing.credits.consume({
   userId: "org_456", // org ID
-  creditType: "api_calls",
+  key: "api_calls",
   amount: 1,
 });
 ```
@@ -117,7 +117,7 @@ await billing.seats.remove({ userId: "user_123", orgId: "org_456" });
 // Consume individual credits
 await billing.credits.consume({
   userId: "user_123", // individual user
-  creditType: "api_calls",
+  key: "api_calls",
   amount: 1,
 });
 ```

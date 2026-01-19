@@ -348,7 +348,7 @@ export class Billing {
     ) => void | Promise<void>;
     onTopUpCompleted?: (params: {
       userId: string;
-      creditType: string;
+      key: string;
       creditsAdded: number;
       amountCharged: number;
       currency: string;
@@ -357,7 +357,7 @@ export class Billing {
     }) => void | Promise<void>;
     onCreditsLow?: (params: {
       userId: string;
-      creditType: string;
+      key: string;
       balance: number;
       threshold: number;
     }) => void | Promise<void>;
@@ -392,7 +392,7 @@ export class Billing {
 
     const consumeCredits = async (params: {
       userId: string;
-      creditType: string;
+      key: string;
       amount: number;
       description?: string;
       metadata?: Record<string, unknown>;
@@ -404,7 +404,7 @@ export class Billing {
         topUpHandler
           .triggerAutoTopUpIfNeeded({
             userId: params.userId,
-            creditType: params.creditType,
+            key: params.key,
             currentBalance: result.balance,
           })
           .catch(async (err) => {
@@ -414,7 +414,7 @@ export class Billing {
             callbacks?.onAutoTopUpFailed?.({
               userId: params.userId,
               stripeCustomerId,
-              creditType: params.creditType,
+              key: params.key,
               trigger: "unexpected_error",
               status: "action_required",
               failureCount: 0,

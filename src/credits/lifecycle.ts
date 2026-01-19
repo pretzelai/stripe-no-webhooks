@@ -55,7 +55,7 @@ export type CreditLifecycle = {
 type Callbacks = {
   onCreditsGranted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     newBalance: number;
     source: TransactionSource;
@@ -64,7 +64,7 @@ type Callbacks = {
 
   onCreditsRevoked?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     previousBalance: number;
     newBalance: number;
@@ -111,14 +111,14 @@ export function createCreditLifecycle(config: Config) {
 
     const effectiveInterval = interval || "month";
 
-    for (const [creditType, creditConfig] of Object.entries(plan.credits)) {
+    for (const [key, creditConfig] of Object.entries(plan.credits)) {
       const idempotencyKey = idempotencyPrefix
-        ? `${idempotencyPrefix}:${creditType}`
+        ? `${idempotencyPrefix}:${key}`
         : undefined;
       const scaledAmount = scaleAllocation(creditConfig, effectiveInterval);
       const newBalance = await credits.grant({
         userId,
-        creditType,
+        key,
         amount: scaledAmount,
         source,
         sourceId: subscriptionId,
@@ -126,7 +126,7 @@ export function createCreditLifecycle(config: Config) {
       });
       await callbacks?.onCreditsGranted?.({
         userId,
-        creditType,
+        key,
         amount: scaledAmount,
         newBalance,
         source,
@@ -147,15 +147,15 @@ export function createCreditLifecycle(config: Config) {
 
     const effectiveInterval = interval || "month";
 
-    for (const [creditType, creditConfig] of Object.entries(plan.credits)) {
+    for (const [key, creditConfig] of Object.entries(plan.credits)) {
       // For renewals with 'reset', revoke first
       if (source === "renewal" && (creditConfig.onRenewal ?? "reset") === "reset") {
-        const balance = await credits.getBalance({ userId, creditType });
+        const balance = await credits.getBalance({ userId, key });
         if (balance > 0) {
-          await credits.revoke({ userId, creditType, amount: balance, source: "renewal" });
+          await credits.revoke({ userId, key, amount: balance, source: "renewal" });
           await callbacks?.onCreditsRevoked?.({
             userId,
-            creditType,
+            key,
             amount: balance,
             previousBalance: balance,
             newBalance: 0,
@@ -165,7 +165,7 @@ export function createCreditLifecycle(config: Config) {
       }
 
       const idempotencyKey = idempotencyPrefix
-        ? `${idempotencyPrefix}:${creditType}`
+        ? `${idempotencyPrefix}:${key}`
         : undefined;
 
       // Use seat_grant for seat-users mode, otherwise use the provided source
@@ -174,7 +174,7 @@ export function createCreditLifecycle(config: Config) {
 
       const newBalance = await credits.grant({
         userId,
-        creditType,
+        key,
         amount: scaledAmount,
         source: actualSource,
         sourceId: subscriptionId,
@@ -182,7 +182,7 @@ export function createCreditLifecycle(config: Config) {
       });
       await callbacks?.onCreditsGranted?.({
         userId,
-        creditType,
+        key,
         amount: scaledAmount,
         newBalance,
         source: actualSource,
@@ -204,15 +204,15 @@ export function createCreditLifecycle(config: Config) {
     // Get NET credits from this subscription (grants - revocations)
     const netFromSubscription = await getCreditsGrantedBySource(userId, subscriptionId);
 
-    for (const [creditType, netAmount] of Object.entries(netFromSubscription)) {
+    for (const [key, netAmount] of Object.entries(netFromSubscription)) {
       if (netAmount > 0) {
-        const currentBalance = await credits.getBalance({ userId, creditType });
+        const currentBalance = await credits.getBalance({ userId, key });
         const amountToRevoke = Math.min(netAmount, currentBalance);
 
         if (amountToRevoke > 0) {
           const result = await credits.revoke({
             userId,
-            creditType,
+            key,
             amount: amountToRevoke,
             source,
             sourceId: subscriptionId,
@@ -220,7 +220,7 @@ export function createCreditLifecycle(config: Config) {
 
           await callbacks?.onCreditsRevoked?.({
             userId,
-            creditType,
+            key,
             amount: result.amountRevoked,
             previousBalance: currentBalance,
             newBalance: result.balance,
@@ -246,21 +246,21 @@ export function createCreditLifecycle(config: Config) {
   ): Promise<void> {
     const effectiveInterval = interval || "month";
     const allBalances = await credits.getAllBalances({ userId });
-    const newPlanCreditTypes = new Set(Object.keys(newPlan?.credits ?? {}));
+    const newPlanCredits = new Set(Object.keys(newPlan?.credits ?? {}));
 
     // First, revoke credits for types NOT in new plan
-    for (const [creditType, balance] of Object.entries(allBalances)) {
-      if (!newPlanCreditTypes.has(creditType) && balance > 0) {
+    for (const [key, balance] of Object.entries(allBalances)) {
+      if (!newPlanCredits.has(key) && balance > 0) {
         const result = await credits.revoke({
           userId,
-          creditType,
+          key,
           amount: balance,
           source: "plan_change",
           sourceId: subscriptionId,
         });
         await callbacks?.onCreditsRevoked?.({
           userId,
-          creditType,
+          key,
           amount: result.amountRevoked,
           previousBalance: balance,
           newBalance: result.balance,
@@ -271,23 +271,23 @@ export function createCreditLifecycle(config: Config) {
 
     // Then handle credits for types IN new plan based on onRenewal setting
     if (newPlan?.credits) {
-      for (const [creditType, creditConfig] of Object.entries(newPlan.credits)) {
+      for (const [key, creditConfig] of Object.entries(newPlan.credits)) {
         const shouldReset = (creditConfig.onRenewal ?? "reset") === "reset";
 
         if (shouldReset) {
           // "reset": revoke current balance, then grant fresh allocation
-          const currentBalance = await credits.getBalance({ userId, creditType });
+          const currentBalance = await credits.getBalance({ userId, key });
           if (currentBalance > 0) {
             await credits.revoke({
               userId,
-              creditType,
+              key,
               amount: currentBalance,
               source: "plan_change",
               sourceId: subscriptionId,
             });
             await callbacks?.onCreditsRevoked?.({
               userId,
-              creditType,
+              key,
               amount: currentBalance,
               previousBalance: currentBalance,
               newBalance: 0,
@@ -298,11 +298,11 @@ export function createCreditLifecycle(config: Config) {
         // "add": keep current balance, just grant new allocation below
 
         // Grant new allocation (scaled for interval)
-        const idempotencyKey = `${idempotencyPrefix}:${creditType}`;
+        const idempotencyKey = `${idempotencyPrefix}:${key}`;
         const scaledAmount = scaleAllocation(creditConfig, effectiveInterval);
         const newBalance = await credits.grant({
           userId,
-          creditType,
+          key,
           amount: scaledAmount,
           source: "subscription",
           sourceId: subscriptionId,
@@ -310,7 +310,7 @@ export function createCreditLifecycle(config: Config) {
         });
         await callbacks?.onCreditsGranted?.({
           userId,
-          creditType,
+          key,
           amount: scaledAmount,
           newBalance,
           source: "subscription",
@@ -331,11 +331,11 @@ export function createCreditLifecycle(config: Config) {
   ): Promise<void> {
     const allBalances = await credits.getAllBalances({ userId });
 
-    for (const [creditType, balance] of Object.entries(allBalances)) {
+    for (const [key, balance] of Object.entries(allBalances)) {
       if (balance > 0) {
         const result = await credits.revoke({
           userId,
-          creditType,
+          key,
           amount: balance,
           source: "cancellation",
           sourceId: subscriptionId,
@@ -343,7 +343,7 @@ export function createCreditLifecycle(config: Config) {
 
         await callbacks?.onCreditsRevoked?.({
           userId,
-          creditType,
+          key,
           amount: result.amountRevoked,
           previousBalance: balance,
           newBalance: result.balance,
@@ -428,14 +428,14 @@ export function createCreditLifecycle(config: Config) {
         return; // Already processed, nothing to do
       }
 
-      for (const [creditType, creditConfig] of Object.entries(plan.credits)) {
+      for (const [key, creditConfig] of Object.entries(plan.credits)) {
         if ((creditConfig.onRenewal ?? "reset") === "reset") {
-          const balance = await credits.getBalance({ userId, creditType });
+          const balance = await credits.getBalance({ userId, key });
           if (balance > 0) {
-            await credits.revoke({ userId, creditType, amount: balance, source: "renewal" });
+            await credits.revoke({ userId, key, amount: balance, source: "renewal" });
             await callbacks?.onCreditsRevoked?.({
               userId,
-              creditType,
+              key,
               amount: balance,
               previousBalance: balance,
               newBalance: 0,

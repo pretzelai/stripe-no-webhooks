@@ -315,7 +315,7 @@ async function handleEvent(
 
       // Handle top-up invoices (B2B mode)
       // Credits are typically granted inline, but webhook handles edge cases
-      if (invoice.metadata?.top_up_credit_type) {
+      if (invoice.metadata?.top_up_key) {
         await ctx.topUpHandler.handleInvoicePaid(invoice);
         break;
       }
@@ -380,7 +380,7 @@ async function handleEvent(
       const session = event.data.object as Stripe.Checkout.Session;
 
       // Handle top-up recovery checkout completion
-      if (session.metadata?.top_up_credit_type) {
+      if (session.metadata?.top_up_key) {
         await ctx.topUpHandler.handleTopUpCheckoutCompleted(session);
       }
 

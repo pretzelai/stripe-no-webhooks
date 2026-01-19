@@ -459,10 +459,9 @@ describe("Webhook Handler", () => {
               currency: "usd",
               status: "succeeded",
               metadata: {
-                top_up: "true",
+                top_up_key: "api_calls",
+                top_up_amount: "100",
                 user_id: "user_topup",
-                credit_type: "api_calls",
-                credits_to_add: "100",
               },
             },
           },

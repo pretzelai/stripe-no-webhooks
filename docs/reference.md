@@ -188,18 +188,18 @@ All methods on `billing.credits`:
 
 ```typescript
 // Get balance for one credit type
-await billing.credits.getBalance({ userId: string, creditType: string }): Promise<number>
+await billing.credits.getBalance({ userId: string, key: string }): Promise<number>
 
 // Get all balances
 await billing.credits.getAllBalances({ userId: string }): Promise<Record<string, number>>
 
 // Check if user has enough
-await billing.credits.hasCredits({ userId: string, creditType: string, amount: number }): Promise<boolean>
+await billing.credits.hasCredits({ userId: string, key: string, amount: number }): Promise<boolean>
 
 // Get transaction history
 await billing.credits.getHistory({
   userId: string,
-  creditType?: string,
+  key?: string,
   limit?: number,
   offset?: number,
 }): Promise<CreditTransaction[]>
@@ -208,10 +208,10 @@ await billing.credits.getHistory({
 await billing.credits.hasPaymentMethod({ userId: string }): Promise<boolean>
 
 // Check if auto top-up is blocked (and why)
-await billing.credits.getAutoTopUpStatus({ userId: string, creditType: string }): Promise<AutoTopUpStatus | null>
+await billing.credits.getAutoTopUpStatus({ userId: string, key: string }): Promise<AutoTopUpStatus | null>
 
 // Unblock auto top-up after user updates payment method
-await billing.credits.unblockAutoTopUp({ userId: string, creditType: string }): Promise<void>
+await billing.credits.unblockAutoTopUp({ userId: string, key: string }): Promise<void>
 
 // Unblock all auto top-ups for user
 await billing.credits.unblockAllAutoTopUps({ userId: string }): Promise<void>
@@ -223,7 +223,7 @@ await billing.credits.unblockAllAutoTopUps({ userId: string }): Promise<void>
 // Consume credits (with auto top-up if configured)
 await billing.credits.consume({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   description?: string,
   metadata?: Record<string, unknown>,
@@ -233,7 +233,7 @@ await billing.credits.consume({
 // Grant credits
 await billing.credits.grant({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   source?: TransactionSource,
   sourceId?: string,
@@ -244,7 +244,7 @@ await billing.credits.grant({
 // Revoke specific amount
 await billing.credits.revoke({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
   source?: "cancellation" | "manual" | "seat_revoke",
   sourceId?: string,
@@ -253,13 +253,13 @@ await billing.credits.revoke({
 // Revoke all of a credit type
 await billing.credits.revokeAll({
   userId: string,
-  creditType: string,
+  key: string,
 }): Promise<{ amountRevoked: number }>
 
 // Set exact balance
 await billing.credits.setBalance({
   userId: string,
-  creditType: string,
+  key: string,
   balance: number,
   reason?: string,
 }): Promise<{ previousBalance: number }>
@@ -267,7 +267,7 @@ await billing.credits.setBalance({
 // Purchase credits
 await billing.credits.topUp({
   userId: string,
-  creditType: string,
+  key: string,
   amount: number,
 }): Promise<TopUpResult>
 ```
@@ -321,7 +321,7 @@ const billing = new Billing({
 
     onCreditsGranted?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       amount: number,
       newBalance: number,
       source: TransactionSource,
@@ -330,7 +330,7 @@ const billing = new Billing({
 
     onCreditsRevoked?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       amount: number,
       previousBalance: number,
       newBalance: number,
@@ -339,14 +339,14 @@ const billing = new Billing({
 
     onCreditsLow?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       balance: number,
       threshold: number,
     }) => void,
 
     onTopUpCompleted?: (params: {
       userId: string,
-      creditType: string,
+      key: string,
       creditsAdded: number,
       amountCharged: number,
       currency: string,
@@ -357,7 +357,7 @@ const billing = new Billing({
     onAutoTopUpFailed?: (params: {
       userId: string,
       stripeCustomerId: string,
-      creditType: string,
+      key: string,
       trigger: "stripe_declined_payment" | "waiting_for_retry_cooldown"
              | "blocked_until_card_updated" | "no_payment_method"
              | "monthly_limit_reached" | "unexpected_error",
@@ -566,7 +566,7 @@ type TransactionSource =
 type CreditTransaction = {
   id: string;
   userId: string;
-  creditType: string;
+  key: string;
   amount: number;
   balanceAfter: number;
   transactionType: TransactionType;

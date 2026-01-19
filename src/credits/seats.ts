@@ -15,7 +15,7 @@ import {
 type Callbacks = {
   onCreditsGranted?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     newBalance: number;
     source: TransactionSource;
@@ -24,7 +24,7 @@ type Callbacks = {
 
   onCreditsRevoked?: (params: {
     userId: string;
-    creditType: string;
+    key: string;
     amount: number;
     previousBalance: number;
     newBalance: number;
@@ -86,22 +86,22 @@ export function createSeatsApi(config: Config) {
 
     if (!plan.credits) return creditsGranted;
 
-    for (const [creditType, creditConfig] of Object.entries(plan.credits)) {
+    for (const [key, creditConfig] of Object.entries(plan.credits)) {
       const idempotencyKey = idempotencyPrefix
-        ? `${idempotencyPrefix}:${creditType}`
+        ? `${idempotencyPrefix}:${key}`
         : undefined;
       const newBalance = await credits.grant({
         userId,
-        creditType,
+        key,
         amount: creditConfig.allocation,
         source: "seat_grant",
         sourceId: subscriptionId,
         idempotencyKey,
       });
-      creditsGranted[creditType] = creditConfig.allocation;
+      creditsGranted[key] = creditConfig.allocation;
       await callbacks?.onCreditsGranted?.({
         userId,
-        creditType,
+        key,
         amount: creditConfig.allocation,
         newBalance,
         source: "seat_grant",
@@ -210,24 +210,24 @@ export function createSeatsApi(config: Config) {
       const creditHolder = grantTo === "seat-users" ? userId : orgId;
       const grantsFromSeat = await getCreditsGrantedBySource(creditHolder, subscription.id);
 
-      for (const [creditType, grantedAmount] of Object.entries(grantsFromSeat)) {
+      for (const [key, grantedAmount] of Object.entries(grantsFromSeat)) {
         if (grantedAmount > 0) {
-          const currentBalance = await credits.getBalance({ userId: creditHolder, creditType });
+          const currentBalance = await credits.getBalance({ userId: creditHolder, key });
           const amountToRevoke = Math.min(grantedAmount, currentBalance);
 
           if (amountToRevoke > 0) {
             const result = await credits.revoke({
               userId: creditHolder,
-              creditType,
+              key,
               amount: amountToRevoke,
               source: "seat_revoke",
               sourceId: subscription.id,
             });
-            creditsRevoked[creditType] = result.amountRevoked;
+            creditsRevoked[key] = result.amountRevoked;
 
             await callbacks?.onCreditsRevoked?.({
               userId: creditHolder,
-              creditType,
+              key,
               amount: result.amountRevoked,
               previousBalance: currentBalance,
               newBalance: result.balance,

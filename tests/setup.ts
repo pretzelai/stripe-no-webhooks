@@ -39,10 +39,10 @@ export async function setupTestDb(): Promise<Pool> {
   await client.query(`
     CREATE TABLE IF NOT EXISTS ${SCHEMA}.credit_balances (
       user_id text NOT NULL,
-      credit_type_id text NOT NULL,
+      key text NOT NULL,
       balance bigint NOT NULL DEFAULT 0,
       updated_at timestamptz DEFAULT now(),
-      PRIMARY KEY (user_id, credit_type_id)
+      PRIMARY KEY (user_id, key)
     );
   `);
 
@@ -50,7 +50,7 @@ export async function setupTestDb(): Promise<Pool> {
     CREATE TABLE IF NOT EXISTS ${SCHEMA}.credit_ledger (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id text NOT NULL,
-      credit_type_id text NOT NULL,
+      key text NOT NULL,
       amount bigint NOT NULL,
       balance_after bigint NOT NULL,
       transaction_type text NOT NULL,
@@ -64,8 +64,8 @@ export async function setupTestDb(): Promise<Pool> {
   `);
 
   await client.query(`
-    CREATE INDEX IF NOT EXISTS idx_credit_ledger_user_type_time
-      ON ${SCHEMA}.credit_ledger(user_id, credit_type_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_credit_ledger_user_key_time
+      ON ${SCHEMA}.credit_ledger(user_id, key, created_at DESC);
   `);
 
   await client.query(`
@@ -77,14 +77,14 @@ export async function setupTestDb(): Promise<Pool> {
   await client.query(`
     CREATE TABLE IF NOT EXISTS ${SCHEMA}.topup_failures (
       user_id TEXT NOT NULL,
-      credit_type TEXT NOT NULL,
+      key TEXT NOT NULL,
       payment_method_id TEXT,
       decline_type TEXT NOT NULL,
       decline_code TEXT,
       failure_count INTEGER DEFAULT 1,
       last_failure_at TIMESTAMPTZ DEFAULT NOW(),
       disabled BOOLEAN DEFAULT FALSE,
-      PRIMARY KEY (user_id, credit_type)
+      PRIMARY KEY (user_id, key)
     );
   `);
 
