@@ -109,7 +109,7 @@ function webhookSecretBox(secret, environment) {
       RESET
   );
 
-  const envVar = `STRIPE_WEBHOOK_SECRET=${secret.slice(0, 20)}...`;
+  const envVar = `STRIPE_WEBHOOK_SECRET=${secret}`;
   console.log(
     COLORS.green +
       "┃  " +
