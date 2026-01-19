@@ -1,6 +1,6 @@
-import type { BillingConfig } from "stripe-no-webhooks";
+import { defineConfig } from "stripe-no-webhooks";
 
-const billingConfig: BillingConfig = {
+export default defineConfig({
   test: {
     plans: [
       // Example plan with monthly and yearly pricing:
@@ -26,6 +26,4 @@ const billingConfig: BillingConfig = {
   production: {
     plans: [],
   },
-};
-
-export default billingConfig;
+});

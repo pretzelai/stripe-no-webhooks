@@ -67,3 +67,7 @@ export type BillingConfig = {
     plans?: Plan[];
   };
 };
+
+export function defineConfig<const T extends BillingConfig>(config: T): T {
+  return config;
+}
