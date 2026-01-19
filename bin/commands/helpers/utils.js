@@ -200,7 +200,7 @@ function saveWebhookSecret({ environment, url, secret }, cwd = process.cwd()) {
   const entry = `
 # ${environment} - Created ${timestamp}
 # URL: ${url}
-STRIPE_WEBHOOK_SECRET_${environment.toUpperCase()}=${secret}
+STRIPE_WEBHOOK_SECRET=${secret}
 `;
 
   if (fs.existsSync(secretsPath)) {
