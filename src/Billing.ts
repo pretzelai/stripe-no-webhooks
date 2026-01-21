@@ -342,7 +342,7 @@ export class Billing {
     return null;
   };
 
-  private createCreditsApi(callbacks?: {
+  createCreditsApi(callbacks?: {
     onAutoTopUpFailed?: (
       params: AutoTopUpFailedCallbackParams
     ) => void | Promise<void>;
