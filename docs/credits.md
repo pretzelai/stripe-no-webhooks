@@ -6,7 +6,7 @@ Track consumable balances that renew with subscriptions.
 
 | | Credits | Wallet |
 |---|---------|--------|
-| **Unit** | Arbitrary (API calls, exports) | Money (cents) |
+| **Unit** | Arbitrary (API calls, exports) | Money |
 | **On insufficient balance** | Consume fails | Consume succeeds (goes negative) |
 | **Best for** | Feature quotas, rate limits | Pay-as-you-go spending |
 
@@ -104,20 +104,20 @@ import { wallet } from "stripe-no-webhooks";
 
 // Check balance
 const balance = await wallet.getBalance({ userId });
-// { cents: 350, formatted: "$3.50", currency: "usd" }
+// { amount: 350, formatted: "$3.50", currency: "usd" }
 
 // Consume (always succeeds, can go negative)
 const result = await wallet.consume({
   userId,
-  cents: 500,
+  amount: 500,
   description: "GPT-4 usage",
 });
-// { balance: { cents: -150, formatted: "-$1.50", currency: "usd" } }
+// { balance: { amount: -150, formatted: "-$1.50", currency: "usd" } }
 
 // Add funds manually
 await wallet.add({
   userId,
-  cents: 1000,
+  amount: 1000,
   currency: "usd",
   description: "Manual top-up",
 });
@@ -148,7 +148,7 @@ Wallet supports micro-cent precision for AI token pricing:
 // Charge $0.00015 per token
 await wallet.consume({
   userId,
-  cents: 0.00015 * tokenCount,
+  amount: 0.00015 * tokenCount,
 });
 ```
 
@@ -185,7 +185,7 @@ Let users buy more credits when they run out:
 credits: {
   api_calls: {
     allocation: 1000,
-    pricePerCreditCents: 1,      // $0.01 per credit
+    pricePerCredit: 1,           // $0.01 per credit
     minPerPurchase: 100,
     maxPerPurchase: 10000,
     autoTopUp: {                 // Optional
@@ -292,8 +292,8 @@ const history = await wallet.getHistory({ userId, limit: 50 });
 // Each event:
 {
   id: "uuid",
-  cents: -500,
-  balanceAfterCents: 350,
+  amount: -500,
+  balanceAfter: 350,
   type: "add" | "consume" | "revoke" | "adjust",
   source: "usage",
   description: "GPT-4 usage",

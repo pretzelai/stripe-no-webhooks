@@ -32,7 +32,7 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           api_calls: {
             allocation: 1000,
             onRenewal: "reset",
-            pricePerCreditCents: 1, // $0.01 per credit
+            pricePerCredit: 1, // $0.01 per credit
             minPerPurchase: 100,
             maxPerPurchase: 10000,
           },
@@ -46,7 +46,7 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           api_calls: {
             allocation: 10000,
             onRenewal: "reset",
-            pricePerCreditCents: 1,
+            pricePerCredit: 1,
             autoTopUp: {
               threshold: 500,
               amount: 1000,
@@ -68,7 +68,7 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           api_calls: {
             allocation: 500,
             onRenewal: "reset",
-            // No pricePerCreditCents configured
+            // No pricePerCredit configured
           },
         },
       },
@@ -149,7 +149,7 @@ describe("TopUp: On-Demand", () => {
     expect(result.success).toBe(true);
     if (result.success && "balance" in result) {
       expect(result.balance).toBe(500);
-      expect(result.charged.amountCents).toBe(500); // 500 credits * $0.01
+      expect(result.charged.amount).toBe(500); // 500 credits * $0.01
       expect(result.charged.currency).toBe("usd");
     }
 
@@ -1346,10 +1346,10 @@ describe("TopUp: Payment Failure Handling", () => {
 // =============================================================================
 
 describe("TopUp: Stripe Minimum Charge", () => {
-  test("fails when total is below Stripe minimum (60 cents)", async () => {
+  test("fails when total is below Stripe minimum (60)", async () => {
     await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
 
-    // Our basic plan has pricePerCreditCents = 1, so 50 credits = 50 cents < 60 cents
+    // Our basic plan has pricePerCredit = 1, so 50 credits = 50 < 60 minimum
     // But minPerPurchase is 100, so we need a config with lower minPerPurchase
     const lowMinConfig: BillingConfig = {
       test: {
@@ -1362,7 +1362,7 @@ describe("TopUp: Stripe Minimum Charge", () => {
               api_calls: {
                 allocation: 1000,
                 onRenewal: "reset",
-                pricePerCreditCents: 1,
+                pricePerCredit: 1,
                 minPerPurchase: 10, // Allow smaller purchases
                 maxPerPurchase: 10000,
               },
@@ -1391,7 +1391,7 @@ describe("TopUp: Stripe Minimum Charge", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.code).toBe("INVALID_AMOUNT");
-      expect(result.error.message).toContain("60 cents");
+      expect(result.error.message).toContain("60");
     }
   });
 });
@@ -1571,7 +1571,7 @@ describe("TopUp: Auto Top-Up Failure Scenarios", () => {
   });
 
   test("auto top-up returns not_configured when autoTopUp not configured", async () => {
-    // Basic plan has pricePerCreditCents but no autoTopUp config
+    // Basic plan has pricePerCredit but no autoTopUp config
     await setupUserWithSubscription("user_1", "cus_user_1", "sub_basic_1", "price_basic_monthly", "pm_card_visa");
 
     const topUpHandler = createTopUpHandler({
@@ -1805,7 +1805,7 @@ describe("TopUp: Boundary Cases", () => {
 
 describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
   test("on-demand top-up works when auto top-up is also configured", async () => {
-    // Pro plan has BOTH pricePerCreditCents AND autoTopUp configured
+    // Pro plan has BOTH pricePerCredit AND autoTopUp configured
     await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
 
     const topUpHandler = createTopUpHandler({
@@ -1832,7 +1832,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
   });
 
   test("on-demand uses default min/max when not specified", async () => {
-    // Pro plan has pricePerCreditCents but no explicit minPerPurchase/maxPerPurchase
+    // Pro plan has pricePerCredit but no explicit minPerPurchase/maxPerPurchase
     await setupUserWithSubscription("user_1", "cus_user_1", "sub_pro_1", "price_pro_monthly", "pm_card_visa");
 
     const topUpHandler = createTopUpHandler({
@@ -1989,7 +1989,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
             credits: {
               api_calls: {
                 allocation: 10000,
-                pricePerCreditCents: 10, // $0.10 per credit
+                pricePerCredit: 10, // $0.10 per credit
                 // No minPerPurchase - should default to 1
                 // No maxPerPurchase - should have no limit
                 autoTopUp: {
@@ -2027,7 +2027,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.code).toBe("INVALID_AMOUNT");
-      expect(result.error.message).toContain("60 cents");
+      expect(result.error.message).toContain("60");
     }
 
     // Should succeed with amount=10 ($1.00)
@@ -2047,7 +2047,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
 
 describe("TopUp: Auto Top-Up with Custom Configs", () => {
   test("auto top-up succeeds with valid custom config", async () => {
-    // Create a config where auto top-up amount * price >= 60 cents
+    // Create a config where auto top-up amount * price >= 60
     const validAmountConfig: BillingConfig = {
       test: {
         plans: [
@@ -2058,7 +2058,7 @@ describe("TopUp: Auto Top-Up with Custom Configs", () => {
             credits: {
               api_calls: {
                 allocation: 1000,
-                pricePerCreditCents: 1, // $0.01 per credit
+                pricePerCredit: 1, // $0.01 per credit
                 autoTopUp: {
                   threshold: 100,
                   amount: 100, // 100 * $0.01 = $1.00 >= $0.60 minimum
@@ -2107,7 +2107,7 @@ describe("TopUp: Auto Top-Up with Custom Configs", () => {
             credits: {
               api_calls: {
                 allocation: 5000,
-                pricePerCreditCents: 2, // $0.02 per credit
+                pricePerCredit: 2, // $0.02 per credit
                 autoTopUp: {
                   threshold: 200,
                   amount: 500, // 500 * $0.02 = $10.00

@@ -32,31 +32,31 @@ afterAll(async () => {
 
 describe("Wallet", () => {
   describe("add", () => {
-    test("adds cents to wallet", async () => {
+    test("adds amount to wallet", async () => {
       const result = await wallet.add({
         userId: "user_1",
-        cents: 1000,
+        amount: 1000,
         currency: "usd",
         source: "manual",
       });
 
-      expect(result.balance.cents).toBe(1000);
+      expect(result.balance.amount).toBe(1000);
       expect(result.balance.currency).toBe("usd");
       expect(result.balance.formatted).toBe("$10.00");
     });
 
     test("adds accumulate", async () => {
-      await wallet.add({ userId: "user_1", cents: 500, currency: "usd" });
-      const result = await wallet.add({ userId: "user_1", cents: 300, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 500, currency: "usd" });
+      const result = await wallet.add({ userId: "user_1", amount: 300, currency: "usd" });
 
-      expect(result.balance.cents).toBe(800);
+      expect(result.balance.amount).toBe(800);
       expect(result.balance.formatted).toBe("$8.00");
     });
 
     test("throws on zero amount", async () => {
       let error: Error | null = null;
       try {
-        await wallet.add({ userId: "user_1", cents: 0, currency: "usd" });
+        await wallet.add({ userId: "user_1", amount: 0, currency: "usd" });
       } catch (e) {
         error = e as Error;
       }
@@ -69,7 +69,7 @@ describe("Wallet", () => {
     test("throws on negative amount", async () => {
       let error: Error | null = null;
       try {
-        await wallet.add({ userId: "user_1", cents: -100, currency: "usd" });
+        await wallet.add({ userId: "user_1", amount: -100, currency: "usd" });
       } catch (e) {
         error = e as Error;
       }
@@ -79,11 +79,11 @@ describe("Wallet", () => {
     });
 
     test("throws on currency mismatch", async () => {
-      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 100, currency: "usd" });
 
       let error: Error | null = null;
       try {
-        await wallet.add({ userId: "user_1", cents: 100, currency: "eur" });
+        await wallet.add({ userId: "user_1", amount: 100, currency: "eur" });
       } catch (e) {
         error = e as Error;
       }
@@ -95,46 +95,46 @@ describe("Wallet", () => {
     });
 
     test("defaults currency to usd", async () => {
-      const result = await wallet.add({ userId: "user_1", cents: 100 });
+      const result = await wallet.add({ userId: "user_1", amount: 100 });
       expect(result.balance.currency).toBe("usd");
     });
   });
 
   describe("consume", () => {
     test("consumes from wallet", async () => {
-      await wallet.add({ userId: "user_1", cents: 1000, currency: "usd" });
-      const result = await wallet.consume({ userId: "user_1", cents: 300 });
+      await wallet.add({ userId: "user_1", amount: 1000, currency: "usd" });
+      const result = await wallet.consume({ userId: "user_1", amount: 300 });
 
-      expect(result.balance.cents).toBe(700);
+      expect(result.balance.amount).toBe(700);
       expect(result.balance.formatted).toBe("$7.00");
     });
 
     test("can consume entire balance", async () => {
-      await wallet.add({ userId: "user_1", cents: 500, currency: "usd" });
-      const result = await wallet.consume({ userId: "user_1", cents: 500 });
+      await wallet.add({ userId: "user_1", amount: 500, currency: "usd" });
+      const result = await wallet.consume({ userId: "user_1", amount: 500 });
 
-      expect(result.balance.cents).toBe(0);
+      expect(result.balance.amount).toBe(0);
     });
 
     test("allows negative balance", async () => {
-      await wallet.add({ userId: "user_1", cents: 300, currency: "usd" });
-      const result = await wallet.consume({ userId: "user_1", cents: 500 });
+      await wallet.add({ userId: "user_1", amount: 300, currency: "usd" });
+      const result = await wallet.consume({ userId: "user_1", amount: 500 });
 
-      expect(result.balance.cents).toBe(-200);
+      expect(result.balance.amount).toBe(-200);
       expect(result.balance.formatted).toBe("-$2.00");
     });
 
     test("allows consume on empty wallet (creates negative balance)", async () => {
-      const result = await wallet.consume({ userId: "user_1", cents: 100 });
+      const result = await wallet.consume({ userId: "user_1", amount: 100 });
 
-      expect(result.balance.cents).toBe(-100);
+      expect(result.balance.amount).toBe(-100);
       expect(result.balance.currency).toBe("usd");
     });
 
     test("throws on zero amount", async () => {
       let error: Error | null = null;
       try {
-        await wallet.consume({ userId: "user_1", cents: 0 });
+        await wallet.consume({ userId: "user_1", amount: 0 });
       } catch (e) {
         error = e as Error;
       }
@@ -146,7 +146,7 @@ describe("Wallet", () => {
     test("throws on negative amount", async () => {
       let error: Error | null = null;
       try {
-        await wallet.consume({ userId: "user_1", cents: -50 });
+        await wallet.consume({ userId: "user_1", amount: -50 });
       } catch (e) {
         error = e as Error;
       }
@@ -163,32 +163,32 @@ describe("Wallet", () => {
     });
 
     test("returns balance after add", async () => {
-      await wallet.add({ userId: "user_1", cents: 847, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 847, currency: "usd" });
       const balance = await wallet.getBalance({ userId: "user_1" });
 
       expect(balance).not.toBeNull();
-      expect(balance!.cents).toBe(847);
+      expect(balance!.amount).toBe(847);
       expect(balance!.formatted).toBe("$8.47");
       expect(balance!.currency).toBe("usd");
     });
 
     test("returns negative balance", async () => {
-      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 300 });
+      await wallet.add({ userId: "user_1", amount: 100, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 300 });
       const balance = await wallet.getBalance({ userId: "user_1" });
 
       expect(balance).not.toBeNull();
-      expect(balance!.cents).toBe(-200);
+      expect(balance!.amount).toBe(-200);
       expect(balance!.formatted).toBe("-$2.00");
     });
 
     test("returns zero balance (not null) after consuming all", async () => {
-      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 100 });
+      await wallet.add({ userId: "user_1", amount: 100, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 100 });
       const balance = await wallet.getBalance({ userId: "user_1" });
 
       expect(balance).not.toBeNull();
-      expect(balance!.cents).toBe(0);
+      expect(balance!.amount).toBe(0);
     });
   });
 
@@ -201,7 +201,7 @@ describe("Wallet", () => {
     test("records add transactions", async () => {
       await wallet.add({
         userId: "user_1",
-        cents: 500,
+        amount: 500,
         currency: "usd",
         description: "Top up",
       });
@@ -210,27 +210,27 @@ describe("Wallet", () => {
 
       expect(history.length).toBe(1);
       expect(history[0].type).toBe("add");
-      expect(history[0].cents).toBe(500);
-      expect(history[0].balanceAfterCents).toBe(500);
+      expect(history[0].amount).toBe(500);
+      expect(history[0].balanceAfter).toBe(500);
       expect(history[0].description).toBe("Top up");
     });
 
     test("records consume transactions", async () => {
-      await wallet.add({ userId: "user_1", cents: 1000, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 300, description: "API usage" });
+      await wallet.add({ userId: "user_1", amount: 1000, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 300, description: "API usage" });
 
       const history = await wallet.getHistory({ userId: "user_1" });
 
       expect(history.length).toBe(2);
       expect(history[0].type).toBe("consume");
-      expect(history[0].cents).toBe(-300);
-      expect(history[0].balanceAfterCents).toBe(700);
+      expect(history[0].amount).toBe(-300);
+      expect(history[0].balanceAfter).toBe(700);
       expect(history[0].description).toBe("API usage");
     });
 
     test("respects limit and offset", async () => {
       for (let i = 0; i < 5; i++) {
-        await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
+        await wallet.add({ userId: "user_1", amount: 100, currency: "usd" });
       }
 
       const page1 = await wallet.getHistory({ userId: "user_1", limit: 2 });
@@ -245,7 +245,7 @@ describe("Wallet", () => {
     test("add with same idempotency key throws on second call", async () => {
       await wallet.add({
         userId: "user_1",
-        cents: 500,
+        amount: 500,
         currency: "usd",
         idempotencyKey: "add_123",
       });
@@ -254,7 +254,7 @@ describe("Wallet", () => {
       try {
         await wallet.add({
           userId: "user_1",
-          cents: 500,
+          amount: 500,
           currency: "usd",
           idempotencyKey: "add_123",
         });
@@ -266,14 +266,14 @@ describe("Wallet", () => {
       expect((error as CreditError).code).toBe("IDEMPOTENCY_CONFLICT");
 
       const balance = await wallet.getBalance({ userId: "user_1" });
-      expect(balance!.cents).toBe(500);
+      expect(balance!.amount).toBe(500);
     });
 
     test("consume with same idempotency key throws on second call", async () => {
-      await wallet.add({ userId: "user_1", cents: 1000, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 1000, currency: "usd" });
       await wallet.consume({
         userId: "user_1",
-        cents: 300,
+        amount: 300,
         idempotencyKey: "consume_123",
       });
 
@@ -281,7 +281,7 @@ describe("Wallet", () => {
       try {
         await wallet.consume({
           userId: "user_1",
-          cents: 300,
+          amount: 300,
           idempotencyKey: "consume_123",
         });
       } catch (e) {
@@ -292,21 +292,21 @@ describe("Wallet", () => {
       expect((error as CreditError).code).toBe("IDEMPOTENCY_CONFLICT");
 
       const balance = await wallet.getBalance({ userId: "user_1" });
-      expect(balance!.cents).toBe(700);
+      expect(balance!.amount).toBe(700);
     });
 
     test("different idempotency keys allow multiple operations", async () => {
-      await wallet.add({ userId: "user_1", cents: 100, idempotencyKey: "add_1" });
-      await wallet.add({ userId: "user_1", cents: 100, idempotencyKey: "add_2" });
+      await wallet.add({ userId: "user_1", amount: 100, idempotencyKey: "add_1" });
+      await wallet.add({ userId: "user_1", amount: 100, idempotencyKey: "add_2" });
 
       const balance = await wallet.getBalance({ userId: "user_1" });
-      expect(balance!.cents).toBe(200);
+      expect(balance!.amount).toBe(200);
     });
   });
 
   describe("precision", () => {
     test("stores micro-cents internally", async () => {
-      await wallet.add({ userId: "user_1", cents: 1, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 1, currency: "usd" });
 
       const result = await pool.query(
         "SELECT balance FROM stripe.credit_balances WHERE user_id = $1 AND key = $2",
@@ -326,51 +326,51 @@ describe("Wallet", () => {
 
       const balance = await wallet.getBalance({ userId: "user_1" });
 
-      expect(balance!.cents).toBe(1.5);
+      expect(balance!.amount).toBe(1.5);
       expect(balance!.formatted).toBe("$0.015");
     });
   });
 
   describe("currency formatting", () => {
     test("formats USD correctly", async () => {
-      await wallet.add({ userId: "user_1", cents: 1234, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 1234, currency: "usd" });
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.formatted).toBe("$12.34");
     });
 
     test("formats EUR correctly", async () => {
-      await wallet.add({ userId: "user_1", cents: 1234, currency: "eur" });
+      await wallet.add({ userId: "user_1", amount: 1234, currency: "eur" });
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.formatted).toBe("\u20AC12.34");
     });
 
     test("formats GBP correctly", async () => {
-      await wallet.add({ userId: "user_1", cents: 1234, currency: "gbp" });
+      await wallet.add({ userId: "user_1", amount: 1234, currency: "gbp" });
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.formatted).toBe("\u00A312.34");
     });
 
     test("formats JPY (zero-decimal) correctly", async () => {
-      await wallet.add({ userId: "user_1", cents: 1234, currency: "jpy" });
+      await wallet.add({ userId: "user_1", amount: 1234, currency: "jpy" });
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.formatted).toBe("\u00A51234");
     });
 
     test("formats KRW (zero-decimal) correctly", async () => {
-      await wallet.add({ userId: "user_1", cents: 5000, currency: "krw" });
+      await wallet.add({ userId: "user_1", amount: 5000, currency: "krw" });
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.formatted).toBe("\u20A95000");
     });
 
     test("formats unknown currency with code prefix", async () => {
-      await wallet.add({ userId: "user_1", cents: 1234, currency: "abc" });
+      await wallet.add({ userId: "user_1", amount: 1234, currency: "abc" });
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.formatted).toBe("ABC 12.34");
     });
 
     test("formats negative amounts correctly", async () => {
-      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 300 });
+      await wallet.add({ userId: "user_1", amount: 100, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 300 });
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.formatted).toBe("-$2.00");
     });
@@ -410,26 +410,26 @@ describe("Wallet", () => {
 
   describe("isolation", () => {
     test("different users have independent wallets", async () => {
-      await wallet.add({ userId: "user_1", cents: 1000, currency: "usd" });
-      await wallet.add({ userId: "user_2", cents: 500, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 1000, currency: "usd" });
+      await wallet.add({ userId: "user_2", amount: 500, currency: "usd" });
 
       const balance1 = await wallet.getBalance({ userId: "user_1" });
       const balance2 = await wallet.getBalance({ userId: "user_2" });
 
-      expect(balance1!.cents).toBe(1000);
-      expect(balance2!.cents).toBe(500);
+      expect(balance1!.amount).toBe(1000);
+      expect(balance2!.amount).toBe(500);
     });
 
     test("wallet consume doesn't affect other user", async () => {
-      await wallet.add({ userId: "user_1", cents: 1000, currency: "usd" });
-      await wallet.add({ userId: "user_2", cents: 1000, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 300 });
+      await wallet.add({ userId: "user_1", amount: 1000, currency: "usd" });
+      await wallet.add({ userId: "user_2", amount: 1000, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 300 });
 
       const balance1 = await wallet.getBalance({ userId: "user_1" });
       const balance2 = await wallet.getBalance({ userId: "user_2" });
 
-      expect(balance1!.cents).toBe(700);
-      expect(balance2!.cents).toBe(1000);
+      expect(balance1!.amount).toBe(700);
+      expect(balance2!.amount).toBe(1000);
     });
   });
 
@@ -439,7 +439,7 @@ describe("Wallet", () => {
       for (let i = 0; i < 10; i++) {
         promises.push(wallet.add({
           userId: "user_1",
-          cents: 100,
+          amount: 100,
           currency: "usd",
           idempotencyKey: `concurrent_add_${i}`,
         }));
@@ -447,24 +447,24 @@ describe("Wallet", () => {
 
       await Promise.all(promises);
       const balance = await wallet.getBalance({ userId: "user_1" });
-      expect(balance!.cents).toBe(1000);
+      expect(balance!.amount).toBe(1000);
     });
 
     test("handles concurrent consumes correctly", async () => {
-      await wallet.add({ userId: "user_1", cents: 1000, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 1000, currency: "usd" });
 
       const promises = [];
       for (let i = 0; i < 5; i++) {
         promises.push(wallet.consume({
           userId: "user_1",
-          cents: 100,
+          amount: 100,
           idempotencyKey: `concurrent_consume_${i}`,
         }));
       }
 
       await Promise.all(promises);
       const balance = await wallet.getBalance({ userId: "user_1" });
-      expect(balance!.cents).toBe(500);
+      expect(balance!.amount).toBe(500);
     });
   });
 
@@ -480,11 +480,11 @@ describe("Wallet", () => {
       const { credits } = await import("../src/credits");
 
       // Setup: user has $3.50 in wallet (350 cents = 350,000,000 micro-cents)
-      await wallet.add({ userId: "user_1", cents: 500, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 150 });
+      await wallet.add({ userId: "user_1", amount: 500, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 150 });
 
       const balanceBefore = await wallet.getBalance({ userId: "user_1" });
-      expect(balanceBefore!.cents).toBe(350);
+      expect(balanceBefore!.amount).toBe(350);
 
       // Reset to $5.00 (500 cents = 500,000,000 micro-cents)
       const newAllocationMicroCents = 500 * 1000000;
@@ -498,7 +498,7 @@ describe("Wallet", () => {
 
       // Check final balance
       const balanceAfter = await wallet.getBalance({ userId: "user_1" });
-      expect(balanceAfter!.cents).toBe(500);
+      expect(balanceAfter!.amount).toBe(500);
 
       // Check ledger entries via wallet history
       const history = await wallet.getHistory({ userId: "user_1" });
@@ -508,14 +508,14 @@ describe("Wallet", () => {
 
       // Most recent first (newest = grant)
       expect(history[0].type).toBe("add"); // grant shows as "add" in wallet history
-      expect(history[0].cents).toBe(500);
-      expect(history[0].balanceAfterCents).toBe(500);
+      expect(history[0].amount).toBe(500);
+      expect(history[0].balanceAfter).toBe(500);
       expect(history[0].description).toBe("Monthly wallet allocation");
 
       // Second = revoke (expiring old balance)
       expect(history[1].type).toBe("revoke");
-      expect(history[1].cents).toBe(-350);
-      expect(history[1].balanceAfterCents).toBe(0);
+      expect(history[1].amount).toBe(-350);
+      expect(history[1].balanceAfter).toBe(0);
       expect(history[1].description).toBe("Monthly wallet balance expired");
 
       // Array order verifies correct chronological order (ORDER BY created_at DESC)
@@ -525,11 +525,11 @@ describe("Wallet", () => {
       const { credits } = await import("../src/credits");
 
       // Setup: user has -$2.00 in wallet (debt)
-      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 300 });
+      await wallet.add({ userId: "user_1", amount: 100, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 300 });
 
       const balanceBefore = await wallet.getBalance({ userId: "user_1" });
-      expect(balanceBefore!.cents).toBe(-200);
+      expect(balanceBefore!.amount).toBe(-200);
 
       // Reset to $5.00
       const newAllocationMicroCents = 500 * 1000000;
@@ -543,7 +543,7 @@ describe("Wallet", () => {
 
       // Check final balance
       const balanceAfter = await wallet.getBalance({ userId: "user_1" });
-      expect(balanceAfter!.cents).toBe(500);
+      expect(balanceAfter!.amount).toBe(500);
 
       // Check ledger entries
       const history = await wallet.getHistory({ userId: "user_1" });
@@ -551,12 +551,12 @@ describe("Wallet", () => {
 
       // Most recent = grant
       expect(history[0].type).toBe("add");
-      expect(history[0].cents).toBe(500);
+      expect(history[0].amount).toBe(500);
 
       // Second = adjust (forgiveness - positive amount to get to 0)
       expect(history[1].type).toBe("adjust");
-      expect(history[1].cents).toBe(200);
-      expect(history[1].balanceAfterCents).toBe(0);
+      expect(history[1].amount).toBe(200);
+      expect(history[1].balanceAfter).toBe(0);
       expect(history[1].description).toBe("Negative balance forgiven");
     });
 
@@ -564,11 +564,11 @@ describe("Wallet", () => {
       const { credits } = await import("../src/credits");
 
       // Setup: user has $0.00 in wallet
-      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
-      await wallet.consume({ userId: "user_1", cents: 100 });
+      await wallet.add({ userId: "user_1", amount: 100, currency: "usd" });
+      await wallet.consume({ userId: "user_1", amount: 100 });
 
       const balanceBefore = await wallet.getBalance({ userId: "user_1" });
-      expect(balanceBefore!.cents).toBe(0);
+      expect(balanceBefore!.amount).toBe(0);
 
       // Reset to $5.00
       const newAllocationMicroCents = 500 * 1000000;
@@ -581,21 +581,21 @@ describe("Wallet", () => {
 
       // Check final balance
       const balanceAfter = await wallet.getBalance({ userId: "user_1" });
-      expect(balanceAfter!.cents).toBe(500);
+      expect(balanceAfter!.amount).toBe(500);
 
       // Check ledger entries - only 3: original add, consume, new grant (no revoke needed)
       const history = await wallet.getHistory({ userId: "user_1" });
       expect(history.length).toBe(3);
 
       expect(history[0].type).toBe("add");
-      expect(history[0].cents).toBe(500);
+      expect(history[0].amount).toBe(500);
     });
 
     test("reset to zero allocation: only expires, no grant", async () => {
       const { credits } = await import("../src/credits");
 
       // Setup: user has $3.00 in wallet
-      await wallet.add({ userId: "user_1", cents: 300, currency: "usd" });
+      await wallet.add({ userId: "user_1", amount: 300, currency: "usd" });
 
       // Reset to $0 (cancellation)
       await credits.atomicBalanceReset("user_1", "wallet", 0, {
@@ -607,15 +607,15 @@ describe("Wallet", () => {
 
       // Check final balance
       const balanceAfter = await wallet.getBalance({ userId: "user_1" });
-      expect(balanceAfter!.cents).toBe(0);
+      expect(balanceAfter!.amount).toBe(0);
 
       // Check ledger - only 2 entries: original add, revoke (no new grant)
       const history = await wallet.getHistory({ userId: "user_1" });
       expect(history.length).toBe(2);
 
       expect(history[0].type).toBe("revoke");
-      expect(history[0].cents).toBe(-300);
-      expect(history[0].balanceAfterCents).toBe(0);
+      expect(history[0].amount).toBe(-300);
+      expect(history[0].balanceAfter).toBe(0);
     });
   });
 
@@ -628,11 +628,11 @@ describe("Wallet", () => {
     });
 
     test("individual exports work", async () => {
-      await add({ userId: "user_1", cents: 100, currency: "usd" });
+      await add({ userId: "user_1", amount: 100, currency: "usd" });
       const balance = await getBalance({ userId: "user_1" });
-      expect(balance!.cents).toBe(100);
+      expect(balance!.amount).toBe(100);
 
-      await consume({ userId: "user_1", cents: 50 });
+      await consume({ userId: "user_1", amount: 50 });
       const history = await getHistory({ userId: "user_1" });
       expect(history.length).toBe(2);
     });

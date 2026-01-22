@@ -11,15 +11,15 @@ import type { TransactionSource } from "../credits/types";
 // --- Types ---
 
 export type WalletBalance = {
-  cents: number;
+  amount: number;
   formatted: string;
   currency: string;
 };
 
 export type WalletEvent = {
   id: string;
-  cents: number;
-  balanceAfterCents: number;
+  amount: number;
+  balanceAfter: number;
   type: "add" | "consume" | "adjust" | "revoke";
   source: string;
   sourceId?: string;
@@ -102,7 +102,7 @@ export async function getBalance(params: {
 
   const currency = result.currency || "usd";
   return {
-    cents: microCentsToCents(result.balance),
+    amount: microCentsToCents(result.balance),
     formatted: formatWalletBalance(result.balance, currency),
     currency,
   };
@@ -110,7 +110,7 @@ export async function getBalance(params: {
 
 export async function add(params: {
   userId: string;
-  cents: number;
+  amount: number;
   currency?: string;
   source?: TransactionSource;
   sourceId?: string;
@@ -119,7 +119,7 @@ export async function add(params: {
 }): Promise<{ balance: WalletBalance }> {
   const {
     userId,
-    cents,
+    amount,
     currency = "usd",
     source = "manual",
     sourceId,
@@ -127,7 +127,7 @@ export async function add(params: {
     idempotencyKey,
   } = params;
 
-  if (cents <= 0) {
+  if (amount <= 0) {
     throw new CreditError("INVALID_AMOUNT", "Amount must be positive");
   }
 
@@ -141,7 +141,7 @@ export async function add(params: {
     );
   }
 
-  const microCents = centsToMicroCents(cents);
+  const microCents = centsToMicroCents(amount);
   const newBalanceMicroCents = await atomicAdd(userId, WALLET_KEY, microCents, {
     transactionType: "grant",
     source,
@@ -153,7 +153,7 @@ export async function add(params: {
 
   return {
     balance: {
-      cents: microCentsToCents(newBalanceMicroCents),
+      amount: microCentsToCents(newBalanceMicroCents),
       formatted: formatWalletBalance(newBalanceMicroCents, currency),
       currency,
     },
@@ -162,13 +162,13 @@ export async function add(params: {
 
 export async function consume(params: {
   userId: string;
-  cents: number;
+  amount: number;
   description?: string;
   idempotencyKey?: string;
 }): Promise<{ balance: WalletBalance }> {
-  const { userId, cents, description, idempotencyKey } = params;
+  const { userId, amount, description, idempotencyKey } = params;
 
-  if (cents <= 0) {
+  if (amount <= 0) {
     throw new CreditError("INVALID_AMOUNT", "Amount must be positive");
   }
 
@@ -179,7 +179,7 @@ export async function consume(params: {
     }
   }
 
-  const microCents = centsToMicroCents(cents);
+  const microCents = centsToMicroCents(amount);
   const result = await atomicConsume(userId, WALLET_KEY, microCents, {
     transactionType: "consume",
     source: "usage",
@@ -192,7 +192,7 @@ export async function consume(params: {
 
   return {
     balance: {
-      cents: microCentsToCents(result.newBalance),
+      amount: microCentsToCents(result.newBalance),
       formatted: formatWalletBalance(result.newBalance, curr),
       currency: curr,
     },
@@ -215,8 +215,8 @@ export async function getHistory(params: {
 
   return transactions.map((tx) => ({
     id: tx.id,
-    cents: microCentsToCents(tx.amount),
-    balanceAfterCents: microCentsToCents(tx.balanceAfter),
+    amount: microCentsToCents(tx.amount),
+    balanceAfter: microCentsToCents(tx.balanceAfter),
     type: tx.transactionType === "grant" ? "add" : tx.transactionType,
     source: tx.source,
     sourceId: tx.sourceId,
