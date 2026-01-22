@@ -8,6 +8,7 @@ import {
   unblockAutoTopUp,
   unblockAllAutoTopUps,
   getAutoTopUpStatus,
+  atomicBalanceReset,
   type AutoTopUpStatus,
 } from "./db";
 import {
@@ -47,4 +48,6 @@ export const credits = {
   getAutoTopUpStatus,
   unblockAutoTopUp,
   unblockAllAutoTopUps,
+  // Double-entry balance reset (for renewals with "reset" mode)
+  atomicBalanceReset,
 };

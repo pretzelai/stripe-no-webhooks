@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import type { BillingConfig, Plan, PriceInterval, CreditConfig, WalletConfig } from "../BillingConfig";
 import type { TransactionSource } from "./types";
 import { credits } from "./index";
-import { getActiveSeatUsers, getCreditsGrantedBySource, checkIdempotencyKeyPrefix, atomicAdd, atomicSet } from "./db";
+import { getActiveSeatUsers, getCreditsGrantedBySource, checkIdempotencyKeyPrefix, atomicAdd, atomicBalanceReset } from "./db";
 import {
   planHasCredits,
   findPlanByPriceId,
@@ -11,7 +11,7 @@ import {
   getUserIdFromCustomer,
   getCustomerIdFromSubscription,
 } from "../helpers";
-import { centsToMilliCents } from "../wallet";
+import { centsToMicroCents } from "../wallet";
 
 function getSubscriptionInterval(subscription: Stripe.Subscription): PriceInterval {
   const interval = subscription.items.data[0]?.price?.recurring?.interval;
@@ -32,7 +32,7 @@ function scaleWalletAllocation(config: WalletConfig, interval: PriceInterval): n
   if (interval === "year") scaledCents = baseCents * 12;
   else if (interval === "week") scaledCents = Math.ceil(baseCents / 4);
 
-  return centsToMilliCents(scaledCents);
+  return centsToMicroCents(scaledCents);
 }
 
 function getSubscriptionCurrency(subscription: Stripe.Subscription): string {
@@ -161,16 +161,17 @@ export function createCreditLifecycle(config: Config) {
       const actualSource = grantTo === "seat-users" ? "seat_grant" : source;
       const scaledAmount = scaleAllocation(creditConfig, effectiveInterval);
 
-      // For renewals with 'reset', use setBalance to wipe slate clean
-      // This handles negative balances correctly (user starts fresh with full allocation)
+      // For renewals with 'reset', use proper double-entry accounting
+      // This makes the ledger auditable (expired credits vs new allocation are separate entries)
       if (source === "renewal" && (creditConfig.onRenewal ?? "reset") === "reset") {
-        const result = await credits.setBalance({
-          userId,
-          key,
-          balance: scaledAmount,
+        const intervalLabel = effectiveInterval === "year" ? "Yearly" : effectiveInterval === "week" ? "Weekly" : "Monthly";
+        await atomicBalanceReset(userId, key, scaledAmount, {
           source: actualSource,
           sourceId: subscriptionId,
           idempotencyKey,
+          expireDescription: `${intervalLabel} credits expired`,
+          forgivenDescription: `${intervalLabel} negative balance forgiven`,
+          grantDescription: `${intervalLabel} credits allocation`,
         });
         await callbacks?.onCreditsGranted?.({
           userId,
@@ -286,14 +287,15 @@ export function createCreditLifecycle(config: Config) {
         const shouldReset = (creditConfig.onRenewal ?? "reset") === "reset";
 
         if (shouldReset) {
-          // "reset": Use setBalance to wipe slate clean (handles negative balances)
-          await credits.setBalance({
-            userId,
-            key,
-            balance: scaledAmount,
+          // "reset": Use proper double-entry accounting
+          const intervalLabel = effectiveInterval === "year" ? "Yearly" : effectiveInterval === "week" ? "Weekly" : "Monthly";
+          await atomicBalanceReset(userId, key, scaledAmount, {
             source: "plan_change",
             sourceId: subscriptionId,
             idempotencyKey,
+            expireDescription: "Credits expired (plan change)",
+            forgivenDescription: "Negative balance forgiven (plan change)",
+            grantDescription: `${intervalLabel} credits allocation (plan change)`,
           });
           await callbacks?.onCreditsGranted?.({
             userId,
@@ -392,10 +394,12 @@ export function createCreditLifecycle(config: Config) {
         const userId = await resolveUserId(subscription);
         if (userId) {
           const scaledAmount = scaleWalletAllocation(plan.wallet, interval);
+          const intervalLabel = interval === "year" ? "Yearly" : interval === "week" ? "Weekly" : "Monthly";
           await atomicAdd(userId, WALLET_KEY, scaledAmount, {
             transactionType: "grant",
             source: "subscription",
             sourceId: subscription.id,
+            description: `${intervalLabel} wallet allocation`,
             idempotencyKey: `wallet_${subscription.id}`,
             currency,
           });
@@ -442,13 +446,14 @@ export function createCreditLifecycle(config: Config) {
           const idempotencyKey = `${invoiceId}:${key}`;
 
           if ((creditConfig.onRenewal ?? "reset") === "reset") {
-            await credits.setBalance({
-              userId,
-              key,
-              balance: scaledAmount,
+            const intervalLabel = interval === "year" ? "Yearly" : interval === "week" ? "Weekly" : "Monthly";
+            await atomicBalanceReset(userId, key, scaledAmount, {
               source: "renewal",
               sourceId: subscription.id,
               idempotencyKey,
+              expireDescription: `${intervalLabel} credits expired`,
+              forgivenDescription: `${intervalLabel} negative balance forgiven`,
+              grantDescription: `${intervalLabel} credits allocation`,
             });
             await callbacks?.onCreditsGranted?.({
               userId,
@@ -482,20 +487,25 @@ export function createCreditLifecycle(config: Config) {
       if (plan?.wallet) {
         const scaledAmount = scaleWalletAllocation(plan.wallet, interval);
         const walletIdempotencyKey = `${invoiceId}:wallet`;
+        const intervalLabel = interval === "year" ? "Yearly" : interval === "week" ? "Weekly" : "Monthly";
 
         if ((plan.wallet.onRenewal ?? "reset") === "reset") {
-          await atomicSet(userId, WALLET_KEY, scaledAmount, {
-            transactionType: "adjust",
+          // Proper double-entry: expire old balance, then grant new allocation
+          await atomicBalanceReset(userId, WALLET_KEY, scaledAmount, {
             source: "renewal",
             sourceId: subscription.id,
             idempotencyKey: walletIdempotencyKey,
             currency,
+            expireDescription: `${intervalLabel} wallet balance expired`,
+            forgivenDescription: `${intervalLabel} negative balance forgiven`,
+            grantDescription: `${intervalLabel} wallet allocation`,
           });
         } else {
           await atomicAdd(userId, WALLET_KEY, scaledAmount, {
             transactionType: "grant",
             source: "renewal",
             sourceId: subscription.id,
+            description: `${intervalLabel} wallet renewal`,
             idempotencyKey: walletIdempotencyKey,
             currency,
           });
@@ -522,10 +532,12 @@ export function createCreditLifecycle(config: Config) {
       await revokeAllCredits(userId, subscription.id);
 
       if (plan?.wallet) {
-        await atomicSet(userId, WALLET_KEY, 0, {
-          transactionType: "revoke",
+        // Proper double-entry: record expired/forgiven balance on cancellation
+        await atomicBalanceReset(userId, WALLET_KEY, 0, {
           source: "cancellation",
           sourceId: subscription.id,
+          expireDescription: "Wallet balance forfeited (subscription cancelled)",
+          forgivenDescription: "Negative balance written off (subscription cancelled)",
         });
       }
     },
@@ -593,17 +605,21 @@ export function createCreditLifecycle(config: Config) {
       const newHasWallet = !!newPlan?.wallet;
 
       if (oldHasWallet && !newHasWallet) {
-        await atomicSet(userId, WALLET_KEY, 0, {
-          transactionType: "revoke",
+        // Wallet removed - proper double-entry to record expired/forgiven balance
+        await atomicBalanceReset(userId, WALLET_KEY, 0, {
           source: "plan_change",
           sourceId: subscription.id,
+          expireDescription: "Wallet balance forfeited (plan change)",
+          forgivenDescription: "Negative balance written off (plan change)",
         });
       } else if (newHasWallet) {
         const scaledAmount = scaleWalletAllocation(newPlan!.wallet!, newInterval);
+        const intervalLabel = newInterval === "year" ? "Yearly" : newInterval === "week" ? "Weekly" : "Monthly";
         await atomicAdd(userId, WALLET_KEY, scaledAmount, {
           transactionType: "grant",
           source: "plan_change",
           sourceId: subscription.id,
+          description: `${intervalLabel} wallet allocation (plan change)`,
           idempotencyKey: `${idempotencyKey}:wallet`,
           currency,
         });
@@ -634,17 +650,22 @@ export function createCreditLifecycle(config: Config) {
       await applyDowngradeCredits(userId, newPlan, subscription.id, idempotencyKey, interval);
 
       const currency = getSubscriptionCurrency(subscription);
+      const intervalLabel = interval === "year" ? "Yearly" : interval === "week" ? "Weekly" : "Monthly";
+
       if (newPlan?.wallet) {
         const scaledAmount = scaleWalletAllocation(newPlan.wallet, interval);
         const walletIdempotencyKey = `${idempotencyKey}:wallet`;
 
         if ((newPlan.wallet.onRenewal ?? "reset") === "reset") {
-          await atomicSet(userId, WALLET_KEY, scaledAmount, {
-            transactionType: "adjust",
+          // Proper double-entry: expire old balance, then grant new allocation
+          await atomicBalanceReset(userId, WALLET_KEY, scaledAmount, {
             source: "plan_change",
             sourceId: subscription.id,
             idempotencyKey: walletIdempotencyKey,
             currency,
+            expireDescription: "Wallet balance expired (plan change)",
+            forgivenDescription: "Negative balance forgiven (plan change)",
+            grantDescription: `${intervalLabel} wallet allocation (plan change)`,
           });
         } else {
           await atomicAdd(userId, WALLET_KEY, scaledAmount, {
@@ -656,10 +677,14 @@ export function createCreditLifecycle(config: Config) {
           });
         }
       } else {
-        await atomicSet(userId, WALLET_KEY, 0, {
-          transactionType: "revoke",
+        // Wallet removed from plan - use atomicBalanceReset with 0 allocation
+        // This properly records the expiry/forgiveness without a new grant
+        await atomicBalanceReset(userId, WALLET_KEY, 0, {
           source: "plan_change",
           sourceId: subscription.id,
+          expireDescription: "Wallet removed (plan change)",
+          forgivenDescription: "Negative balance forgiven (plan change)",
+          grantDescription: "", // No grant since allocation is 0
         });
       }
     },

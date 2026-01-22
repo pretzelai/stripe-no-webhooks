@@ -39,7 +39,8 @@
   "dependencies": {
     "@pretzelai/stripe-sync-engine": "^0.48.3",
     "dotenv": "^17.2.3",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "stripe-no-webhooks": "file:stripe-no-webhooks-0.0.12.tgz"
   },
   "peerDependencies": {
     "stripe": ">=14.0.0"

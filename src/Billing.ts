@@ -8,6 +8,8 @@ import {
   type ConsumeResult,
   type AutoTopUpStatus,
 } from "./credits";
+import { wallet, type WalletBalance, type WalletEvent } from "./wallet";
+export type { WalletBalance, WalletEvent };
 import {
   createCreditLifecycle,
   type CreditsGrantTo,
@@ -78,6 +80,7 @@ export type {
 export class Billing {
   readonly subscriptions: ReturnType<typeof createSubscriptionsApi>;
   readonly credits: ReturnType<typeof Billing.prototype.createCreditsApi>;
+  readonly wallet: typeof wallet;
   readonly seats: ReturnType<typeof createSeatsApi>;
 
   private readonly stripe: Stripe;
@@ -163,6 +166,7 @@ export class Billing {
     };
 
     this.credits = this.createCreditsApi(mergedCallbacks);
+    this.wallet = wallet;
 
     this.seats = createSeatsApi({
       stripe: this.stripe,

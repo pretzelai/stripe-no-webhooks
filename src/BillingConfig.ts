@@ -59,7 +59,7 @@ export type Plan = {
   /**
    * Wallet configuration for monetary balance.
    * Currency is determined by the plan's price currency.
-   * Balance is stored in milli-cents (1000 per cent) for 0.001 cent precision.
+   * Balance is stored in micro-cents (1,000,000 per cent) for $0.00000001 precision.
    */
   wallet?: WalletConfig;
   /**

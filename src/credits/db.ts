@@ -123,8 +123,8 @@ async function writeLedgerEntry(
   try {
     await client.query(
       `INSERT INTO ${schema}.credit_ledger
-       (user_id, key, amount, balance_after, transaction_type, source, source_id, description, metadata, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       (user_id, key, amount, balance_after, transaction_type, source, source_id, description, metadata, idempotency_key, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp())`,
       [
         userId,
         key,
@@ -381,6 +381,97 @@ export async function atomicSet(
     await client.query("COMMIT");
 
     return { previousBalance };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Proper double-entry balance reset: writes separate entries for expiring old balance
+ * and granting new allocation. This makes the ledger auditable.
+ *
+ * Works for both wallet and regular credits.
+ *
+ * Entries written:
+ * 1. If previousBalance > 0: "revoke" entry for -previousBalance (balance expired)
+ * 2. If previousBalance < 0: "adjust" entry for +|previousBalance| (debt forgiven)
+ * 3. "grant" entry for +newAllocation (fresh allocation)
+ */
+export async function atomicBalanceReset(
+  userId: string,
+  key: string,
+  newAllocation: number,
+  params: {
+    source: TransactionSource;
+    sourceId?: string;
+    idempotencyKey?: string;
+    currency?: string;
+    expireDescription?: string;
+    forgivenDescription?: string;
+    grantDescription?: string;
+  }
+): Promise<{ previousBalance: number; expired: number; forgiven: number }> {
+  const p = ensurePool();
+  const client = await p.connect();
+
+  try {
+    await client.query("BEGIN");
+    const previousBalance = await getBalanceForUpdate(
+      client,
+      userId,
+      key,
+      params.currency
+    );
+
+    let expired = 0;
+    let forgiven = 0;
+
+    // Step 1: Handle existing balance
+    if (previousBalance > 0) {
+      // Positive balance expires (user loses unused funds)
+      expired = previousBalance;
+      await writeLedgerEntry(client, userId, key, -expired, 0, {
+        transactionType: "revoke",
+        source: params.source,
+        sourceId: params.sourceId,
+        description: params.expireDescription || "Balance expired on renewal",
+        idempotencyKey: params.idempotencyKey ? `${params.idempotencyKey}:expire` : undefined,
+        currency: params.currency,
+      });
+    } else if (previousBalance < 0) {
+      // Negative balance forgiven (merchant absorbs the loss)
+      forgiven = Math.abs(previousBalance);
+      await writeLedgerEntry(client, userId, key, forgiven, 0, {
+        transactionType: "adjust",
+        source: params.source,
+        sourceId: params.sourceId,
+        description: params.forgivenDescription || "Negative balance forgiven on renewal",
+        idempotencyKey: params.idempotencyKey ? `${params.idempotencyKey}:forgive` : undefined,
+        currency: params.currency,
+      });
+    }
+
+    // Step 2: Grant new allocation (skip if allocation is 0)
+    if (newAllocation > 0) {
+      await writeLedgerEntry(client, userId, key, newAllocation, newAllocation, {
+        transactionType: "grant",
+        source: params.source,
+        sourceId: params.sourceId,
+        description: params.grantDescription || "Wallet allocation",
+        idempotencyKey: params.idempotencyKey ? `${params.idempotencyKey}:grant` : undefined,
+        currency: params.currency,
+      });
+    }
+
+    // Step 3: Set final balance
+    await setBalanceValue(client, userId, key, newAllocation);
+
+    await client.query("COMMIT");
+
+    return { previousBalance, expired, forgiven };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

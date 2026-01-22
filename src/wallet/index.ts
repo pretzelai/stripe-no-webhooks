@@ -28,25 +28,31 @@ export type WalletEvent = {
 };
 
 // --- Precision utilities ---
+// Micro-cents: 1,000,000 per cent = $0.00000001 minimum resolution
+// Supports AI token pricing like $0.05 per 1M tokens
 
-const MILLI_CENTS_PER_CENT = 1000;
+const MICRO_CENTS_PER_CENT = 1_000_000;
 
-export function centsToMilliCents(cents: number): number {
-  return Math.round(cents * MILLI_CENTS_PER_CENT);
+export function centsToMicroCents(cents: number): number {
+  return Math.round(cents * MICRO_CENTS_PER_CENT);
 }
 
-export function milliCentsToCents(milliCents: number): number {
-  return milliCents / MILLI_CENTS_PER_CENT;
+export function microCentsToCents(microCents: number): number {
+  return microCents / MICRO_CENTS_PER_CENT;
 }
+
+// Legacy aliases for backwards compatibility
+export const centsToMilliCents = centsToMicroCents;
+export const milliCentsToCents = microCentsToCents;
 
 const ZERO_DECIMAL_CURRENCIES = new Set([
   "bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga", "pyg", "rwf",
   "ugx", "vnd", "vuv", "xaf", "xof", "xpf"
 ]);
 
-export function formatWalletBalance(milliCents: number, currency: string): string {
+export function formatWalletBalance(microCents: number, currency: string): string {
   const currencyLower = currency.toLowerCase();
-  const cents = milliCentsToCents(milliCents);
+  const cents = microCentsToCents(microCents);
 
   const symbols: Record<string, string> = {
     usd: "$",
@@ -62,9 +68,22 @@ export function formatWalletBalance(milliCents: number, currency: string): strin
     return cents < 0 ? `-${symbol}${absValue}` : `${symbol}${absValue}`;
   }
 
-  const majorUnits = cents / 100;
-  const absValue = Math.abs(majorUnits).toFixed(2);
-  return majorUnits < 0 ? `-${symbol}${absValue}` : `${symbol}${absValue}`;
+  // Smart formatting: show minimum decimals needed (up to 8 for micro-cent precision)
+  const dollars = cents / 100;
+  const absDollars = Math.abs(dollars);
+
+  let decimals = 2;
+  for (const d of [2, 3, 4, 5, 6, 7, 8]) {
+    const rounded = parseFloat(absDollars.toFixed(d));
+    if (Math.abs(rounded - absDollars) < 1e-9) {
+      decimals = d;
+      break;
+    }
+    decimals = 8;
+  }
+
+  const absValue = absDollars.toFixed(decimals);
+  return dollars < 0 ? `-${symbol}${absValue}` : `${symbol}${absValue}`;
 }
 
 // --- Wallet API ---
@@ -83,7 +102,7 @@ export async function getBalance(params: {
 
   const currency = result.currency || "usd";
   return {
-    cents: milliCentsToCents(result.balance),
+    cents: microCentsToCents(result.balance),
     formatted: formatWalletBalance(result.balance, currency),
     currency,
   };
@@ -122,8 +141,8 @@ export async function add(params: {
     );
   }
 
-  const milliCents = centsToMilliCents(cents);
-  const newBalanceMilliCents = await atomicAdd(userId, WALLET_KEY, milliCents, {
+  const microCents = centsToMicroCents(cents);
+  const newBalanceMicroCents = await atomicAdd(userId, WALLET_KEY, microCents, {
     transactionType: "grant",
     source,
     sourceId,
@@ -134,8 +153,8 @@ export async function add(params: {
 
   return {
     balance: {
-      cents: milliCentsToCents(newBalanceMilliCents),
-      formatted: formatWalletBalance(newBalanceMilliCents, currency),
+      cents: microCentsToCents(newBalanceMicroCents),
+      formatted: formatWalletBalance(newBalanceMicroCents, currency),
       currency,
     },
   };
@@ -160,8 +179,8 @@ export async function consume(params: {
     }
   }
 
-  const milliCents = centsToMilliCents(cents);
-  const result = await atomicConsume(userId, WALLET_KEY, milliCents, {
+  const microCents = centsToMicroCents(cents);
+  const result = await atomicConsume(userId, WALLET_KEY, microCents, {
     transactionType: "consume",
     source: "usage",
     description,
@@ -173,7 +192,7 @@ export async function consume(params: {
 
   return {
     balance: {
-      cents: milliCentsToCents(result.newBalance),
+      cents: microCentsToCents(result.newBalance),
       formatted: formatWalletBalance(result.newBalance, curr),
       currency: curr,
     },
@@ -196,8 +215,8 @@ export async function getHistory(params: {
 
   return transactions.map((tx) => ({
     id: tx.id,
-    cents: milliCentsToCents(tx.amount),
-    balanceAfterCents: milliCentsToCents(tx.balanceAfter),
+    cents: microCentsToCents(tx.amount),
+    balanceAfterCents: microCentsToCents(tx.balanceAfter),
     type: tx.transactionType === "grant" ? "add" : tx.transactionType,
     source: tx.source,
     sourceId: tx.sourceId,

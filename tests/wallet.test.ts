@@ -8,10 +8,11 @@ import {
   add,
   consume,
   getHistory,
-  centsToMilliCents,
-  milliCentsToCents,
+  centsToMicroCents,
+  microCentsToCents,
   formatWalletBalance,
 } from "../src/wallet";
+import type { WalletBalance, WalletEvent } from "../src/wallet";
 import { CreditError } from "../src/credits/types";
 
 let pool: Pool;
@@ -304,7 +305,7 @@ describe("Wallet", () => {
   });
 
   describe("precision", () => {
-    test("stores milli-cents internally", async () => {
+    test("stores micro-cents internally", async () => {
       await wallet.add({ userId: "user_1", cents: 1, currency: "usd" });
 
       const result = await pool.query(
@@ -312,21 +313,21 @@ describe("Wallet", () => {
         ["user_1", "wallet"]
       );
 
-      expect(Number(result.rows[0].balance)).toBe(1000);
+      // 1 cent = 1,000,000 micro-cents
+      expect(Number(result.rows[0].balance)).toBe(1000000);
     });
 
     test("handles sub-cent precision in display", async () => {
-      // 1500 milli-cents = 1.5 cents = $0.015
+      // 1,500,000 micro-cents = 1.5 cents = $0.015
       await pool.query(
         "INSERT INTO stripe.credit_balances (user_id, key, balance, currency) VALUES ($1, $2, $3, $4)",
-        ["user_1", "wallet", 1500, "usd"]
+        ["user_1", "wallet", 1500000, "usd"]
       );
 
       const balance = await wallet.getBalance({ userId: "user_1" });
 
       expect(balance!.cents).toBe(1.5);
-      // $0.015 formats to $0.01 due to JS floating point
-      expect(balance!.formatted).toBe("$0.01");
+      expect(balance!.formatted).toBe("$0.015");
     });
   });
 
@@ -376,30 +377,34 @@ describe("Wallet", () => {
   });
 
   describe("precision utilities", () => {
-    test("centsToMilliCents converts correctly", () => {
-      expect(centsToMilliCents(1)).toBe(1000);
-      expect(centsToMilliCents(0.5)).toBe(500);
-      expect(centsToMilliCents(100)).toBe(100000);
+    test("centsToMicroCents converts correctly", () => {
+      // 1 cent = 1,000,000 micro-cents
+      expect(centsToMicroCents(1)).toBe(1000000);
+      expect(centsToMicroCents(0.5)).toBe(500000);
+      expect(centsToMicroCents(100)).toBe(100000000);
     });
 
-    test("milliCentsToCents converts correctly", () => {
-      expect(milliCentsToCents(1000)).toBe(1);
-      expect(milliCentsToCents(500)).toBe(0.5);
-      expect(milliCentsToCents(100000)).toBe(100);
+    test("microCentsToCents converts correctly", () => {
+      expect(microCentsToCents(1000000)).toBe(1);
+      expect(microCentsToCents(500000)).toBe(0.5);
+      expect(microCentsToCents(100000000)).toBe(100);
     });
 
-    test("centsToMilliCents rounds to avoid floating point issues", () => {
-      expect(centsToMilliCents(0.001)).toBe(1);
-      expect(centsToMilliCents(0.0001)).toBe(0);
-      expect(centsToMilliCents(0.0005)).toBe(1);
+    test("centsToMicroCents rounds to avoid floating point issues", () => {
+      // 0.000001 cents = 1 micro-cent
+      expect(centsToMicroCents(0.000001)).toBe(1);
+      expect(centsToMicroCents(0.0000001)).toBe(0);
+      expect(centsToMicroCents(0.0000005)).toBe(1);
     });
 
     test("formatWalletBalance handles various inputs", () => {
-      expect(formatWalletBalance(10000000, "usd")).toBe("$100.00");
-      expect(formatWalletBalance(-5000000, "usd")).toBe("-$50.00");
+      // $100 = 10000 cents = 10,000,000,000 micro-cents
+      expect(formatWalletBalance(10000000000, "usd")).toBe("$100.00");
+      expect(formatWalletBalance(-5000000000, "usd")).toBe("-$50.00");
       expect(formatWalletBalance(0, "usd")).toBe("$0.00");
-      expect(formatWalletBalance(100000, "jpy")).toBe("\u00A5100");
-      expect(formatWalletBalance(-50000, "jpy")).toBe("-\u00A550");
+      // JPY: 100 yen = 100 cents = 100,000,000 micro-cents
+      expect(formatWalletBalance(100000000, "jpy")).toBe("\u00A5100");
+      expect(formatWalletBalance(-50000000, "jpy")).toBe("-\u00A550");
     });
   });
 
@@ -460,6 +465,157 @@ describe("Wallet", () => {
       await Promise.all(promises);
       const balance = await wallet.getBalance({ userId: "user_1" });
       expect(balance!.cents).toBe(500);
+    });
+  });
+
+  // =============================================================================
+  // Double-Entry Balance Reset Tests (for wallet renewal with "reset" mode)
+  // =============================================================================
+
+  describe("double-entry balance reset", () => {
+    // Note: atomicBalanceReset is used internally by lifecycle hooks for wallet renewal
+    // We test it here using the credits module directly with wallet key
+
+    test("reset with positive balance: writes revoke then grant entries in correct order", async () => {
+      const { credits } = await import("../src/credits");
+
+      // Setup: user has $3.50 in wallet (350 cents = 350,000,000 micro-cents)
+      await wallet.add({ userId: "user_1", cents: 500, currency: "usd" });
+      await wallet.consume({ userId: "user_1", cents: 150 });
+
+      const balanceBefore = await wallet.getBalance({ userId: "user_1" });
+      expect(balanceBefore!.cents).toBe(350);
+
+      // Reset to $5.00 (500 cents = 500,000,000 micro-cents)
+      const newAllocationMicroCents = 500 * 1000000;
+      await credits.atomicBalanceReset("user_1", "wallet", newAllocationMicroCents, {
+        source: "renewal",
+        sourceId: "sub_123",
+        currency: "usd",
+        expireDescription: "Monthly wallet balance expired",
+        grantDescription: "Monthly wallet allocation",
+      });
+
+      // Check final balance
+      const balanceAfter = await wallet.getBalance({ userId: "user_1" });
+      expect(balanceAfter!.cents).toBe(500);
+
+      // Check ledger entries via wallet history
+      const history = await wallet.getHistory({ userId: "user_1" });
+
+      // Should have 4 entries: add, consume, revoke, grant
+      expect(history.length).toBe(4);
+
+      // Most recent first (newest = grant)
+      expect(history[0].type).toBe("add"); // grant shows as "add" in wallet history
+      expect(history[0].cents).toBe(500);
+      expect(history[0].balanceAfterCents).toBe(500);
+      expect(history[0].description).toBe("Monthly wallet allocation");
+
+      // Second = revoke (expiring old balance)
+      expect(history[1].type).toBe("revoke");
+      expect(history[1].cents).toBe(-350);
+      expect(history[1].balanceAfterCents).toBe(0);
+      expect(history[1].description).toBe("Monthly wallet balance expired");
+
+      // Array order verifies correct chronological order (ORDER BY created_at DESC)
+    });
+
+    test("reset with negative balance: writes adjust then grant entries", async () => {
+      const { credits } = await import("../src/credits");
+
+      // Setup: user has -$2.00 in wallet (debt)
+      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
+      await wallet.consume({ userId: "user_1", cents: 300 });
+
+      const balanceBefore = await wallet.getBalance({ userId: "user_1" });
+      expect(balanceBefore!.cents).toBe(-200);
+
+      // Reset to $5.00
+      const newAllocationMicroCents = 500 * 1000000;
+      await credits.atomicBalanceReset("user_1", "wallet", newAllocationMicroCents, {
+        source: "renewal",
+        sourceId: "sub_123",
+        currency: "usd",
+        forgivenDescription: "Negative balance forgiven",
+        grantDescription: "Monthly wallet allocation",
+      });
+
+      // Check final balance
+      const balanceAfter = await wallet.getBalance({ userId: "user_1" });
+      expect(balanceAfter!.cents).toBe(500);
+
+      // Check ledger entries
+      const history = await wallet.getHistory({ userId: "user_1" });
+      expect(history.length).toBe(4);
+
+      // Most recent = grant
+      expect(history[0].type).toBe("add");
+      expect(history[0].cents).toBe(500);
+
+      // Second = adjust (forgiveness - positive amount to get to 0)
+      expect(history[1].type).toBe("adjust");
+      expect(history[1].cents).toBe(200);
+      expect(history[1].balanceAfterCents).toBe(0);
+      expect(history[1].description).toBe("Negative balance forgiven");
+    });
+
+    test("reset with zero balance: only writes grant entry", async () => {
+      const { credits } = await import("../src/credits");
+
+      // Setup: user has $0.00 in wallet
+      await wallet.add({ userId: "user_1", cents: 100, currency: "usd" });
+      await wallet.consume({ userId: "user_1", cents: 100 });
+
+      const balanceBefore = await wallet.getBalance({ userId: "user_1" });
+      expect(balanceBefore!.cents).toBe(0);
+
+      // Reset to $5.00
+      const newAllocationMicroCents = 500 * 1000000;
+      await credits.atomicBalanceReset("user_1", "wallet", newAllocationMicroCents, {
+        source: "renewal",
+        sourceId: "sub_123",
+        currency: "usd",
+        grantDescription: "Monthly wallet allocation",
+      });
+
+      // Check final balance
+      const balanceAfter = await wallet.getBalance({ userId: "user_1" });
+      expect(balanceAfter!.cents).toBe(500);
+
+      // Check ledger entries - only 3: original add, consume, new grant (no revoke needed)
+      const history = await wallet.getHistory({ userId: "user_1" });
+      expect(history.length).toBe(3);
+
+      expect(history[0].type).toBe("add");
+      expect(history[0].cents).toBe(500);
+    });
+
+    test("reset to zero allocation: only expires, no grant", async () => {
+      const { credits } = await import("../src/credits");
+
+      // Setup: user has $3.00 in wallet
+      await wallet.add({ userId: "user_1", cents: 300, currency: "usd" });
+
+      // Reset to $0 (cancellation)
+      await credits.atomicBalanceReset("user_1", "wallet", 0, {
+        source: "cancellation",
+        sourceId: "sub_123",
+        currency: "usd",
+        expireDescription: "Wallet revoked on cancellation",
+      });
+
+      // Check final balance
+      const balanceAfter = await wallet.getBalance({ userId: "user_1" });
+      expect(balanceAfter!.cents).toBe(0);
+
+      // Check ledger - only 2 entries: original add, revoke (no new grant)
+      const history = await wallet.getHistory({ userId: "user_1" });
+      expect(history.length).toBe(2);
+
+      expect(history[0].type).toBe("revoke");
+      expect(history[0].cents).toBe(-300);
+      expect(history[0].balanceAfterCents).toBe(0);
     });
   });
 
