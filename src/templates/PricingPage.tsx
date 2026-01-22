@@ -386,7 +386,7 @@ export function PricingPage({
                   <p className="snw-unavailable-note">Only available {displayInterval}ly</p>
                 )}
 
-                {(plan.credits || plan.features) && (
+                {(plan.credits || plan.wallet || plan.features) && (
                   <ul className="snw-plan-features">
                     {/* Credit-based features with scaled allocations */}
                     {plan.credits && Object.entries(plan.credits).map(([type, config]) => {
@@ -401,6 +401,22 @@ export function PricingPage({
                         </li>
                       );
                     })}
+                    {/* Wallet balance */}
+                    {plan.wallet && (() => {
+                      const effectiveInterval = supportsInterval ? interval : displayInterval;
+                      const scaledCents = getScaledAllocation(plan.wallet.allocation, effectiveInterval);
+                      const currency = displayPrice?.currency || "usd";
+                      const formattedAmount = formatPrice(scaledCents, currency);
+                      const intervalLabel = effectiveInterval === "year" ? "year" : "month";
+                      const label = plan.wallet.displayName || "usage credit";
+
+                      return (
+                        <li className={`snw-plan-feature ${isUnavailable ? "muted" : ""}`}>
+                          {formattedAmount} {label}
+                          {plan.wallet.onRenewal === "add" ? " (accumulates)" : `/${intervalLabel}`}
+                        </li>
+                      );
+                    })()}
                     {/* Custom features */}
                     {plan.features?.map((feature) => (
                       <li key={feature} className={`snw-plan-feature ${isUnavailable ? "muted" : ""}`}>

@@ -106,7 +106,7 @@ describe("Credit System", () => {
       expect(result.balance).toBe(900);
     });
 
-    test("fails to consume when balance is insufficient", async () => {
+    test("consumes even when balance is insufficient (allows negative)", async () => {
       await credits.grant({
         userId: "user_1",
         key: "api_calls",
@@ -122,8 +122,8 @@ describe("Credit System", () => {
         description: "API request",
       });
 
-      expect(result.success).toBe(false);
-      expect(result.balance).toBe(50); // Balance unchanged
+      expect(result.success).toBe(true);
+      expect(result.balance).toBe(-50); // Balance can go negative
     });
 
     test("consumes exact balance successfully", async () => {
@@ -483,21 +483,16 @@ describe("Credit System", () => {
       expect((error as CreditError).code).toBe("INVALID_AMOUNT");
     });
 
-    test("setBalance throws on negative balance", async () => {
-      let error: Error | null = null;
-      try {
-        await credits.setBalance({
-          userId: "user_1",
-          key: "api_calls",
-          balance: -100,
-          reason: "Invalid",
-        });
-      } catch (e) {
-        error = e as Error;
-      }
+    test("setBalance allows negative balance (for debt/adjustments)", async () => {
+      const result = await credits.setBalance({
+        userId: "user_1",
+        key: "api_calls",
+        balance: -100,
+        reason: "Debt adjustment",
+      });
 
-      expect(error).not.toBeNull();
-      expect((error as CreditError).code).toBe("INVALID_AMOUNT");
+      expect(result.balance).toBe(-100);
+      expect(result.previousBalance).toBe(0);
     });
   });
 
@@ -674,13 +669,260 @@ describe("Credit System", () => {
 
       const results = await Promise.all(promises);
 
-      // Only 5 should succeed (500 / 100 = 5)
+      // All 10 should succeed (balance can go negative)
       const successes = results.filter((r) => r.success).length;
-      const failures = results.filter((r) => !r.success).length;
+      expect(successes).toBe(10);
+      // Final balance: 500 - 1000 = -500
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(-500);
+    });
+  });
 
-      expect(successes).toBe(5);
-      expect(failures).toBe(5);
+  // =============================================================================
+  // Double-Entry Balance Reset Tests (atomicBalanceReset)
+  // =============================================================================
+
+  describe("atomicBalanceReset", () => {
+    test("reset with positive balance: writes revoke then grant entries", async () => {
+      // Setup: user has 300 credits
+      await credits.grant({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 500,
+        source: "subscription",
+        sourceId: "sub_123",
+      });
+      await credits.consume({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 200,
+      });
+
+      // Balance should be 300
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(300);
+
+      // Reset to 1000
+      const result = await credits.atomicBalanceReset("user_1", "api_calls", 1000, {
+        source: "renewal",
+        sourceId: "sub_123",
+        expireDescription: "Monthly credits expired",
+        grantDescription: "Monthly credits allocation",
+      });
+
+      // Check return values
+      expect(result.previousBalance).toBe(300);
+      expect(result.expired).toBe(300);
+      expect(result.forgiven).toBe(0);
+
+      // Check final balance
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
+
+      // Check ledger entries - should have 4 entries: grant, consume, revoke, grant
+      const history = await credits.getHistory({ userId: "user_1", key: "api_calls" });
+      expect(history.length).toBe(4);
+
+      // Most recent first (newest = grant for new allocation)
+      expect(history[0].transactionType).toBe("grant");
+      expect(history[0].amount).toBe(1000);
+      expect(history[0].balanceAfter).toBe(1000);
+      expect(history[0].description).toBe("Monthly credits allocation");
+
+      // Second most recent (revoke for expired balance)
+      expect(history[1].transactionType).toBe("revoke");
+      expect(history[1].amount).toBe(-300);
+      expect(history[1].balanceAfter).toBe(0);
+      expect(history[1].description).toBe("Monthly credits expired");
+    });
+
+    test("reset with negative balance: writes adjust then grant entries", async () => {
+      // Setup: user has -200 credits (debt)
+      await credits.grant({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 100,
+        source: "subscription",
+        sourceId: "sub_123",
+      });
+      await credits.consume({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 300,
+      });
+
+      // Balance should be -200
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(-200);
+
+      // Reset to 1000
+      const result = await credits.atomicBalanceReset("user_1", "api_calls", 1000, {
+        source: "renewal",
+        sourceId: "sub_123",
+        forgivenDescription: "Negative balance forgiven",
+        grantDescription: "Monthly credits allocation",
+      });
+
+      // Check return values
+      expect(result.previousBalance).toBe(-200);
+      expect(result.expired).toBe(0);
+      expect(result.forgiven).toBe(200);
+
+      // Check final balance
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
+
+      // Check ledger entries
+      const history = await credits.getHistory({ userId: "user_1", key: "api_calls" });
+      expect(history.length).toBe(4);
+
+      // Most recent = grant
+      expect(history[0].transactionType).toBe("grant");
+      expect(history[0].amount).toBe(1000);
+      expect(history[0].balanceAfter).toBe(1000);
+
+      // Second = adjust (forgiveness)
+      expect(history[1].transactionType).toBe("adjust");
+      expect(history[1].amount).toBe(200); // positive - adding to get to 0
+      expect(history[1].balanceAfter).toBe(0);
+      expect(history[1].description).toBe("Negative balance forgiven");
+    });
+
+    test("reset with zero balance: writes only grant entry", async () => {
+      // Setup: user has 0 credits
+      await credits.grant({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 100,
+        source: "subscription",
+        sourceId: "sub_123",
+      });
+      await credits.consume({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 100,
+      });
+
+      // Balance should be 0
       expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);
+
+      // Reset to 1000
+      const result = await credits.atomicBalanceReset("user_1", "api_calls", 1000, {
+        source: "renewal",
+        sourceId: "sub_123",
+        grantDescription: "Monthly credits allocation",
+      });
+
+      // Check return values
+      expect(result.previousBalance).toBe(0);
+      expect(result.expired).toBe(0);
+      expect(result.forgiven).toBe(0);
+
+      // Check final balance
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(1000);
+
+      // Check ledger entries - only 3: original grant, consume, new grant (no revoke/adjust needed)
+      const history = await credits.getHistory({ userId: "user_1", key: "api_calls" });
+      expect(history.length).toBe(3);
+
+      // Most recent = grant
+      expect(history[0].transactionType).toBe("grant");
+      expect(history[0].amount).toBe(1000);
+    });
+
+    test("reset with zero allocation: only expires/forgives, no grant", async () => {
+      // Setup: user has 500 credits
+      await credits.grant({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 500,
+        source: "subscription",
+        sourceId: "sub_123",
+      });
+
+      // Reset to 0 (cancellation scenario)
+      const result = await credits.atomicBalanceReset("user_1", "api_calls", 0, {
+        source: "cancellation",
+        sourceId: "sub_123",
+        expireDescription: "Credits revoked on cancellation",
+      });
+
+      // Check return values
+      expect(result.previousBalance).toBe(500);
+      expect(result.expired).toBe(500);
+      expect(result.forgiven).toBe(0);
+
+      // Check final balance
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);
+
+      // Check ledger - only 2 entries: original grant, revoke (no new grant since allocation is 0)
+      const history = await credits.getHistory({ userId: "user_1", key: "api_calls" });
+      expect(history.length).toBe(2);
+
+      expect(history[0].transactionType).toBe("revoke");
+      expect(history[0].amount).toBe(-500);
+      expect(history[0].balanceAfter).toBe(0);
+    });
+
+    test("ledger entries are in correct chronological order", async () => {
+      // Setup: user has 100 credits
+      await credits.grant({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 100,
+        source: "subscription",
+        sourceId: "sub_123",
+      });
+
+      // Reset to 500
+      await credits.atomicBalanceReset("user_1", "api_calls", 500, {
+        source: "renewal",
+        sourceId: "sub_123",
+      });
+
+      const history = await credits.getHistory({ userId: "user_1", key: "api_calls" });
+
+      // Verify order: grant (newest) -> revoke -> original grant (oldest)
+      // When sorted by created_at DESC, the GRANT should come AFTER the REVOKE
+      // because we write revoke first, then grant
+      expect(history[0].transactionType).toBe("grant");
+      expect(history[0].amount).toBe(500);
+      expect(history[1].transactionType).toBe("revoke");
+      expect(history[1].amount).toBe(-100);
+      expect(history[2].transactionType).toBe("grant");
+      expect(history[2].amount).toBe(100);
+
+      // Array order verifies correct chronological order (ORDER BY created_at DESC)
+    });
+
+    test("idempotency prevents duplicate reset", async () => {
+      await credits.grant({
+        userId: "user_1",
+        key: "api_calls",
+        amount: 100,
+        source: "subscription",
+        sourceId: "sub_123",
+      });
+
+      // First reset
+      await credits.atomicBalanceReset("user_1", "api_calls", 500, {
+        source: "renewal",
+        sourceId: "sub_123",
+        idempotencyKey: "renewal_123",
+      });
+
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
+
+      // Second reset with same idempotency key should fail
+      let error: Error | null = null;
+      try {
+        await credits.atomicBalanceReset("user_1", "api_calls", 1000, {
+          source: "renewal",
+          sourceId: "sub_123",
+          idempotencyKey: "renewal_123",
+        });
+      } catch (e) {
+        error = e as Error;
+      }
+
+      expect(error).not.toBeNull();
+      // Balance should still be 500 from first reset
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(500);
     });
   });
 
@@ -689,7 +931,7 @@ describe("Credit System", () => {
   // =============================================================================
 
   describe("data integrity", () => {
-    test("balance never goes negative", async () => {
+    test("revoke only takes from positive balance", async () => {
       await credits.grant({
         userId: "user_1",
         key: "api_calls",
@@ -706,6 +948,7 @@ describe("Credit System", () => {
         source: "cancellation",
       });
 
+      // Revoke is capped at current balance
       expect(result.amountRevoked).toBe(100);
       expect(result.balance).toBe(0);
       expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);

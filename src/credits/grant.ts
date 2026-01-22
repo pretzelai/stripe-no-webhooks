@@ -31,10 +31,6 @@ export async function consume(params: {
     idempotencyKey,
   });
 
-  if (result.success === false) {
-    return { success: false, balance: result.currentBalance };
-  }
-
   return { success: true, balance: result.newBalance };
 }
 
@@ -194,16 +190,14 @@ export async function setBalance(params: {
   userId: string;
   key: string;
   balance: number;
+  source?: TransactionSource;
+  sourceId?: string;
   reason?: string;
   metadata?: Record<string, unknown>;
   idempotencyKey?: string;
 }): Promise<{ balance: number; previousBalance: number }> {
-  const { userId, key, balance, reason, metadata, idempotencyKey } =
+  const { userId, key, balance, source = "manual", sourceId, reason, metadata, idempotencyKey } =
     params;
-
-  if (balance < 0) {
-    throw new CreditError("INVALID_AMOUNT", "Balance cannot be negative");
-  }
 
   if (idempotencyKey) {
     const exists = await db.checkIdempotencyKey(idempotencyKey);
@@ -218,7 +212,8 @@ export async function setBalance(params: {
 
   const result = await db.atomicSet(userId, key, balance, {
     transactionType: "adjust",
-    source: "manual",
+    source,
+    sourceId,
     description: reason,
     metadata,
     idempotencyKey,
