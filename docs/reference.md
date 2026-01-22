@@ -272,6 +272,60 @@ await billing.credits.topUp({
 }): Promise<TopUpResult>
 ```
 
+## Wallet API
+
+```typescript
+import { wallet } from "stripe-no-webhooks";
+
+// Get balance
+await wallet.getBalance({ userId: string }): Promise<WalletBalance | null>
+
+type WalletBalance = {
+  cents: number;
+  formatted: string;  // "$3.50" or "-$1.50"
+  currency: string;
+};
+
+// Add funds
+await wallet.add({
+  userId: string,
+  cents: number,
+  currency?: string,
+  source?: TransactionSource,
+  sourceId?: string,
+  description?: string,
+  idempotencyKey?: string,
+}): Promise<{ balance: WalletBalance }>
+
+// Consume (always succeeds, can go negative)
+await wallet.consume({
+  userId: string,
+  cents: number,
+  description?: string,
+  idempotencyKey?: string,
+}): Promise<{ balance: WalletBalance }>
+
+// Get transaction history
+await wallet.getHistory({
+  userId: string,
+  limit?: number,
+  offset?: number,
+}): Promise<WalletEvent[]>
+
+type WalletEvent = {
+  id: string;
+  cents: number;
+  balanceAfterCents: number;
+  type: "add" | "consume" | "adjust" | "revoke";
+  source: string;
+  sourceId?: string;
+  description?: string;
+  createdAt: Date;
+};
+```
+
+See [Credits & Wallet](./credits.md#wallet) for details on negative balances and renewal behavior.
+
 ## Seats API
 
 ```typescript
@@ -384,6 +438,7 @@ type Plan = {
   description?: string;
   price: Price[];
   credits?: Record<string, CreditConfig>;
+  wallet?: WalletConfig;
   features?: string[]; // Custom feature bullet points for pricing page
   perSeat?: boolean;
 };
@@ -419,6 +474,11 @@ type AutoTopUpConfig = {
   threshold: number; // Trigger when balance drops below this
   amount: number; // Number of credits to purchase
   maxPerMonth?: number; // Default: 10
+};
+
+type WalletConfig = {
+  allocation: number; // Amount in cents per billing period
+  onRenewal?: "reset" | "add"; // Default: "reset"
 };
 ```
 
