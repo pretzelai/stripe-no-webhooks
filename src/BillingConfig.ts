@@ -29,8 +29,8 @@ export type CreditConfig = {
    * - 'add': Add allocation to current balance (credits accumulate)
    */
   onRenewal?: "reset" | "add";
-  /** Price per credit in cents. Currency comes from the Plan's price. */
-  pricePerCreditCents?: number;
+  /** Price per credit. Currency comes from the Plan's price. */
+  pricePerCredit?: number;
   /** Minimum credits per top-up purchase (default: 1) */
   minPerPurchase?: number;
   /** Maximum credits per top-up purchase */
@@ -40,7 +40,7 @@ export type CreditConfig = {
 };
 
 export type WalletConfig = {
-  /** Amount to add per billing period, in cents */
+  /** Amount to add per billing period */
   allocation: number;
   /**
    * Human-readable name shown on pricing page.
@@ -65,7 +65,6 @@ export type Plan = {
   /**
    * Wallet configuration for monetary balance.
    * Currency is determined by the plan's price currency.
-   * Balance is stored in micro-cents (1,000,000 per cent) for $0.00000001 precision.
    */
   wallet?: WalletConfig;
   /**

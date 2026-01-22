@@ -46,7 +46,7 @@ function classifyDeclineCode(code: string | undefined): "hard" | "soft" {
 export type TopUpSuccess = {
   success: true;
   balance: number;
-  charged: { amountCents: number; currency: string };
+  charged: { amount: number; currency: string };
   sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
 };
 
@@ -464,7 +464,7 @@ export function createTopUpHandler(deps: {
     }
 
     const creditConfig = plan.credits?.[key];
-    if (!creditConfig?.pricePerCreditCents) {
+    if (!creditConfig?.pricePerCredit) {
       return {
         success: false,
         error: {
@@ -475,7 +475,7 @@ export function createTopUpHandler(deps: {
     }
 
     const {
-      pricePerCreditCents,
+      pricePerCredit,
       minPerPurchase = 1,
       maxPerPurchase,
     } = creditConfig;
@@ -498,16 +498,16 @@ export function createTopUpHandler(deps: {
       };
     }
 
-    const totalCents = amount * pricePerCreditCents;
+    const totalCents = amount * pricePerCredit;
 
     // Stripe requires minimum ~50 cents in most currencies, use 60 to be safe with conversion
-    const STRIPE_MIN_CENTS = 60;
-    if (totalCents < STRIPE_MIN_CENTS) {
+    const STRIPE_MIN_AMOUNT = 60;
+    if (totalCents < STRIPE_MIN_AMOUNT) {
       return {
         success: false,
         error: {
           code: "INVALID_AMOUNT",
-          message: `Minimum purchase amount is ${STRIPE_MIN_CENTS} cents (${Math.ceil(STRIPE_MIN_CENTS / pricePerCreditCents)} credits at current price)`,
+          message: `Minimum purchase amount is ${STRIPE_MIN_AMOUNT} (${Math.ceil(STRIPE_MIN_AMOUNT / pricePerCredit)} credits at current price)`,
         },
       };
     }
@@ -571,7 +571,7 @@ export function createTopUpHandler(deps: {
           {
             customer: customer.id,
             invoice: invoice.id,
-            unit_amount_decimal: String(pricePerCreditCents),
+            unit_amount_decimal: String(pricePerCredit),
             quantity: amount,
             currency,
             description: `${displayName} (credit top-up)`,
@@ -603,7 +603,7 @@ export function createTopUpHandler(deps: {
             success: true,
             balance: newBalance,
             // Use amount_paid which includes tax for B2B mode
-            charged: { amountCents: paidInvoice.amount_paid, currency },
+            charged: { amount: paidInvoice.amount_paid, currency },
             sourceId: paidInvoice.id,
           };
         }
@@ -649,7 +649,7 @@ export function createTopUpHandler(deps: {
           return {
             success: true,
             balance: newBalance,
-            charged: { amountCents: totalCents, currency },
+            charged: { amount: totalCents, currency },
             sourceId: paymentIntent.id,
           };
         }
@@ -1050,11 +1050,11 @@ export function createTopUpHandler(deps: {
     }
 
     const creditConfig = plan.credits?.[key];
-    if (!creditConfig?.pricePerCreditCents || !creditConfig.autoTopUp) {
+    if (!creditConfig?.pricePerCredit || !creditConfig.autoTopUp) {
       return { triggered: false, reason: "not_configured" };
     }
 
-    const { pricePerCreditCents } = creditConfig;
+    const { pricePerCredit } = creditConfig;
     const {
       threshold: balanceThreshold,
       amount: purchaseAmount,
@@ -1065,10 +1065,10 @@ export function createTopUpHandler(deps: {
     if (
       purchaseAmount <= 0 ||
       balanceThreshold <= 0 ||
-      pricePerCreditCents <= 0
+      pricePerCredit <= 0
     ) {
       console.error(
-        `Invalid auto top-up config for ${key}: purchaseAmount=${purchaseAmount}, balanceThreshold=${balanceThreshold}, pricePerCreditCents=${pricePerCreditCents}`
+        `Invalid auto top-up config for ${key}: purchaseAmount=${purchaseAmount}, balanceThreshold=${balanceThreshold}, pricePerCredit=${pricePerCredit}`
       );
       return { triggered: false, reason: "not_configured" };
     }
@@ -1152,7 +1152,7 @@ export function createTopUpHandler(deps: {
       return { triggered: false, reason: "max_per_month_reached" };
     }
 
-    const totalCents = purchaseAmount * pricePerCreditCents;
+    const totalCents = purchaseAmount * pricePerCredit;
     const currency = subscription.currency;
 
     // Idempotency key prevents duplicate charges from concurrent triggers.
@@ -1253,7 +1253,7 @@ export function createTopUpHandler(deps: {
           {
             customer: customerId,
             invoice: invoice.id,
-            unit_amount_decimal: String(pricePerCreditCents),
+            unit_amount_decimal: String(pricePerCredit),
             quantity: purchaseAmount,
             currency,
             description: `${displayName} (auto top-up)`,

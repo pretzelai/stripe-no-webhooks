@@ -281,7 +281,7 @@ import { wallet } from "stripe-no-webhooks";
 await wallet.getBalance({ userId: string }): Promise<WalletBalance | null>
 
 type WalletBalance = {
-  cents: number;
+  amount: number;
   formatted: string;  // "$3.50" or "-$1.50"
   currency: string;
 };
@@ -289,7 +289,7 @@ type WalletBalance = {
 // Add funds
 await wallet.add({
   userId: string,
-  cents: number,
+  amount: number,
   currency?: string,
   source?: TransactionSource,
   sourceId?: string,
@@ -300,7 +300,7 @@ await wallet.add({
 // Consume (always succeeds, can go negative)
 await wallet.consume({
   userId: string,
-  cents: number,
+  amount: number,
   description?: string,
   idempotencyKey?: string,
 }): Promise<{ balance: WalletBalance }>
@@ -314,8 +314,8 @@ await wallet.getHistory({
 
 type WalletEvent = {
   id: string;
-  cents: number;
-  balanceAfterCents: number;
+  amount: number;
+  balanceAfter: number;
   type: "add" | "consume" | "adjust" | "revoke";
   source: string;
   sourceId?: string;
@@ -464,7 +464,7 @@ type CreditConfig = {
   allocation: number;
   displayName?: string; // Human-readable name for pricing page (e.g., "API Calls")
   onRenewal?: "reset" | "add"; // Default: "reset"
-  pricePerCreditCents?: number; // Price per credit in cents, enables top-ups
+  pricePerCredit?: number; // Price per credit in cents, enables top-ups
   minPerPurchase?: number; // Default: 1
   maxPerPurchase?: number;
   autoTopUp?: AutoTopUpConfig; // Enable automatic top-ups
