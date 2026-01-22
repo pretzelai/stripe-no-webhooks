@@ -26,9 +26,7 @@ export type CreditTransaction = {
   createdAt: Date;
 };
 
-export type ConsumeResult =
-  | { success: true; balance: number }
-  | { success: false; balance: number };
+export type ConsumeResult = { success: true; balance: number };
 
 export class CreditError extends Error {
   constructor(

@@ -101,6 +101,7 @@ type LedgerEntryParams = {
   description?: string;
   metadata?: Record<string, unknown>;
   idempotencyKey?: string;
+  currency?: string;
 };
 
 function isUniqueViolation(error: unknown): boolean {
@@ -154,23 +155,53 @@ async function writeLedgerEntry(
 async function ensureBalanceRowExists(
   client: PoolClient,
   userId: string,
-  key: string
+  key: string,
+  currency?: string
 ): Promise<void> {
-  await client.query(
-    `INSERT INTO ${schema}.credit_balances (user_id, key, balance)
-     VALUES ($1, $2, 0)
-     ON CONFLICT DO NOTHING`,
+  if (currency) {
+    await client.query(
+      `INSERT INTO ${schema}.credit_balances (user_id, key, balance, currency)
+       VALUES ($1, $2, 0, $3)
+       ON CONFLICT (user_id, key) DO UPDATE SET currency = COALESCE(${schema}.credit_balances.currency, $3)`,
+      [userId, key, currency]
+    );
+  } else {
+    await client.query(
+      `INSERT INTO ${schema}.credit_balances (user_id, key, balance)
+       VALUES ($1, $2, 0)
+       ON CONFLICT DO NOTHING`,
+      [userId, key]
+    );
+  }
+}
+
+export async function getBalanceWithCurrency(params: {
+  userId: string;
+  key: string;
+}): Promise<{ balance: number; currency: string | null }> {
+  const { userId, key } = params;
+  const p = ensurePool();
+  const result = await p.query(
+    `SELECT balance, currency FROM ${schema}.credit_balances WHERE user_id = $1 AND key = $2`,
     [userId, key]
   );
+  if (result.rows.length === 0) {
+    return { balance: 0, currency: null };
+  }
+  return {
+    balance: Number(result.rows[0].balance),
+    currency: result.rows[0].currency,
+  };
 }
 
 async function getBalanceForUpdate(
   client: PoolClient,
   userId: string,
-  key: string
+  key: string,
+  currency?: string
 ): Promise<number> {
   // Ensure row exists first so FOR UPDATE has something to lock
-  await ensureBalanceRowExists(client, userId, key);
+  await ensureBalanceRowExists(client, userId, key, currency);
 
   const result = await client.query(
     `SELECT balance FROM ${schema}.credit_balances
@@ -209,7 +240,8 @@ export async function atomicAdd(
     const currentBalance = await getBalanceForUpdate(
       client,
       userId,
-      key
+      key,
+      params.currency
     );
     const newBalance = currentBalance + amount;
 
@@ -238,10 +270,7 @@ export async function atomicConsume(
   key: string,
   amount: number,
   params: LedgerEntryParams
-): Promise<
-  | { success: true; newBalance: number }
-  | { success: false; currentBalance: number }
-> {
+): Promise<{ newBalance: number }> {
   const p = ensurePool();
   const client = await p.connect();
 
@@ -250,14 +279,11 @@ export async function atomicConsume(
     const currentBalance = await getBalanceForUpdate(
       client,
       userId,
-      key
+      key,
+      params.currency
     );
 
-    if (currentBalance < amount) {
-      await client.query("ROLLBACK");
-      return { success: false, currentBalance };
-    }
-
+    // Always proceed with deduction - balance can go negative
     const newBalance = currentBalance - amount;
     await setBalanceValue(client, userId, key, newBalance);
     await writeLedgerEntry(
@@ -270,7 +296,7 @@ export async function atomicConsume(
     );
     await client.query("COMMIT");
 
-    return { success: true, newBalance };
+    return { newBalance };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -293,9 +319,11 @@ export async function atomicRevoke(
     const currentBalance = await getBalanceForUpdate(
       client,
       userId,
-      key
+      key,
+      params.currency
     );
-    const amountRevoked = Math.min(maxAmount, currentBalance);
+    // Can only revoke from positive balance - if balance is 0 or negative, nothing to revoke
+    const amountRevoked = currentBalance > 0 ? Math.min(maxAmount, currentBalance) : 0;
     const newBalance = currentBalance - amountRevoked;
 
     if (amountRevoked > 0) {
@@ -334,7 +362,8 @@ export async function atomicSet(
     const previousBalance = await getBalanceForUpdate(
       client,
       userId,
-      key
+      key,
+      params.currency
     );
     const adjustment = newBalance - previousBalance;
 

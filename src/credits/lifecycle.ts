@@ -1,9 +1,9 @@
 import type Stripe from "stripe";
 import type { Pool } from "pg";
-import type { BillingConfig, Plan, PriceInterval, CreditConfig } from "../BillingConfig";
+import type { BillingConfig, Plan, PriceInterval, CreditConfig, WalletConfig } from "../BillingConfig";
 import type { TransactionSource } from "./types";
 import { credits } from "./index";
-import { getActiveSeatUsers, getCreditsGrantedBySource, checkIdempotencyKeyPrefix } from "./db";
+import { getActiveSeatUsers, getCreditsGrantedBySource, checkIdempotencyKeyPrefix, atomicAdd, atomicSet } from "./db";
 import {
   planHasCredits,
   findPlanByPriceId,
@@ -11,29 +11,35 @@ import {
   getUserIdFromCustomer,
   getCustomerIdFromSubscription,
 } from "../helpers";
+import { centsToMilliCents } from "../wallet";
 
-/**
- * Get the billing interval from a subscription
- */
 function getSubscriptionInterval(subscription: Stripe.Subscription): PriceInterval {
   const interval = subscription.items.data[0]?.price?.recurring?.interval;
   return (interval as PriceInterval) || "month";
 }
 
-/**
- * Scale credit allocation based on billing interval.
- * Base allocation is assumed to be monthly.
- * - Yearly: 12× monthly
- * - Weekly: monthly ÷ 4 (rounded up)
- */
 function scaleAllocation(config: CreditConfig, interval: PriceInterval): number {
   const base = config.allocation;
-
-  // Auto-scale based on interval
   if (interval === "year") return base * 12;
   if (interval === "week") return Math.ceil(base / 4);
   return base;
 }
+
+function scaleWalletAllocation(config: WalletConfig, interval: PriceInterval): number {
+  const baseCents = config.allocation;
+  let scaledCents = baseCents;
+
+  if (interval === "year") scaledCents = baseCents * 12;
+  else if (interval === "week") scaledCents = Math.ceil(baseCents / 4);
+
+  return centsToMilliCents(scaledCents);
+}
+
+function getSubscriptionCurrency(subscription: Stripe.Subscription): string {
+  return subscription.currency || "usd";
+}
+
+const WALLET_KEY = "wallet";
 
 /**
  * Who receives credits on subscription events:
@@ -84,7 +90,6 @@ type Config = {
 export function createCreditLifecycle(config: Config) {
   const { pool, schema, billingConfig, mode, grantTo, callbacks } = config;
 
-  // Local wrappers that use closure variables
   async function resolveUserId(subscription: Stripe.Subscription): Promise<string | null> {
     if (!pool) return null;
     const customerId = getCustomerIdFromSubscription(subscription);
@@ -148,22 +153,6 @@ export function createCreditLifecycle(config: Config) {
     const effectiveInterval = interval || "month";
 
     for (const [key, creditConfig] of Object.entries(plan.credits)) {
-      // For renewals with 'reset', revoke first
-      if (source === "renewal" && (creditConfig.onRenewal ?? "reset") === "reset") {
-        const balance = await credits.getBalance({ userId, key });
-        if (balance > 0) {
-          await credits.revoke({ userId, key, amount: balance, source: "renewal" });
-          await callbacks?.onCreditsRevoked?.({
-            userId,
-            key,
-            amount: balance,
-            previousBalance: balance,
-            newBalance: 0,
-            source: "renewal",
-          });
-        }
-      }
-
       const idempotencyKey = idempotencyPrefix
         ? `${idempotencyPrefix}:${key}`
         : undefined;
@@ -172,22 +161,43 @@ export function createCreditLifecycle(config: Config) {
       const actualSource = grantTo === "seat-users" ? "seat_grant" : source;
       const scaledAmount = scaleAllocation(creditConfig, effectiveInterval);
 
-      const newBalance = await credits.grant({
-        userId,
-        key,
-        amount: scaledAmount,
-        source: actualSource,
-        sourceId: subscriptionId,
-        idempotencyKey,
-      });
-      await callbacks?.onCreditsGranted?.({
-        userId,
-        key,
-        amount: scaledAmount,
-        newBalance,
-        source: actualSource,
-        sourceId: subscriptionId,
-      });
+      // For renewals with 'reset', use setBalance to wipe slate clean
+      // This handles negative balances correctly (user starts fresh with full allocation)
+      if (source === "renewal" && (creditConfig.onRenewal ?? "reset") === "reset") {
+        const result = await credits.setBalance({
+          userId,
+          key,
+          balance: scaledAmount,
+          source: actualSource,
+          sourceId: subscriptionId,
+          idempotencyKey,
+        });
+        await callbacks?.onCreditsGranted?.({
+          userId,
+          key,
+          amount: scaledAmount,
+          newBalance: scaledAmount,
+          source: actualSource,
+          sourceId: subscriptionId,
+        });
+      } else {
+        const newBalance = await credits.grant({
+          userId,
+          key,
+          amount: scaledAmount,
+          source: actualSource,
+          sourceId: subscriptionId,
+          idempotencyKey,
+        });
+        await callbacks?.onCreditsGranted?.({
+          userId,
+          key,
+          amount: scaledAmount,
+          newBalance,
+          source: actualSource,
+          sourceId: subscriptionId,
+        });
+      }
     }
   }
 
@@ -201,7 +211,6 @@ export function createCreditLifecycle(config: Config) {
     subscriptionId: string,
     source: "seat_revoke" | "plan_change"
   ): Promise<void> {
-    // Get NET credits from this subscription (grants - revocations)
     const netFromSubscription = await getCreditsGrantedBySource(userId, subscriptionId);
 
     for (const [key, netAmount] of Object.entries(netFromSubscription)) {
@@ -272,50 +281,47 @@ export function createCreditLifecycle(config: Config) {
     // Then handle credits for types IN new plan based on onRenewal setting
     if (newPlan?.credits) {
       for (const [key, creditConfig] of Object.entries(newPlan.credits)) {
+        const idempotencyKey = `${idempotencyPrefix}:${key}`;
+        const scaledAmount = scaleAllocation(creditConfig, effectiveInterval);
         const shouldReset = (creditConfig.onRenewal ?? "reset") === "reset";
 
         if (shouldReset) {
-          // "reset": revoke current balance, then grant fresh allocation
-          const currentBalance = await credits.getBalance({ userId, key });
-          if (currentBalance > 0) {
-            await credits.revoke({
-              userId,
-              key,
-              amount: currentBalance,
-              source: "plan_change",
-              sourceId: subscriptionId,
-            });
-            await callbacks?.onCreditsRevoked?.({
-              userId,
-              key,
-              amount: currentBalance,
-              previousBalance: currentBalance,
-              newBalance: 0,
-              source: "plan_change",
-            });
-          }
+          // "reset": Use setBalance to wipe slate clean (handles negative balances)
+          await credits.setBalance({
+            userId,
+            key,
+            balance: scaledAmount,
+            source: "plan_change",
+            sourceId: subscriptionId,
+            idempotencyKey,
+          });
+          await callbacks?.onCreditsGranted?.({
+            userId,
+            key,
+            amount: scaledAmount,
+            newBalance: scaledAmount,
+            source: "plan_change",
+            sourceId: subscriptionId,
+          });
+        } else {
+          // "add": keep current balance, add new allocation
+          const newBalance = await credits.grant({
+            userId,
+            key,
+            amount: scaledAmount,
+            source: "plan_change",
+            sourceId: subscriptionId,
+            idempotencyKey,
+          });
+          await callbacks?.onCreditsGranted?.({
+            userId,
+            key,
+            amount: scaledAmount,
+            newBalance,
+            source: "plan_change",
+            sourceId: subscriptionId,
+          });
         }
-        // "add": keep current balance, just grant new allocation below
-
-        // Grant new allocation (scaled for interval)
-        const idempotencyKey = `${idempotencyPrefix}:${key}`;
-        const scaledAmount = scaleAllocation(creditConfig, effectiveInterval);
-        const newBalance = await credits.grant({
-          userId,
-          key,
-          amount: scaledAmount,
-          source: "subscription",
-          sourceId: subscriptionId,
-          idempotencyKey,
-        });
-        await callbacks?.onCreditsGranted?.({
-          userId,
-          key,
-          amount: scaledAmount,
-          newBalance,
-          source: "subscription",
-          sourceId: subscriptionId,
-        });
       }
     }
   }
@@ -358,32 +364,43 @@ export function createCreditLifecycle(config: Config) {
       if (grantTo === "manual") return;
 
       const plan = resolvePlan(subscription);
-      if (!plan?.credits) return;
-
       const interval = getSubscriptionInterval(subscription);
+      const currency = getSubscriptionCurrency(subscription);
 
-      if (grantTo === "seat-users") {
-        // In seat-users mode, check for first_seat_user_id in metadata
-        const firstSeatUserId = subscription.metadata?.first_seat_user_id;
-        if (firstSeatUserId) {
-          await grantOrResetCreditsForUser(
-            firstSeatUserId,
-            plan,
-            subscription.id,
-            "seat_grant",
-            `seat_${firstSeatUserId}_${subscription.id}`,
-            interval
-          );
+      if (plan?.credits) {
+        if (grantTo === "seat-users") {
+          const firstSeatUserId = subscription.metadata?.first_seat_user_id;
+          if (firstSeatUserId) {
+            await grantOrResetCreditsForUser(
+              firstSeatUserId,
+              plan,
+              subscription.id,
+              "seat_grant",
+              `seat_${firstSeatUserId}_${subscription.id}`,
+              interval
+            );
+          }
+        } else {
+          const userId = await resolveUserId(subscription);
+          if (userId) {
+            await grantPlanCredits(userId, plan, subscription.id, "subscription", subscription.id, interval);
+          }
         }
-        // If no first_seat_user_id, developer will call addSeat manually
-        return;
       }
 
-      // subscriber mode: grant to the billing entity
-      const userId = await resolveUserId(subscription);
-      if (!userId) return;
-
-      await grantPlanCredits(userId, plan, subscription.id, "subscription", subscription.id, interval);
+      if (plan?.wallet && grantTo !== "seat-users") {
+        const userId = await resolveUserId(subscription);
+        if (userId) {
+          const scaledAmount = scaleWalletAllocation(plan.wallet, interval);
+          await atomicAdd(userId, WALLET_KEY, scaledAmount, {
+            transactionType: "grant",
+            source: "subscription",
+            sourceId: subscription.id,
+            idempotencyKey: `wallet_${subscription.id}`,
+            currency,
+          });
+        }
+      }
     },
 
     async onSubscriptionRenewed(
@@ -393,19 +410,14 @@ export function createCreditLifecycle(config: Config) {
       if (grantTo === "manual") return;
 
       const plan = resolvePlan(subscription);
-      if (!plan?.credits) return;
-
       const interval = getSubscriptionInterval(subscription);
+      const currency = getSubscriptionCurrency(subscription);
 
-      if (grantTo === "seat-users") {
-        // Grant/reset credits to all active seat users
+      if (plan?.credits && grantTo === "seat-users") {
         const seatUsers = await getActiveSeatUsers(subscription.id);
         for (const userId of seatUsers) {
-          // Check if already processed for this user - return gracefully to avoid webhook retry loops
           const alreadyProcessed = await checkIdempotencyKeyPrefix(`renewal_${invoiceId}_${userId}`);
-          if (alreadyProcessed) {
-            continue; // Skip this user, already processed
-          }
+          if (alreadyProcessed) continue;
           await grantOrResetCreditsForUser(
             userId,
             plan,
@@ -418,41 +430,85 @@ export function createCreditLifecycle(config: Config) {
         return;
       }
 
-      // subscriber mode: grant to the billing entity
       const userId = await resolveUserId(subscription);
       if (!userId) return;
 
-      // Check if already processed - return gracefully to avoid webhook retry loops
       const alreadyProcessed = await checkIdempotencyKeyPrefix(invoiceId);
-      if (alreadyProcessed) {
-        return; // Already processed, nothing to do
-      }
+      if (alreadyProcessed) return;
 
-      for (const [key, creditConfig] of Object.entries(plan.credits)) {
-        if ((creditConfig.onRenewal ?? "reset") === "reset") {
-          const balance = await credits.getBalance({ userId, key });
-          if (balance > 0) {
-            await credits.revoke({ userId, key, amount: balance, source: "renewal" });
-            await callbacks?.onCreditsRevoked?.({
+      if (plan?.credits) {
+        for (const [key, creditConfig] of Object.entries(plan.credits)) {
+          const scaledAmount = scaleAllocation(creditConfig, interval);
+          const idempotencyKey = `${invoiceId}:${key}`;
+
+          if ((creditConfig.onRenewal ?? "reset") === "reset") {
+            await credits.setBalance({
               userId,
               key,
-              amount: balance,
-              previousBalance: balance,
-              newBalance: 0,
+              balance: scaledAmount,
               source: "renewal",
+              sourceId: subscription.id,
+              idempotencyKey,
+            });
+            await callbacks?.onCreditsGranted?.({
+              userId,
+              key,
+              amount: scaledAmount,
+              newBalance: scaledAmount,
+              source: "renewal",
+              sourceId: subscription.id,
+            });
+          } else {
+            const newBalance = await credits.grant({
+              userId,
+              key,
+              amount: scaledAmount,
+              source: "renewal",
+              sourceId: subscription.id,
+              idempotencyKey,
+            });
+            await callbacks?.onCreditsGranted?.({
+              userId,
+              key,
+              amount: scaledAmount,
+              newBalance,
+              source: "renewal",
+              sourceId: subscription.id,
             });
           }
         }
       }
 
-      await grantPlanCredits(userId, plan, subscription.id, "renewal", invoiceId, interval);
+      if (plan?.wallet) {
+        const scaledAmount = scaleWalletAllocation(plan.wallet, interval);
+        const walletIdempotencyKey = `${invoiceId}:wallet`;
+
+        if ((plan.wallet.onRenewal ?? "reset") === "reset") {
+          await atomicSet(userId, WALLET_KEY, scaledAmount, {
+            transactionType: "adjust",
+            source: "renewal",
+            sourceId: subscription.id,
+            idempotencyKey: walletIdempotencyKey,
+            currency,
+          });
+        } else {
+          await atomicAdd(userId, WALLET_KEY, scaledAmount, {
+            transactionType: "grant",
+            source: "renewal",
+            sourceId: subscription.id,
+            idempotencyKey: walletIdempotencyKey,
+            currency,
+          });
+        }
+      }
     },
 
     async onSubscriptionCancelled(subscription: Stripe.Subscription): Promise<void> {
       if (grantTo === "manual") return;
 
+      const plan = resolvePlan(subscription);
+
       if (grantTo === "seat-users") {
-        // Revoke ALL credits from all active seat users
         const seatUsers = await getActiveSeatUsers(subscription.id);
         for (const userId of seatUsers) {
           await revokeAllCredits(userId, subscription.id);
@@ -460,11 +516,18 @@ export function createCreditLifecycle(config: Config) {
         return;
       }
 
-      // subscriber mode: revoke ALL credits from the billing entity
       const userId = await resolveUserId(subscription);
       if (!userId) return;
 
       await revokeAllCredits(userId, subscription.id);
+
+      if (plan?.wallet) {
+        await atomicSet(userId, WALLET_KEY, 0, {
+          transactionType: "revoke",
+          source: "cancellation",
+          sourceId: subscription.id,
+        });
+      }
     },
 
     async onSubscriptionPlanChanged(
@@ -484,29 +547,19 @@ export function createCreditLifecycle(config: Config) {
       const newInterval = getSubscriptionInterval(subscription);
 
       const newPriceId = subscription.items.data[0]?.price?.id ?? "unknown";
-      // Stable idempotency key - same across webhook retries
       const idempotencyKey = `plan_change_${subscription.id}_${previousPriceId}_to_${newPriceId}`;
 
-      // If neither plan has credits, nothing to do
       if (!newPlan?.credits && !oldPlan?.credits) return;
 
-      // Detect upgrade vs downgrade using metadata or price comparison
-      // Routes.ts stores upgrade_from_price_amount during upgrades
       const upgradeFromAmount = subscription.metadata?.upgrade_from_price_amount;
       const isUpgradeViaMetadata = upgradeFromAmount !== undefined;
       const isFreeUpgrade = upgradeFromAmount === "0";
-
-      // For upgrades where BOTH plans have credits (including same-plan interval changes):
-      // - Don't revoke old credits (carry over as compensation for no proration)
-      // - Grant new allocation (scaled for interval)
-      // For Free → Paid upgrades: revoke Free credits, then grant new
       const bothHaveCredits = planHasCredits(oldPlan) && planHasCredits(newPlan);
       const shouldRevokeOnUpgrade = isFreeUpgrade || !bothHaveCredits;
 
       if (grantTo === "seat-users") {
         const seatUsers = await getActiveSeatUsers(subscription.id);
         for (const seatUserId of seatUsers) {
-          // Only revoke if: (1) not an upgrade with both credits, or (2) Free upgrade
           if (oldPlan?.credits && (!isUpgradeViaMetadata || shouldRevokeOnUpgrade)) {
             await revokeSubscriptionCredits(seatUserId, subscription.id, "plan_change");
           }
@@ -524,17 +577,36 @@ export function createCreditLifecycle(config: Config) {
         return;
       }
 
-      // subscriber mode
       const userId = await resolveUserId(subscription);
       if (!userId) return;
 
-      // Only revoke if: (1) not an upgrade with both credits, or (2) Free upgrade
       if (oldPlan?.credits && (!isUpgradeViaMetadata || shouldRevokeOnUpgrade)) {
         await revokeSubscriptionCredits(userId, subscription.id, "plan_change");
       }
 
       if (newPlan?.credits) {
         await grantPlanCredits(userId, newPlan, subscription.id, "subscription", idempotencyKey, newInterval);
+      }
+
+      const currency = getSubscriptionCurrency(subscription);
+      const oldHasWallet = !!oldPlan?.wallet;
+      const newHasWallet = !!newPlan?.wallet;
+
+      if (oldHasWallet && !newHasWallet) {
+        await atomicSet(userId, WALLET_KEY, 0, {
+          transactionType: "revoke",
+          source: "plan_change",
+          sourceId: subscription.id,
+        });
+      } else if (newHasWallet) {
+        const scaledAmount = scaleWalletAllocation(newPlan!.wallet!, newInterval);
+        await atomicAdd(userId, WALLET_KEY, scaledAmount, {
+          transactionType: "grant",
+          source: "plan_change",
+          sourceId: subscription.id,
+          idempotencyKey: `${idempotencyKey}:wallet`,
+          currency,
+        });
       }
     },
 
@@ -548,12 +620,6 @@ export function createCreditLifecycle(config: Config) {
       const idempotencyKey = `downgrade_${subscription.id}_to_${newPriceId}`;
       const interval = getSubscriptionInterval(subscription);
 
-      // Downgrade at period end = fresh start on new plan
-      // Behavior follows onRenewal setting:
-      // - "reset": Revoke all credits, grant new allocation (balance = new_allocation)
-      // - "add": Keep current credits, add new allocation (balance = current + new_allocation)
-      // Credit types that don't exist in new plan are always revoked
-
       if (grantTo === "seat-users") {
         const seatUsers = await getActiveSeatUsers(subscription.id);
         for (const seatUserId of seatUsers) {
@@ -562,11 +628,40 @@ export function createCreditLifecycle(config: Config) {
         return;
       }
 
-      // subscriber mode
       const userId = await resolveUserId(subscription);
       if (!userId) return;
 
       await applyDowngradeCredits(userId, newPlan, subscription.id, idempotencyKey, interval);
+
+      const currency = getSubscriptionCurrency(subscription);
+      if (newPlan?.wallet) {
+        const scaledAmount = scaleWalletAllocation(newPlan.wallet, interval);
+        const walletIdempotencyKey = `${idempotencyKey}:wallet`;
+
+        if ((newPlan.wallet.onRenewal ?? "reset") === "reset") {
+          await atomicSet(userId, WALLET_KEY, scaledAmount, {
+            transactionType: "adjust",
+            source: "plan_change",
+            sourceId: subscription.id,
+            idempotencyKey: walletIdempotencyKey,
+            currency,
+          });
+        } else {
+          await atomicAdd(userId, WALLET_KEY, scaledAmount, {
+            transactionType: "grant",
+            source: "plan_change",
+            sourceId: subscription.id,
+            idempotencyKey: walletIdempotencyKey,
+            currency,
+          });
+        }
+      } else {
+        await atomicSet(userId, WALLET_KEY, 0, {
+          transactionType: "revoke",
+          source: "plan_change",
+          sourceId: subscription.id,
+        });
+      }
     },
   };
 }

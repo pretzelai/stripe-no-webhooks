@@ -106,7 +106,7 @@ describe("Credit System", () => {
       expect(result.balance).toBe(900);
     });
 
-    test("fails to consume when balance is insufficient", async () => {
+    test("consumes even when balance is insufficient (allows negative)", async () => {
       await credits.grant({
         userId: "user_1",
         key: "api_calls",
@@ -122,8 +122,8 @@ describe("Credit System", () => {
         description: "API request",
       });
 
-      expect(result.success).toBe(false);
-      expect(result.balance).toBe(50); // Balance unchanged
+      expect(result.success).toBe(true);
+      expect(result.balance).toBe(-50); // Balance can go negative
     });
 
     test("consumes exact balance successfully", async () => {
@@ -483,21 +483,16 @@ describe("Credit System", () => {
       expect((error as CreditError).code).toBe("INVALID_AMOUNT");
     });
 
-    test("setBalance throws on negative balance", async () => {
-      let error: Error | null = null;
-      try {
-        await credits.setBalance({
-          userId: "user_1",
-          key: "api_calls",
-          balance: -100,
-          reason: "Invalid",
-        });
-      } catch (e) {
-        error = e as Error;
-      }
+    test("setBalance allows negative balance (for debt/adjustments)", async () => {
+      const result = await credits.setBalance({
+        userId: "user_1",
+        key: "api_calls",
+        balance: -100,
+        reason: "Debt adjustment",
+      });
 
-      expect(error).not.toBeNull();
-      expect((error as CreditError).code).toBe("INVALID_AMOUNT");
+      expect(result.balance).toBe(-100);
+      expect(result.previousBalance).toBe(0);
     });
   });
 
@@ -674,13 +669,11 @@ describe("Credit System", () => {
 
       const results = await Promise.all(promises);
 
-      // Only 5 should succeed (500 / 100 = 5)
+      // All 10 should succeed (balance can go negative)
       const successes = results.filter((r) => r.success).length;
-      const failures = results.filter((r) => !r.success).length;
-
-      expect(successes).toBe(5);
-      expect(failures).toBe(5);
-      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);
+      expect(successes).toBe(10);
+      // Final balance: 500 - 1000 = -500
+      expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(-500);
     });
   });
 
@@ -689,7 +682,7 @@ describe("Credit System", () => {
   // =============================================================================
 
   describe("data integrity", () => {
-    test("balance never goes negative", async () => {
+    test("revoke only takes from positive balance", async () => {
       await credits.grant({
         userId: "user_1",
         key: "api_calls",
@@ -706,6 +699,7 @@ describe("Credit System", () => {
         source: "cancellation",
       });
 
+      // Revoke is capped at current balance
       expect(result.amountRevoked).toBe(100);
       expect(result.balance).toBe(0);
       expect(await credits.getBalance({ userId: "user_1", key: "api_calls" })).toBe(0);

@@ -39,12 +39,29 @@ export type CreditConfig = {
   autoTopUp?: AutoTopUpConfig;
 };
 
+export type WalletConfig = {
+  /** Amount to add per billing period, in cents */
+  allocation: number;
+  /**
+   * What happens on renewal (default: 'reset')
+   * - 'reset': Set balance to allocation (unused wallet balance expires, negative is forgiven)
+   * - 'add': Add allocation to current balance (balance accumulates, negative is paid back)
+   */
+  onRenewal?: "reset" | "add";
+};
+
 export type Plan = {
   id?: string;
   name: string;
   description?: string;
   price: Price[];
   credits?: Record<string, CreditConfig>;
+  /**
+   * Wallet configuration for monetary balance.
+   * Currency is determined by the plan's price currency.
+   * Balance is stored in milli-cents (1000 per cent) for 0.001 cent precision.
+   */
+  wallet?: WalletConfig;
   /**
    * Custom feature bullet points shown on pricing page.
    * Use this for features that aren't credit-based.

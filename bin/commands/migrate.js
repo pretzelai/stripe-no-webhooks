@@ -60,11 +60,18 @@ async function migrate(dbUrl, options = {}) {
         user_id text NOT NULL,
         key text NOT NULL,
         balance bigint NOT NULL DEFAULT 0,
+        currency text,
         updated_at timestamptz DEFAULT now(),
         PRIMARY KEY (user_id, key)
       );
     `);
     success("Created stripe.credit_balances");
+
+    // Add currency column if it doesn't exist (for existing installations)
+    await client.query(`
+      ALTER TABLE ${SCHEMA}.credit_balances
+        ADD COLUMN IF NOT EXISTS currency text;
+    `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS ${SCHEMA}.credit_ledger (
