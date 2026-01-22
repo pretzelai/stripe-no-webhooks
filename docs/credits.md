@@ -47,9 +47,12 @@ Both support the same lifecycle features: yearly scaling, `onRenewal` modes, pla
   ],
   wallet: {
     allocation: 500,  // $5.00 per month
+    displayName: "AI Usage",  // Optional: shown on pricing page
   },
 }
 ```
+
+On the pricing page, wallet displays as `$5.00 AI Usage/mo`. If `displayName` is omitted, it shows `$5.00 usage credit/mo`.
 
 ### Renewal Behavior
 

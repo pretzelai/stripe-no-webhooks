@@ -478,6 +478,7 @@ type AutoTopUpConfig = {
 
 type WalletConfig = {
   allocation: number; // Amount in cents per billing period
+  displayName?: string; // Shown on pricing page (default: "usage credit")
   onRenewal?: "reset" | "add"; // Default: "reset"
 };
 ```
