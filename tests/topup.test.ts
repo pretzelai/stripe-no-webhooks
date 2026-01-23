@@ -28,13 +28,12 @@ const TEST_BILLING_CONFIG: BillingConfig = {
         id: "basic",
         name: "Basic",
         price: [{ id: "price_basic_monthly", amount: 999, currency: "usd", interval: "month" }],
-        credits: {
+        features: {
           api_calls: {
-            allocation: 1000,
-            onRenewal: "reset",
             pricePerCredit: 1, // $0.01 per credit
             minPerPurchase: 100,
             maxPerPurchase: 10000,
+            credits: { allocation: 1000, onRenewal: "reset" },
           },
         },
       },
@@ -42,21 +41,19 @@ const TEST_BILLING_CONFIG: BillingConfig = {
         id: "pro",
         name: "Pro",
         price: [{ id: "price_pro_monthly", amount: 2999, currency: "usd", interval: "month" }],
-        credits: {
+        features: {
           api_calls: {
-            allocation: 10000,
-            onRenewal: "reset",
             pricePerCredit: 1,
             autoTopUp: {
               threshold: 500,
               amount: 1000,
               maxPerMonth: 3,
             },
+            credits: { allocation: 10000, onRenewal: "reset" },
           },
           storage_gb: {
-            allocation: 100,
-            onRenewal: "add",
             // No top-up for storage
+            credits: { allocation: 100, onRenewal: "add" },
           },
         },
       },
@@ -64,11 +61,10 @@ const TEST_BILLING_CONFIG: BillingConfig = {
         id: "no_topup",
         name: "No Top-Up",
         price: [{ id: "price_no_topup", amount: 499, currency: "usd", interval: "month" }],
-        credits: {
+        features: {
           api_calls: {
-            allocation: 500,
-            onRenewal: "reset",
             // No pricePerCredit configured
+            credits: { allocation: 500, onRenewal: "reset" },
           },
         },
       },
@@ -1358,13 +1354,12 @@ describe("TopUp: Stripe Minimum Charge", () => {
             id: "basic",
             name: "Basic",
             price: [{ id: "price_basic_monthly", amount: 999, currency: "usd", interval: "month" }],
-            credits: {
+            features: {
               api_calls: {
-                allocation: 1000,
-                onRenewal: "reset",
                 pricePerCredit: 1,
                 minPerPurchase: 10, // Allow smaller purchases
                 maxPerPurchase: 10000,
+                credits: { allocation: 1000, onRenewal: "reset" },
               },
             },
           },
@@ -1986,9 +1981,8 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
             id: "pro_defaults",
             name: "Pro Defaults",
             price: [{ id: "price_pro_defaults", amount: 2999, currency: "usd", interval: "month" }],
-            credits: {
+            features: {
               api_calls: {
-                allocation: 10000,
                 pricePerCredit: 10, // $0.10 per credit
                 // No minPerPurchase - should default to 1
                 // No maxPerPurchase - should have no limit
@@ -1997,6 +1991,7 @@ describe("TopUp: Dual Mode (On-Demand + Auto)", () => {
                   amount: 100,
                   maxPerMonth: 3,
                 },
+                credits: { allocation: 10000 },
               },
             },
           },
@@ -2055,15 +2050,15 @@ describe("TopUp: Auto Top-Up with Custom Configs", () => {
             id: "valid_auto",
             name: "Valid Auto",
             price: [{ id: "price_valid_auto", amount: 999, currency: "usd", interval: "month" }],
-            credits: {
+            features: {
               api_calls: {
-                allocation: 1000,
                 pricePerCredit: 1, // $0.01 per credit
                 autoTopUp: {
                   threshold: 100,
                   amount: 100, // 100 * $0.01 = $1.00 >= $0.60 minimum
                   maxPerMonth: 10,
                 },
+                credits: { allocation: 1000 },
               },
             },
           },
@@ -2104,15 +2099,15 @@ describe("TopUp: Auto Top-Up with Custom Configs", () => {
             id: "custom_auto",
             name: "Custom Auto",
             price: [{ id: "price_custom_auto", amount: 1999, currency: "usd", interval: "month" }],
-            credits: {
+            features: {
               api_calls: {
-                allocation: 5000,
                 pricePerCredit: 2, // $0.02 per credit
                 autoTopUp: {
                   threshold: 200,
                   amount: 500, // 500 * $0.02 = $10.00
                   maxPerMonth: 5,
                 },
+                credits: { allocation: 5000 },
               },
             },
           },

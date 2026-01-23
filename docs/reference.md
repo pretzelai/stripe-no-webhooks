@@ -326,6 +326,34 @@ type WalletEvent = {
 
 See [Credits & Wallet](./credits.md#wallet) for details on negative balances and renewal behavior.
 
+## Usage API
+
+```typescript
+// Record usage (sends to Stripe Meter + stores locally)
+await billing.usage.record({
+  userId: string,
+  key: string,           // Feature key from config (must have trackUsage: true)
+  amount?: number,       // Units consumed (default: 1)
+}): Promise<void>
+
+// Get usage summary for current billing period
+await billing.usage.getSummary({
+  userId: string,
+  key: string,
+}): Promise<UsageSummary | null>
+
+type UsageSummary = {
+  totalAmount: number;     // Total units consumed this period
+  estimatedCost: number;   // totalAmount × pricePerCredit (in cents)
+  period: {
+    start: Date;
+    end: Date;
+  };
+};
+```
+
+See [Usage-Based Billing](./usage.md) for configuration and examples.
+
 ## Seats API
 
 ```typescript
@@ -420,6 +448,12 @@ const billing = new Billing({
       failureCount: number,
       stripeDeclineCode?: string,
     }) => void,
+
+    onUsageRecorded?: (params: {
+      userId: string,
+      key: string,
+      amount: number,
+    }) => void,
   },
 });
 ```
@@ -437,9 +471,9 @@ type Plan = {
   name: string;
   description?: string;
   price: Price[];
-  credits?: Record<string, CreditConfig>;
+  features?: Record<string, FeatureConfig>;  // Credits, top-ups, and/or usage tracking
   wallet?: WalletConfig;
-  features?: string[]; // Custom feature bullet points for pricing page
+  highlights?: string[];  // Custom bullet points for pricing page
   perSeat?: boolean;
 };
 
@@ -457,17 +491,30 @@ type Price = {
     { amount: 2000, currency: "usd", interval: "month" },   // $20/mo
     { amount: 20000, currency: "usd", interval: "year" },   // $200/yr (17% savings)
   ],
-  credits: { api_calls: { allocation: 1000 } },  // Yearly gets 12,000 upfront
+  features: {
+    api_calls: {
+      displayName: "API Calls",
+      credits: { allocation: 1000 },  // Yearly gets 12,000 upfront
+      pricePerCredit: 10,             // 10 cents for top-ups or usage
+      trackUsage: true,               // Enable usage-based billing
+    },
+  },
 }
 
-type CreditConfig = {
-  allocation: number;
-  displayName?: string; // Human-readable name for pricing page (e.g., "API Calls")
-  onRenewal?: "reset" | "add"; // Default: "reset"
-  pricePerCredit?: number; // Price per credit in cents, enables top-ups
-  minPerPurchase?: number; // Default: 1
+type FeatureConfig = {
+  displayName?: string;              // Human-readable name for pricing page and invoices
+  pricePerCredit?: number;           // Price per unit in cents (enables top-ups, usage billing)
+  minPerPurchase?: number;           // Default: 1
   maxPerPurchase?: number;
-  autoTopUp?: AutoTopUpConfig; // Enable automatic top-ups
+  autoTopUp?: AutoTopUpConfig;       // Automatic top-ups (disabled when trackUsage is true)
+  credits?: CreditAllocation;        // Pre-paid credit allocation
+  trackUsage?: boolean;              // Enable usage-based billing
+  meteredPriceId?: string;           // Auto-set by sync when trackUsage is true
+};
+
+type CreditAllocation = {
+  allocation: number;
+  onRenewal?: "reset" | "add";       // Default: "reset"
 };
 
 type AutoTopUpConfig = {

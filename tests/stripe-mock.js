@@ -12,6 +12,8 @@ class StripeMock {
     this._customers = [];
     this._subscriptions = [];
     this._invoices = [];
+    this._meters = [];
+    this._meterEvents = [];
     this._idCounter = 1;
   }
 
@@ -34,6 +36,10 @@ class StripeMock {
 
   _seedSubscriptions(subscriptions) {
     this._subscriptions = subscriptions;
+  }
+
+  _seedMeters(meters) {
+    this._meters = meters;
   }
 
   // Add single items (appends to existing)
@@ -121,6 +127,9 @@ class StripeMock {
             return productId === params.product;
           });
         }
+        if (params.type) {
+          data = data.filter((p) => p.type === params.type);
+        }
         if (params.limit) {
           data = data.slice(0, params.limit);
         }
@@ -136,6 +145,7 @@ class StripeMock {
           currency: params.currency,
           type: params.recurring ? "recurring" : "one_time",
           recurring: params.recurring || null,
+          nickname: params.nickname || null,
           metadata: params.metadata || {},
           created: self._now(),
         };
@@ -148,6 +158,21 @@ class StripeMock {
           const error = new Error(`No such price: ${id}`);
           error.type = "StripeInvalidRequestError";
           throw error;
+        }
+        return price;
+      },
+      async update(id, params) {
+        const price = self._prices.find((p) => p.id === id);
+        if (!price) {
+          const error = new Error(`No such price: ${id}`);
+          error.type = "StripeInvalidRequestError";
+          throw error;
+        }
+        if (params.metadata) {
+          price.metadata = { ...price.metadata, ...params.metadata };
+        }
+        if (params.nickname !== undefined) {
+          price.nickname = params.nickname;
         }
         return price;
       },
@@ -647,6 +672,60 @@ class StripeMock {
             url: `https://billing.stripe.com/session/mock_${self._idCounter}`,
             created: self._now(),
           };
+        },
+      },
+    };
+  }
+
+  // Billing meters (for usage-based billing)
+  get billing() {
+    const self = this;
+    return {
+      meterEvents: {
+        async create(params) {
+          const event = {
+            identifier: self._generateId("mevt"),
+            object: "billing.meter_event",
+            event_name: params.event_name,
+            payload: params.payload,
+            timestamp: params.timestamp || self._now(),
+            created: self._now(),
+            livemode: false,
+          };
+          self._meterEvents.push(event);
+          return event;
+        },
+      },
+      meters: {
+        async create(params) {
+          const meter = {
+            id: self._generateId("mtr"),
+            object: "billing.meter",
+            display_name: params.display_name,
+            event_name: params.event_name,
+            default_aggregation: params.default_aggregation,
+            status: "active",
+            created: self._now(),
+            livemode: false,
+          };
+          self._meters.push(meter);
+          return meter;
+        },
+        async list(params = {}) {
+          let data = self._meters;
+          if (params.limit) {
+            data = data.slice(0, params.limit);
+          }
+          return { data, has_more: false };
+        },
+        async retrieve(id) {
+          const meter = self._meters.find((m) => m.id === id);
+          if (!meter) {
+            const error = new Error(`No such meter: ${id}`);
+            error.type = "StripeInvalidRequestError";
+            throw error;
+          }
+          return meter;
         },
       },
     };

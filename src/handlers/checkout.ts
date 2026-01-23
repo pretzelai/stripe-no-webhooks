@@ -1,12 +1,27 @@
 import type Stripe from "stripe";
-import type { BillingConfig } from "../BillingConfig";
+import type { BillingConfig, Plan } from "../BillingConfig";
+import { planHasCredits, isUsageTrackingEnabled } from "../BillingConfig";
 import type { HandlerContext, CheckoutRequestBody } from "../types";
 import { jsonResponse, errorResponse, successResponse } from "./utils";
 import {
-  planHasCredits,
   findPlanByPriceId,
   getActiveSubscription,
 } from "../helpers";
+
+/**
+ * Get all metered price IDs for a plan (features with trackUsage: true)
+ */
+function getMeteredPriceIds(plan: Plan | null): string[] {
+  if (!plan) return [];
+  const features = plan.features || {};
+  const priceIds: string[] = [];
+  for (const feature of Object.values(features)) {
+    if (isUsageTrackingEnabled(feature) && feature.meteredPriceId) {
+      priceIds.push(feature.meteredPriceId);
+    }
+  }
+  return priceIds;
+}
 
 async function hasPaymentMethod(
   stripe: Stripe,
@@ -158,8 +173,29 @@ export async function handleCheckout(
 
         // Downgrade: schedule for period end (credits stay until renewal)
         if (isDowngrade) {
+          // Build subscription items - update base price and handle metered prices
+          const newPlan = findPlanByPriceId(ctx.billingConfig, ctx.mode, priceId);
+          const newMeteredPriceIds = getMeteredPriceIds(newPlan);
+          const existingMeteredItems = currentSub.items.data.filter(
+            (item) => item.price.recurring?.usage_type === "metered"
+          );
+
+          const subscriptionItems: Stripe.SubscriptionUpdateParams.Item[] = [
+            { id: currentSub.items.data[0].id, price: priceId },
+          ];
+
+          // Remove old metered items
+          for (const item of existingMeteredItems) {
+            subscriptionItems.push({ id: item.id, deleted: true });
+          }
+
+          // Add new metered items for the target plan
+          for (const meteredPriceId of newMeteredPriceIds) {
+            subscriptionItems.push({ price: meteredPriceId });
+          }
+
           await ctx.stripe.subscriptions.update(currentSub.id, {
-            items: [{ id: currentSub.items.data[0].id, price: priceId }],
+            items: subscriptionItems,
             proration_behavior: "none",
             metadata: {
               pending_credit_downgrade: "true",
@@ -172,10 +208,10 @@ export async function handleCheckout(
             request,
             {
               success: true,
-              scheduled: true,
-              message: "Downgrade scheduled for end of current billing period",
+              downgraded: true,
+              message: "Plan changed. Credits will adjust at your next billing date.",
               ...(periodEnd && {
-                effectiveAt: new Date(periodEnd * 1000).toISOString(),
+                creditAdjustmentAt: new Date(periodEnd * 1000).toISOString(),
               }),
               url: successUrl,
             },
@@ -193,8 +229,29 @@ export async function handleCheckout(
 
         if (customerHasPaymentMethod && isUpgrade) {
           try {
+            // Build subscription items update - include metered prices for usage tracking
+            const newPlan = findPlanByPriceId(ctx.billingConfig, ctx.mode, priceId);
+            const meteredPriceIds = getMeteredPriceIds(newPlan);
+            const existingMeteredItems = currentSub.items.data.filter(
+              (item) => item.price.recurring?.usage_type === "metered"
+            );
+
+            const subscriptionItems: Stripe.SubscriptionUpdateParams.Item[] = [
+              { id: currentSub.items.data[0].id, price: priceId },
+            ];
+
+            // Remove old metered items
+            for (const item of existingMeteredItems) {
+              subscriptionItems.push({ id: item.id, deleted: true });
+            }
+
+            // Add new metered items
+            for (const meteredPriceId of meteredPriceIds) {
+              subscriptionItems.push({ price: meteredPriceId });
+            }
+
             await ctx.stripe.subscriptions.update(currentSub.id, {
-              items: [{ id: currentSub.items.data[0].id, price: priceId }],
+              items: subscriptionItems,
               proration_behavior: disableProration
                 ? "none"
                 : "create_prorations",
@@ -233,6 +290,13 @@ export async function handleCheckout(
         }
 
         // No payment method - collect via setup mode checkout
+        // Collect metered prices for the new plan to include in metadata
+        const setupNewPlan = findPlanByPriceId(ctx.billingConfig, ctx.mode, priceId);
+        const setupMeteredPriceIds = getMeteredPriceIds(setupNewPlan);
+        const setupExistingMeteredItemIds = currentSub.items.data
+          .filter((item) => item.price.recurring?.usage_type === "metered")
+          .map((item) => item.id);
+
         const session = await ctx.stripe.checkout.sessions.create({
           customer: customerId,
           mode: "setup",
@@ -261,6 +325,9 @@ export async function handleCheckout(
             upgrade_from_price_id: currentPriceId,
             upgrade_from_price_amount: currentAmount.toString(),
             upgrade_disable_proration: disableProration ? "true" : "false",
+            // Store metered price info for webhook to apply
+            upgrade_new_metered_prices: setupMeteredPriceIds.join(","),
+            upgrade_old_metered_item_ids: setupExistingMeteredItemIds.join(","),
           },
         });
 
@@ -272,8 +339,23 @@ export async function handleCheckout(
     }
 
     // Standard checkout (no existing subscription)
+    // Build line items - include base price and any metered prices for usage tracking
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+      { price: priceId, quantity: body.quantity ?? 1 },
+    ];
+
+    // Add metered prices for features with usage tracking
+    if (priceMode === "subscription") {
+      const plan = findPlanByPriceId(ctx.billingConfig, ctx.mode, priceId);
+      const meteredPriceIds = getMeteredPriceIds(plan);
+      for (const meteredPriceId of meteredPriceIds) {
+        // Metered prices don't need quantity - they're usage-based
+        lineItems.push({ price: meteredPriceId });
+      }
+    }
+
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
-      line_items: [{ price: priceId, quantity: body.quantity ?? 1 }],
+      line_items: lineItems,
       mode: priceMode,
       success_url: successUrl,
       cancel_url: cancelUrl,

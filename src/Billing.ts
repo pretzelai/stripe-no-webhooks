@@ -11,6 +11,20 @@ import {
 import { wallet, type WalletBalance, type WalletEvent } from "./wallet";
 export type { WalletBalance, WalletEvent };
 import {
+  initUsage,
+  usage,
+  type UsageEvent,
+  type UsageSummary,
+  type RecordUsageParams,
+  type RecordUsageResult,
+  type GetSummaryParams,
+  type GetSummaryResult,
+  type GetUsageHistoryParams,
+  UsageError,
+} from "./usage";
+export type { UsageEvent, UsageSummary, RecordUsageParams, RecordUsageResult, GetSummaryParams, GetSummaryResult, GetUsageHistoryParams };
+export { UsageError };
+import {
   createCreditLifecycle,
   type CreditsGrantTo,
 } from "./credits/lifecycle";
@@ -81,6 +95,7 @@ export class Billing {
   readonly subscriptions: ReturnType<typeof createSubscriptionsApi>;
   readonly credits: ReturnType<typeof Billing.prototype.createCreditsApi>;
   readonly wallet: typeof wallet;
+  readonly usage: ReturnType<typeof Billing.prototype.createUsageApi>;
   readonly seats: ReturnType<typeof createSeatsApi>;
 
   private readonly stripe: Stripe;
@@ -118,9 +133,10 @@ export class Billing {
       resolveUser,
       resolveOrg,
       loginUrl,
+      _stripeClient,
     } = config;
 
-    this.stripe = new Stripe(stripeSecretKey);
+    this.stripe = _stripeClient ?? new Stripe(stripeSecretKey);
     this.pool = databaseUrl
       ? new Pool({ connectionString: databaseUrl })
       : null;
@@ -140,6 +156,15 @@ export class Billing {
     this.loginUrl = loginUrl;
 
     initCredits(this.pool, this.schema);
+
+    // Initialize usage tracking
+    initUsage({
+      stripe: this.stripe,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig ?? {},
+      mode: this.mode,
+    });
 
     this.sync = databaseUrl
       ? new StripeSync({
@@ -167,6 +192,9 @@ export class Billing {
 
     this.credits = this.createCreditsApi(mergedCallbacks);
     this.wallet = wallet;
+    this.usage = this.createUsageApi({
+      onUsageRecorded: callbacks?.onUsageRecorded,
+    });
 
     this.seats = createSeatsApi({
       stripe: this.stripe,
@@ -445,6 +473,89 @@ export class Billing {
       getAutoTopUpStatus: credits.getAutoTopUpStatus,
       unblockAutoTopUp: credits.unblockAutoTopUp,
       unblockAllAutoTopUps: credits.unblockAllAutoTopUps,
+    };
+  }
+
+  createUsageApi(callbacks?: {
+    onUsageRecorded?: (params: {
+      userId: string;
+      key: string;
+      amount: number;
+      totalForPeriod: number;
+      estimatedCost: number;
+      currency: string;
+      periodStart: Date;
+      periodEnd: Date;
+    }) => void | Promise<void>;
+  }) {
+    return {
+      /**
+       * Record usage for a feature with usage tracking enabled.
+       * Sends the event to Stripe's metered billing and stores locally for real-time queries.
+       *
+       * @param params.userId - The user ID
+       * @param params.key - The feature key (must have trackUsage: true in billing config)
+       * @param params.amount - The usage amount to record
+       */
+      async record(params: {
+        userId: string;
+        key: string;
+        amount: number;
+        timestamp?: Date;
+      }): Promise<RecordUsageResult> {
+        const { userId, key, amount, timestamp } = params;
+
+        const result = await usage.record({ userId, key, amount, timestamp });
+
+        // Call the callback with updated summary
+        if (callbacks?.onUsageRecorded) {
+          const summary = await usage.getSummary({ userId, key });
+          try {
+            const callbackResult = callbacks.onUsageRecorded({
+              userId,
+              key,
+              amount,
+              totalForPeriod: summary.totalAmount,
+              estimatedCost: summary.estimatedCost,
+              currency: summary.currency,
+              periodStart: summary.periodStart,
+              periodEnd: summary.periodEnd,
+            });
+            if (callbackResult instanceof Promise) {
+              callbackResult.catch((err: unknown) => {
+                console.error("onUsageRecorded callback error:", err);
+              });
+            }
+          } catch (err) {
+            console.error("onUsageRecorded callback error:", err);
+          }
+        }
+
+        return result;
+      },
+
+      /**
+       * Get a summary of usage for the current billing period.
+       * Reads from local storage for real-time data (Stripe's meter API is delayed).
+       *
+       * @param params.userId - The user ID
+       * @param params.key - The feature key
+       */
+      getSummary: usage.getSummary,
+
+      /**
+       * Get the history of usage events for a feature.
+       */
+      getHistory: usage.getHistory,
+
+      /**
+       * Enable usage billing for an existing subscriber.
+       * Adds the metered price to their subscription if not already present.
+       *
+       * @param params.userId - The user ID
+       * @param params.key - The feature key
+       */
+      enableForUser: usage.enableForUser,
     };
   }
 

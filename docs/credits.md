@@ -4,17 +4,20 @@ Track consumable balances that renew with subscriptions.
 
 ## Which Should I Use?
 
-| | Credits | Wallet |
-|---|---------|--------|
-| **Unit** | Arbitrary (API calls, exports) | Money |
-| **On insufficient balance** | Consume fails | Consume succeeds (goes negative) |
-| **Best for** | Feature quotas, rate limits | Pay-as-you-go spending |
+| | Credits | Wallet | Usage |
+|---|---------|--------|-------|
+| **Unit** | Arbitrary (API calls, exports) | Money | Arbitrary |
+| **Payment** | Pre-paid | Pre-paid | Post-paid |
+| **On insufficient balance** | Consume fails | Consume succeeds (goes negative) | N/A (always records) |
+| **Best for** | Feature quotas, rate limits | Pay-as-you-go with limits | True metered billing |
 
-**Use credits** for discrete units: "1,000 API calls/month", "50 exports/month"
+**Use credits** for discrete units with hard limits: "1,000 API calls/month", "50 exports/month"
 
-**Use wallet** for monetary spending: "$5.00/month for AI usage" where costs vary per operation
+**Use wallet** for monetary spending with soft limits: "$5.00/month for AI usage" where costs vary per operation
 
-Both support the same lifecycle features: yearly scaling, `onRenewal` modes, plan changes.
+**Use usage** for post-paid metered billing: charge for exactly what customers use, billed at period end. See [Usage-Based Billing](./usage.md).
+
+Credits and wallet are pre-paid and support the same lifecycle features: yearly scaling, `onRenewal` modes, plan changes.
 
 ---
 
@@ -29,9 +32,15 @@ Both support the same lifecycle features: yearly scaling, `onRenewal` modes, pla
     { amount: 2000, currency: "usd", interval: "month" },
     { amount: 20000, currency: "usd", interval: "year" },
   ],
-  credits: {
-    api_calls: { allocation: 1000 },
-    storage_mb: { allocation: 5000 },
+  features: {
+    api_calls: {
+      displayName: "API Calls",
+      credits: { allocation: 1000 },
+    },
+    storage_mb: {
+      displayName: "Storage (MB)",
+      credits: { allocation: 5000 },
+    },
   },
 }
 ```
@@ -59,10 +68,13 @@ On the pricing page, wallet displays as `$5.00 AI Usage/mo`. If `displayName` is
 By default, balances reset each billing cycle. Use `onRenewal: "add"` to accumulate instead:
 
 ```typescript
-credits: {
+features: {
   api_calls: {
-    allocation: 1000,
-    onRenewal: "add",  // Balance accumulates instead of resetting
+    displayName: "API Calls",
+    credits: {
+      allocation: 1000,
+      onRenewal: "add",  // Balance accumulates instead of resetting
+    },
   },
 }
 
@@ -182,9 +194,10 @@ If you want to grant monthly even for yearly subscribers, you'll need a cron job
 Let users buy more credits when they run out:
 
 ```typescript
-credits: {
+features: {
   api_calls: {
-    allocation: 1000,
+    displayName: "API Calls",
+    credits: { allocation: 1000 },
     pricePerCredit: 1,           // $0.01 per credit
     minPerPurchase: 100,
     maxPerPurchase: 10000,
@@ -324,7 +337,7 @@ Scale the allocation for display:
 
 ```typescript
 const interval = /* from subscription */;
-const baseAllocation = plan.credits?.api_calls?.allocation ?? 0;
+const baseAllocation = plan.features?.api_calls?.credits?.allocation ?? 0;
 
 const scaledAllocation = baseAllocation * (
   interval === "year" ? 12 :
@@ -362,3 +375,11 @@ const billing = new Billing({
 ```
 
 Wallet uses the same underlying ledger as credits, so `onCreditsGranted` and `onCreditsRevoked` fire for wallet operations too (with `key: "wallet"`).
+
+---
+
+## Combining with Usage Billing
+
+You can include credits in a plan and charge for overages via usage billing. Users consume their included credits first, then get billed for additional usage at the end of the period.
+
+See [Usage-Based Billing](./usage.md) for the full guide, including the hybrid billing pattern.

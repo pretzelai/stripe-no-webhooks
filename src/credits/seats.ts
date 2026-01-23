@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 import type { Pool } from "pg";
 import type { BillingConfig, Plan } from "../BillingConfig";
+import { planHasCredits } from "../BillingConfig";
 import type { TransactionSource } from "./types";
 import type { CreditsGrantTo } from "./lifecycle";
 import { CreditError } from "./types";
@@ -83,26 +84,31 @@ export function createSeatsApi(config: Config) {
     idempotencyPrefix?: string
   ): Promise<Record<string, number>> {
     const creditsGranted: Record<string, number> = {};
+    const features = plan.features || {};
 
-    if (!plan.credits) return creditsGranted;
+    if (Object.keys(features).length === 0) return creditsGranted;
 
-    for (const [key, creditConfig] of Object.entries(plan.credits)) {
+    for (const [key, featureConfig] of Object.entries(features)) {
+      // Skip features without credits allocation
+      const allocation = featureConfig.credits?.allocation;
+      if (!allocation) continue;
+
       const idempotencyKey = idempotencyPrefix
         ? `${idempotencyPrefix}:${key}`
         : undefined;
       const newBalance = await credits.grant({
         userId,
         key,
-        amount: creditConfig.allocation,
+        amount: allocation,
         source: "seat_grant",
         sourceId: subscriptionId,
         idempotencyKey,
       });
-      creditsGranted[key] = creditConfig.allocation;
+      creditsGranted[key] = allocation;
       await callbacks?.onCreditsGranted?.({
         userId,
         key,
-        amount: creditConfig.allocation,
+        amount: allocation,
         newBalance,
         source: "seat_grant",
         sourceId: subscriptionId,
@@ -133,7 +139,7 @@ export function createSeatsApi(config: Config) {
     let creditsGranted: Record<string, number> = {};
     let alreadyProcessed = false;
 
-    if (grantTo !== "manual" && plan.credits) {
+    if (grantTo !== "manual" && planHasCredits(plan)) {
       const creditRecipient = grantTo === "seat-users" ? userId : orgId;
       const idempotencyPrefix = `seat_${orgId}_${userId}_${subscription.id}`;
 
@@ -206,7 +212,7 @@ export function createSeatsApi(config: Config) {
 
     const creditsRevoked: Record<string, number> = {};
 
-    if (grantTo !== "manual" && plan.credits) {
+    if (grantTo !== "manual" && planHasCredits(plan)) {
       const creditHolder = grantTo === "seat-users" ? userId : orgId;
       const grantsFromSeat = await getCreditsGrantedBySource(creditHolder, subscription.id);
 

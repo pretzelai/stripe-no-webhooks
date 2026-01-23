@@ -151,10 +151,31 @@ async function handleSetupModeUpgrade(
   // Extract payment method from the setup intent
   const paymentMethodId = await getPaymentMethodFromSetupIntent(ctx, session);
 
-  // Update the existing subscription with new price
+  // Build subscription items - base price + metered prices
+  const subscriptionItems: Stripe.SubscriptionUpdateParams.Item[] = [
+    { id: itemId, price: newPriceId },
+  ];
+
+  // Remove old metered items (stored as comma-separated IDs)
+  const oldMeteredItemIds = metadata.upgrade_old_metered_item_ids;
+  if (oldMeteredItemIds) {
+    for (const oldItemId of oldMeteredItemIds.split(",").filter(Boolean)) {
+      subscriptionItems.push({ id: oldItemId, deleted: true });
+    }
+  }
+
+  // Add new metered prices (stored as comma-separated price IDs)
+  const newMeteredPrices = metadata.upgrade_new_metered_prices;
+  if (newMeteredPrices) {
+    for (const meteredPriceId of newMeteredPrices.split(",").filter(Boolean)) {
+      subscriptionItems.push({ price: meteredPriceId });
+    }
+  }
+
+  // Update the existing subscription with new price and metered items
   // This triggers subscription.updated → onSubscriptionPlanChanged for credits
   const updateParams: Stripe.SubscriptionUpdateParams = {
-    items: [{ id: itemId, price: newPriceId }],
+    items: subscriptionItems,
     proration_behavior: disableProration ? "none" : "create_prorations",
     ...(disableProration && { billing_cycle_anchor: "now" }),
     metadata: {
@@ -197,6 +218,84 @@ async function getPaymentMethodFromSetupIntent(
   return typeof setupIntent.payment_method === "string"
     ? setupIntent.payment_method
     : setupIntent.payment_method?.id;
+}
+
+// Handle usage-based invoices: extract metered usage line items and call callback
+async function handleUsageInvoiced(
+  ctx: WebhookContext,
+  invoice: Stripe.Invoice,
+  subscriptionId: string | Stripe.Subscription
+): Promise<void> {
+  const customerId =
+    typeof invoice.customer === "string"
+      ? invoice.customer
+      : invoice.customer?.id;
+
+  if (!customerId) return;
+
+  // Look up userId from our mapping table
+  const userId = await getUserIdFromStripeCustomer(
+    ctx.pool,
+    ctx.schema,
+    customerId
+  );
+  if (!userId) return;
+
+  // Expand line items to check for metered usage
+  // Note: invoice.lines may need expansion for full details
+  const lineItems = invoice.lines?.data ?? [];
+
+  // Filter to find metered usage line items
+  const usageCharges: Array<{
+    key: string;
+    amount: number;
+    cost: number;
+    currency: string;
+  }> = [];
+
+  for (const item of lineItems) {
+    // Check if this is a metered subscription line item
+    if (
+      item.type === "subscription" &&
+      item.price?.recurring?.usage_type === "metered"
+    ) {
+      // Extract the feature key: prefer metadata (reliable), fallback to parsing nickname
+      // Metadata is set during sync as { feature_key: "..." }
+      // Nickname format is "${planName} - ${displayName} (usage)"
+      let featureKey = item.price.metadata?.feature_key;
+      if (!featureKey) {
+        const nickname = item.price.nickname ?? "";
+        const meteredMatch = nickname.match(/^(.+) - (.+) \(usage\)$/);
+        featureKey = meteredMatch
+          ? meteredMatch[2].toLowerCase().replace(/\s+/g, "_")
+          : "unknown";
+      }
+
+      usageCharges.push({
+        key: featureKey,
+        amount: item.quantity ?? 0,
+        cost: item.amount,
+        currency: invoice.currency,
+      });
+    }
+  }
+
+  // Only call callback if there are usage charges
+  if (usageCharges.length > 0) {
+    const totalUsageCost = usageCharges.reduce((sum, c) => sum + c.cost, 0);
+
+    try {
+      await ctx.callbacks?.onUsageInvoiced?.({
+        userId,
+        stripeCustomerId: customerId,
+        invoiceId: invoice.id,
+        usageCharges,
+        totalUsageCost,
+      });
+    } catch (err) {
+      console.error("onUsageInvoiced callback error:", err);
+    }
+  }
 }
 
 // Save payment method as default for future off-session charges (auto top-up, renewals)
@@ -372,6 +471,11 @@ async function handleEvent(
           invoice.id
         );
         await ctx.callbacks?.onSubscriptionRenewed?.(subscription);
+      }
+
+      // Handle usage-based billing: check for metered usage line items
+      if (ctx.callbacks?.onUsageInvoiced && subscriptionId) {
+        await handleUsageInvoiced(ctx, invoice, subscriptionId);
       }
       break;
     }
