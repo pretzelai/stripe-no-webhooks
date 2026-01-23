@@ -799,3 +799,397 @@ describe("sync command e2e", () => {
     expect(products.length).toBe(2);
   });
 });
+
+describe("sync command - usage/meter sync", () => {
+  let tempDir;
+  let logs;
+  let errors;
+  let stripe;
+
+  const mockLogger = {
+    log: (...args) => logs.push(args.join(" ")),
+    error: (...args) => errors.push(args.join(" ")),
+  };
+
+  function createBillingConfigWithFeatures(testPlans = []) {
+    return `
+import { BillingConfig } from "stripe-no-webhooks";
+
+const billingConfig: BillingConfig = {
+  test: {
+    plans: ${JSON.stringify(testPlans, null, 4).replace(/"(\w+)":/g, "$1:")},
+  },
+  production: {
+    plans: [],
+  },
+};
+
+export default billingConfig;
+`;
+  }
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-meter-test-"));
+    logs = [];
+    errors = [];
+    stripe = new StripeMock(STRIPE_VALID_TEST_KEY);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test("creates meter for feature with trackUsage enabled", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 10,
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stats.metersCreated).toBe(1);
+
+    // Verify meter was created in Stripe mock
+    const { data: meters } = await stripe.billing.meters.list();
+    expect(meters.length).toBe(1);
+    expect(meters[0].event_name).toBe("api_calls");
+  });
+
+  test("creates separate product for usage feature (for clear invoice line items)", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 10,
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+
+    // Verify usage product was created separate from plan product
+    const { data: products } = await stripe.products.list();
+    expect(products.length).toBe(2); // Pro Plan + API Calls
+
+    const productNames = products.map((p) => p.name);
+    expect(productNames).toContain("Pro Plan");
+    expect(productNames).toContain("API Calls");
+  });
+
+  test("creates metered price under usage product, not plan product", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 10,
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stats.meteredPricesCreated).toBe(1);
+
+    // Find the usage product (API Calls)
+    const { data: products } = await stripe.products.list();
+    const usageProduct = products.find((p) => p.name === "API Calls");
+    expect(usageProduct).toBeDefined();
+
+    // Verify metered price is under usage product, not plan product
+    const { data: prices } = await stripe.prices.list({ product: usageProduct.id });
+    expect(prices.length).toBe(1);
+    expect(prices[0].unit_amount).toBe(10);
+    expect(prices[0].recurring?.meter).toBeDefined();
+  });
+
+  test("populates meteredPriceId in config after sync", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 10,
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    // Verify config was updated with meteredPriceId
+    const updatedConfig = fs.readFileSync(
+      path.join(tempDir, "billing.config.ts"),
+      "utf8"
+    );
+    expect(updatedConfig).toContain("meteredPriceId");
+    expect(updatedConfig).toContain("price_mock_");
+  });
+
+  test("skips meter creation if feature does not have trackUsage", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Basic Plan",
+        price: [{ amount: 1000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            credits: {
+              allocation: 100,
+            },
+            // No trackUsage - just credits
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stats.metersCreated).toBeUndefined();
+
+    // Verify no meters were created
+    const { data: meters } = await stripe.billing.meters.list();
+    expect(meters.length).toBe(0);
+  });
+
+  test("skips meter creation if feature has trackUsage but no pricePerCredit", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Basic Plan",
+        price: [{ amount: 1000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            trackUsage: true,
+            // No pricePerCredit - invalid combination
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+
+    // Verify no meters were created (trackUsage without pricePerCredit is invalid)
+    const { data: meters } = await stripe.billing.meters.list();
+    expect(meters.length).toBe(0);
+  });
+
+  test("reuses existing meter if already created", async () => {
+    // Seed existing meter
+    stripe._seedMeters([
+      {
+        id: "mtr_existing_api_calls",
+        event_name: "api_calls",
+        display_name: "api_calls",
+        status: "active",
+      },
+    ]);
+
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 10,
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stats.metersCreated).toBe(0);
+    expect(result.stats.metersSynced).toBe(1);
+
+    // Verify no new meters were created
+    const { data: meters } = await stripe.billing.meters.list();
+    expect(meters.length).toBe(1);
+    expect(meters[0].id).toBe("mtr_existing_api_calls");
+  });
+
+  test("creates one meter shared across multiple plans", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 10,
+            trackUsage: true,
+          },
+        },
+      },
+      {
+        name: "Enterprise Plan",
+        price: [{ amount: 5000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 5, // Different price
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+
+    // Only ONE meter for the shared feature key
+    expect(result.stats.metersCreated).toBe(1);
+
+    // But TWO metered prices (one per plan)
+    expect(result.stats.meteredPricesCreated).toBe(2);
+
+    const { data: meters } = await stripe.billing.meters.list();
+    expect(meters.length).toBe(1);
+  });
+
+  test("creates multiple meters for different feature keys", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            pricePerCredit: 10,
+            trackUsage: true,
+          },
+          storage_gb: {
+            displayName: "Storage GB",
+            pricePerCredit: 25,
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stats.metersCreated).toBe(2);
+    expect(result.stats.meteredPricesCreated).toBe(2);
+
+    const { data: meters } = await stripe.billing.meters.list();
+    expect(meters.length).toBe(2);
+
+    const eventNames = meters.map((m) => m.event_name).sort();
+    expect(eventNames).toEqual(["api_calls", "storage_gb"]);
+  });
+});
