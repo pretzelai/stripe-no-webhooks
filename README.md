@@ -6,7 +6,7 @@ This is an opinionated library to help you implement payments with Stripe.
 
 1. Define plans in code which sync to Stripe
 2. No manual webhook setup - the library handles webhooks and syncs Stripe data to your DB
-3. Simple APIs for subscriptions, credits, wallet balances, and top-ups
+3. Simple APIs for subscriptions, credits, wallet balances, top-ups, and usage-based billing
 4. Support for seat based billing, tax collection, plan upgrades and downgrades (including sane handling of credits)
 5. Optional callbacks (`onSubscriptionCreated`, etc.) for custom logic
 
@@ -62,16 +62,21 @@ const billingConfig: BillingConfig = {
           { amount: 2000, currency: "usd", interval: "month" }, // $20/mo
           { amount: 20000, currency: "usd", interval: "year" }, // $200/yr
         ],
-        // Optional: credits (for feature quotas)
-        credits: {
-          api_calls: { allocation: 1000, displayName: "API Calls" },
+        // Optional: feature quotas and usage billing
+        features: {
+          api_calls: {
+            displayName: "API Calls",
+            credits: { allocation: 1000 },  // 1000 included per month
+            pricePerCredit: 10,             // 10 cents for overages
+            trackUsage: true,               // Bill overages at period end
+          },
         },
         // Optional: wallet (for pay-as-you-go spending)
         wallet: {
           allocation: 500,  // $5.00/month included
         },
-        // Optional: custom features (just text for the pricing table)
-        features: ["Priority support", "Custom integrations"],
+        // Optional: custom highlights (just text for the pricing table)
+        highlights: ["Priority support", "Custom integrations"],
       },
     ],
   },
@@ -196,6 +201,9 @@ if (subscription?.status === "active") {
     console.log(`Only ${result.balance} credits available`);
   }
 }
+
+// Or use usage-based billing (billed at period end)
+await billing.usage.record({ userId, key: "api_calls", amount: 1 });
 ```
 
 ### What happens behind the scenes
@@ -383,6 +391,7 @@ See [Payment Failures](./docs/payment-failures.md) for the complete guide.
 This README only covers the basics. The library supports more features than what is covered here. For more details, see the following docs:
 
 - [Credits & Wallet](./docs/credits.md) - Consumable credits and prepaid wallet balances
+- [Usage-Based Billing](./docs/usage.md) - Metered billing charged at period end
 - [Payment Failures](./docs/payment-failures.md) - Handle declined cards and failed payments
 - [Team Billing](./docs/team-billing.md) - Organization subscriptions with seats
 - [Tax & Business Billing](./docs/tax.md) - Automatic tax calculation and VAT/tax ID collection

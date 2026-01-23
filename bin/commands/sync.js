@@ -50,14 +50,16 @@ function normalizeEventName(featureKey) {
 /**
  * Sync meters for features with trackUsage enabled.
  * Creates ONE meter per unique feature key (shared across plans).
+ * Creates ONE product per unique feature (for clear invoice line items).
  * Creates metered prices per plan (different plans can have different prices).
  */
 async function syncMeters(stripe, plans, mode, logger) {
-  const stats = { metersCreated: 0, metersSynced: 0, meteredPricesCreated: 0 };
+  const stats = { metersCreated: 0, metersSynced: 0, meteredPricesCreated: 0, usageProductsCreated: 0 };
   let configModified = false;
 
   // Collect all unique feature keys that need meters
   const featureKeysNeedingMeters = new Set();
+  const featureDisplayNames = {}; // featureKey -> displayName (first one wins)
   const normalizedToOriginal = {}; // Track normalized -> original mappings for collision detection
 
   for (const plan of plans) {
@@ -76,6 +78,11 @@ async function syncMeters(stripe, plans, mode, logger) {
         }
         normalizedToOriginal[normalized] = featureKey;
         featureKeysNeedingMeters.add(featureKey);
+
+        // Use first displayName we encounter for this feature
+        if (!featureDisplayNames[featureKey]) {
+          featureDisplayNames[featureKey] = featureConfig.displayName || featureKey;
+        }
       }
     }
   }
@@ -100,6 +107,13 @@ async function syncMeters(stripe, plans, mode, logger) {
   const metersByEventName = {};
   for (const meter of existingMeters) {
     metersByEventName[meter.event_name] = meter;
+  }
+
+  // Fetch existing products (for finding usage feature products)
+  const existingProducts = await stripe.products.list({ active: true, limit: 100 });
+  const productsByName = {};
+  for (const product of existingProducts.data) {
+    productsByName[product.name.toLowerCase().trim()] = product;
   }
 
   // Step 1: Ensure meters exist for each unique feature key
@@ -130,16 +144,44 @@ async function syncMeters(stripe, plans, mode, logger) {
     metersForFeature[featureKey] = meter;
   }
 
-  // Step 2: Create or validate metered prices for each plan+feature combination
+  // Step 2: Ensure products exist for each unique feature key (for clear invoice line items)
+  const productsForFeature = {}; // featureKey -> product
+  for (const featureKey of featureKeysNeedingMeters) {
+    const productName = featureDisplayNames[featureKey];
+    const normalizedName = productName.toLowerCase().trim();
+
+    let product = productsByName[normalizedName];
+    if (product) {
+      logger.log(`   🔗 Found existing product for "${featureKey}" (${product.id})`);
+    } else {
+      try {
+        logger.log(`   🔄 Creating product "${productName}" for usage feature...`);
+        product = await stripe.products.create({
+          name: productName,
+          metadata: { usage_feature: featureKey },
+        });
+        productsByName[normalizedName] = product;
+        stats.usageProductsCreated++;
+        logger.log(`   ✅ Created usage product (${product.id})`);
+      } catch (err) {
+        logger.error(`   ❌ Failed to create product for "${featureKey}": ${err.message}`);
+        continue;
+      }
+    }
+    productsForFeature[featureKey] = product;
+  }
+
+  // Step 3: Create or validate metered prices for each plan+feature combination
   for (let i = 0; i < plans.length; i++) {
     const plan = plans[i];
-    if (!plan.features || !plan.id) continue;
+    if (!plan.features) continue;
 
     for (const [featureKey, featureConfig] of Object.entries(plan.features)) {
       if (!featureConfig.trackUsage || !featureConfig.pricePerCredit) continue;
 
       const meter = metersForFeature[featureKey];
-      if (!meter) continue;
+      const usageProduct = productsForFeature[featureKey];
+      if (!meter || !usageProduct) continue;
 
       const displayName = featureConfig.displayName || featureKey;
 
@@ -153,11 +195,11 @@ async function syncMeters(stripe, plans, mode, logger) {
             configModified = true;
             // Continue to create a new one below
           } else {
-            // Ensure feature_key metadata is set
-            if (existingPrice.metadata?.feature_key !== featureKey) {
+            // Ensure metadata is up to date
+            if (existingPrice.metadata?.feature_key !== featureKey || existingPrice.metadata?.plan_name !== plan.name) {
               try {
                 await stripe.prices.update(existingPrice.id, {
-                  metadata: { feature_key: featureKey },
+                  metadata: { feature_key: featureKey, plan_name: plan.name },
                 });
                 logger.log(`   🔧 Updated metadata on metered price for "${plan.name}:${featureKey}"`);
               } catch (err) {
@@ -174,16 +216,17 @@ async function syncMeters(stripe, plans, mode, logger) {
         }
       }
 
-      // Find existing metered price for this plan+meter
+      // Find existing metered price for this plan+meter under the usage product
       try {
         const prices = await stripe.prices.list({
-          product: plan.id,
+          product: usageProduct.id,
           type: "recurring",
           limit: 100,
         });
 
+        // Match by meter AND plan_name metadata
         const existingMeteredPrice = prices.data.find(
-          (p) => p.recurring?.meter === meter.id && p.active
+          (p) => p.recurring?.meter === meter.id && p.active && p.metadata?.plan_name === plan.name
         );
 
         if (existingMeteredPrice) {
@@ -195,7 +238,7 @@ async function syncMeters(stripe, plans, mode, logger) {
           if (existingMeteredPrice.metadata?.feature_key !== featureKey) {
             try {
               await stripe.prices.update(existingMeteredPrice.id, {
-                metadata: { feature_key: featureKey },
+                metadata: { feature_key: featureKey, plan_name: plan.name },
               });
               logger.log(`   🔧 Updated metadata on metered price`);
             } catch (err) {
@@ -203,12 +246,12 @@ async function syncMeters(stripe, plans, mode, logger) {
             }
           }
         } else {
-          // Create metered price
+          // Create metered price under the usage feature product (not plan.id)
           const baseCurrency = plan.price?.[0]?.currency || "usd";
 
           logger.log(`   🔄 Creating metered price for "${plan.name}:${featureKey}"...`);
           const meteredPrice = await stripe.prices.create({
-            product: plan.id,
+            product: usageProduct.id,  // Usage feature product for clear invoice line items
             currency: baseCurrency.toLowerCase(),
             unit_amount: featureConfig.pricePerCredit,
             recurring: {
@@ -216,8 +259,8 @@ async function syncMeters(stripe, plans, mode, logger) {
               usage_type: "metered",
               meter: meter.id,
             },
-            nickname: `${plan.name} - ${displayName} (usage)`,
-            metadata: { feature_key: featureKey },
+            nickname: `${plan.name} - ${displayName}`,
+            metadata: { feature_key: featureKey, plan_name: plan.name },
           });
 
           plan.features[featureKey].meteredPriceId = meteredPrice.id;
@@ -707,10 +750,14 @@ async function sync(options = {}) {
   const priceTotal = stats.pricesPulled + stats.pricesSynced + stats.pricesCreated;
   const meterTotal = (stats.metersCreated || 0) + (stats.metersSynced || 0);
   const meteredPriceTotal = stats.meteredPricesCreated || 0;
+  const usageProductTotal = stats.usageProductsCreated || 0;
 
   let syncSummary = `Synced ${productTotal} products, ${priceTotal} prices`;
-  if (meterTotal > 0 || meteredPriceTotal > 0) {
+  if (meterTotal > 0 || meteredPriceTotal > 0 || usageProductTotal > 0) {
     syncSummary += `, ${meterTotal} meters, ${meteredPriceTotal} metered prices`;
+    if (usageProductTotal > 0) {
+      syncSummary += ` (${usageProductTotal} usage products created)`;
+    }
   }
   success(syncSummary);
 
@@ -940,8 +987,12 @@ async function setupWebhooks(options = {}) {
         if (meterResult.configModified) {
           prodConfigModified = true;
         }
-        if (meterResult.stats.metersCreated > 0 || meterResult.stats.meteredPricesCreated > 0) {
-          success(`Synced ${meterResult.stats.metersCreated + meterResult.stats.metersSynced} meters, ${meterResult.stats.meteredPricesCreated} metered prices`);
+        if (meterResult.stats.metersCreated > 0 || meterResult.stats.meteredPricesCreated > 0 || meterResult.stats.usageProductsCreated > 0) {
+          let msg = `Synced ${meterResult.stats.metersCreated + meterResult.stats.metersSynced} meters, ${meterResult.stats.meteredPricesCreated} metered prices`;
+          if (meterResult.stats.usageProductsCreated > 0) {
+            msg += ` (${meterResult.stats.usageProductsCreated} usage products created)`;
+          }
+          success(msg);
         }
       }
 

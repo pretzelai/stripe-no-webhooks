@@ -18,10 +18,7 @@ export function findPlanByPriceId(
   priceId: string
 ): Plan | null {
   const plans = billingConfig?.[mode]?.plans;
-  console.log("[findPlanByPriceId]", { mode, priceId, plansCount: plans?.length, planNames: plans?.map(p => p.name) });
-  const found = plans?.find((p) => p.price.some((pr) => pr.id === priceId)) ?? null;
-  console.log("[findPlanByPriceId] found plan:", found?.name, "features:", found?.features);
-  return found;
+  return plans?.find((p) => p.price.some((pr) => pr.id === priceId)) ?? null;
 }
 
 export function getPlanFromSubscription(
@@ -32,7 +29,6 @@ export function getPlanFromSubscription(
   const price = subscription.items.data[0]?.price;
   if (!price) return null;
   const priceId = typeof price === "string" ? price : price.id;
-  console.log("[getPlanFromSubscription]", { subscriptionId: subscription.id, priceId });
   return findPlanByPriceId(billingConfig, mode, priceId);
 }
 
