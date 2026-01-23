@@ -16,27 +16,50 @@ export type AutoTopUpConfig = {
   maxPerMonth?: number;
 };
 
-export type CreditConfig = {
+export type CreditAllocation = {
   allocation: number;
-  /**
-   * Human-readable name shown on pricing page.
-   * @example displayName: "API Calls" // Shows "100 API Calls/mo" instead of "100 api_calls/mo"
-   */
-  displayName?: string;
   /**
    * What happens on renewal (default: 'reset')
    * - 'reset': Set balance to allocation (unused credits expire)
    * - 'add': Add allocation to current balance (credits accumulate)
    */
   onRenewal?: "reset" | "add";
-  /** Price per credit. Currency comes from the Plan's price. */
+};
+
+/**
+ * Feature configuration supporting credits, top-ups, and usage-based billing.
+ */
+export type FeatureConfig = {
+  /** Human-readable name shown on pricing page */
+  displayName?: string;
+  /**
+   * Price per unit in cents. Enables on-demand top-ups.
+   * If trackUsage is also true, enables usage-based billing.
+   */
   pricePerCredit?: number;
-  /** Minimum credits per top-up purchase (default: 1) */
+  /** Minimum units per top-up purchase (default: 1) */
   minPerPurchase?: number;
-  /** Maximum credits per top-up purchase */
+  /** Maximum units per top-up purchase */
   maxPerPurchase?: number;
   /** Configure automatic top-ups when balance drops below threshold */
   autoTopUp?: AutoTopUpConfig;
+  /**
+   * Pre-paid credit allocation (optional).
+   * When set, users get this many credits per billing period.
+   */
+  credits?: CreditAllocation;
+  /**
+   * Enable usage-based billing for this feature.
+   * When true, usage.record() sends events to Stripe meters.
+   * Requires pricePerCredit to be set.
+   * Note: Auto top-ups are disabled when trackUsage is true.
+   */
+  trackUsage?: boolean;
+  /**
+   * Stripe metered price ID (auto-populated by sync).
+   * Only set when trackUsage is true.
+   */
+  meteredPriceId?: string;
 };
 
 export type WalletConfig = {
@@ -61,18 +84,22 @@ export type Plan = {
   name: string;
   description?: string;
   price: Price[];
-  credits?: Record<string, CreditConfig>;
+  /**
+   * Billing features with credits, top-ups, and/or usage tracking.
+   * Each key is a feature identifier (e.g., "api_calls", "storage_gb").
+   */
+  features?: Record<string, FeatureConfig>;
   /**
    * Wallet configuration for monetary balance.
    * Currency is determined by the plan's price currency.
    */
   wallet?: WalletConfig;
   /**
-   * Custom feature bullet points shown on pricing page.
+   * Custom bullet points shown on pricing page.
    * Use this for features that aren't credit-based.
-   * @example features: ["Priority support", "Custom integrations", "Unlimited exports"]
+   * @example highlights: ["Priority support", "Custom integrations", "Unlimited exports"]
    */
-  features?: string[];
+  highlights?: string[];
   /**
    * Enable per-seat billing for this plan.
    * When true, addSeat/removeSeat will update Stripe subscription quantity.
@@ -92,4 +119,21 @@ export type BillingConfig = {
 
 export function defineConfig<const T extends BillingConfig>(config: T): T {
   return config;
+}
+
+/**
+ * Check if a plan has any features with credit allocations.
+ */
+export function planHasCredits(plan: Plan | null | undefined): boolean {
+  if (!plan?.features) return false;
+  return Object.values(plan.features).some(
+    (f) => f.credits?.allocation !== undefined && f.credits.allocation > 0
+  );
+}
+
+/**
+ * Check if a feature has usage tracking enabled.
+ */
+export function isUsageTrackingEnabled(feature: FeatureConfig): boolean {
+  return feature.trackUsage === true && feature.pricePerCredit !== undefined;
 }

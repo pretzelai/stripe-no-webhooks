@@ -23,8 +23,8 @@ const TEST_BILLING_CONFIG: BillingConfig = {
         id: "free",
         name: "Free",
         price: [{ id: "price_free_monthly", amount: 0, currency: "usd", interval: "month" }],
-        credits: {
-          api_calls: { allocation: 100 },
+        features: {
+          api_calls: { credits: { allocation: 100 } },
         },
       },
       {
@@ -35,8 +35,8 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           { id: "price_basic_yearly", amount: 9990, currency: "usd", interval: "year" },
           { id: "price_basic_weekly", amount: 299, currency: "usd", interval: "week" },
         ],
-        credits: {
-          api_calls: { allocation: 1000, onRenewal: "reset" },
+        features: {
+          api_calls: { credits: { allocation: 1000, onRenewal: "reset" } },
         },
       },
       {
@@ -46,26 +46,26 @@ const TEST_BILLING_CONFIG: BillingConfig = {
           { id: "price_pro_monthly", amount: 2999, currency: "usd", interval: "month" },
           { id: "price_pro_yearly", amount: 29990, currency: "usd", interval: "year" },
         ],
-        credits: {
-          api_calls: { allocation: 10000, onRenewal: "reset" },
-          storage_gb: { allocation: 100, onRenewal: "add" },
+        features: {
+          api_calls: { credits: { allocation: 10000, onRenewal: "reset" } },
+          storage_gb: { credits: { allocation: 100, onRenewal: "add" } },
         },
       },
       {
         id: "enterprise",
         name: "Enterprise",
         price: [{ id: "price_enterprise_monthly", amount: 9999, currency: "usd", interval: "month" }],
-        credits: {
-          api_calls: { allocation: 100000, onRenewal: "reset" },
-          storage_gb: { allocation: 1000, onRenewal: "add" },
-          seats: { allocation: 50, onRenewal: "reset" },
+        features: {
+          api_calls: { credits: { allocation: 100000, onRenewal: "reset" } },
+          storage_gb: { credits: { allocation: 1000, onRenewal: "add" } },
+          seats: { credits: { allocation: 50, onRenewal: "reset" } },
         },
       },
       {
         id: "no_credits",
         name: "No Credits Plan",
         price: [{ id: "price_no_credits", amount: 499, currency: "usd", interval: "month" }],
-        // No credits configured
+        // No features configured
       },
     ],
   },
@@ -548,13 +548,13 @@ describe("Lifecycle: Downgrade", () => {
             id: "pro",
             name: "Pro",
             price: [{ id: "price_pro", amount: 2999, currency: "usd", interval: "month" }],
-            credits: { api_calls: { allocation: 10000 } },
+            features: { api_calls: { credits: { allocation: 10000 } } },
           },
           {
             id: "basic_add",
             name: "Basic Add",
             price: [{ id: "price_basic_add", amount: 999, currency: "usd", interval: "month" }],
-            credits: { api_calls: { allocation: 500, onRenewal: "add" } },
+            features: { api_calls: { credits: { allocation: 500, onRenewal: "add" } } },
           },
         ],
       },
@@ -1111,13 +1111,13 @@ describe("Lifecycle: Yearly Plans - New Subscription", () => {
             id: "odd",
             name: "Odd Plan",
             price: [{ id: "price_odd_weekly", amount: 299, currency: "usd", interval: "week" }],
-            credits: { api_calls: { allocation: 100 } }, // 100/4 = 25
+            features: { api_calls: { credits: { allocation: 100 } } }, // 100/4 = 25
           },
           {
             id: "odd2",
             name: "Odd Plan 2",
             price: [{ id: "price_odd2_weekly", amount: 299, currency: "usd", interval: "week" }],
-            credits: { api_calls: { allocation: 99 } }, // 99/4 = 24.75 → ceil = 25
+            features: { api_calls: { credits: { allocation: 99 } } }, // 99/4 = 24.75 → ceil = 25
           },
         ],
       },

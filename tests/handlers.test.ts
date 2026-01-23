@@ -25,7 +25,7 @@ const testBillingConfig: BillingConfig = {
           { id: "price_pro_monthly", amount: 1000, currency: "usd", interval: "month" },
           { id: "price_pro_yearly", amount: 10000, currency: "usd", interval: "year" },
         ],
-        credits: { api_calls: { allocation: 1000 } },
+        features: { api_calls: { credits: { allocation: 1000 } } },
       },
       {
         id: "basic",
@@ -33,7 +33,7 @@ const testBillingConfig: BillingConfig = {
         price: [
           { id: "price_basic_monthly", amount: 500, currency: "usd", interval: "month" },
         ],
-        credits: { api_calls: { allocation: 100 } },
+        features: { api_calls: { credits: { allocation: 100 } } },
       },
       {
         id: "enterprise",
@@ -41,7 +41,7 @@ const testBillingConfig: BillingConfig = {
         price: [
           { id: "price_enterprise_monthly", amount: 5000, currency: "usd", interval: "month" },
         ],
-        credits: { api_calls: { allocation: 10000 } },
+        features: { api_calls: { credits: { allocation: 10000 } } },
       },
     ],
   },

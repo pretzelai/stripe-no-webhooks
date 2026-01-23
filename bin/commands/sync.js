@@ -33,6 +33,207 @@ const {
   DIM,
 } = require("./helpers/output");
 
+// --- Meter/Usage Sync Helpers ---
+
+/**
+ * Normalize feature key to valid Stripe meter event name.
+ * Must be alphanumeric with underscores, max 40 chars.
+ */
+function normalizeEventName(featureKey) {
+  return featureKey
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .substring(0, 40);
+}
+
+/**
+ * Sync meters for features with trackUsage enabled.
+ * Creates ONE meter per unique feature key (shared across plans).
+ * Creates metered prices per plan (different plans can have different prices).
+ */
+async function syncMeters(stripe, plans, mode, logger) {
+  const stats = { metersCreated: 0, metersSynced: 0, meteredPricesCreated: 0 };
+  let configModified = false;
+
+  // Collect all unique feature keys that need meters
+  const featureKeysNeedingMeters = new Set();
+  const normalizedToOriginal = {}; // Track normalized -> original mappings for collision detection
+
+  for (const plan of plans) {
+    if (!plan.features) continue;
+    for (const [featureKey, featureConfig] of Object.entries(plan.features)) {
+      if (featureConfig.trackUsage && featureConfig.pricePerCredit) {
+        const normalized = normalizeEventName(featureKey);
+
+        // Check for collisions (different feature keys normalizing to same event name)
+        if (normalizedToOriginal[normalized] && normalizedToOriginal[normalized] !== featureKey) {
+          logger.error(
+            `   ❌ Feature key collision: "${featureKey}" and "${normalizedToOriginal[normalized]}" ` +
+            `both normalize to "${normalized}". Please rename one of them.`
+          );
+          continue;
+        }
+        normalizedToOriginal[normalized] = featureKey;
+        featureKeysNeedingMeters.add(featureKey);
+      }
+    }
+  }
+
+  if (featureKeysNeedingMeters.size === 0) {
+    return { stats, configModified };
+  }
+
+  // Fetch existing meters
+  let existingMeters = [];
+  try {
+    const metersList = await stripe.billing.meters.list({ limit: 100 });
+    existingMeters = metersList.data;
+  } catch (err) {
+    if (err.code === "resource_missing" || err.statusCode === 404) {
+      logger.log("   ⚠️  Billing meters API not available, skipping meter sync");
+      return { stats, configModified };
+    }
+    throw err;
+  }
+
+  const metersByEventName = {};
+  for (const meter of existingMeters) {
+    metersByEventName[meter.event_name] = meter;
+  }
+
+  // Step 1: Ensure meters exist for each unique feature key
+  const metersForFeature = {}; // featureKey -> meter
+  for (const featureKey of featureKeysNeedingMeters) {
+    const eventName = normalizeEventName(featureKey);
+    let meter = metersByEventName[eventName];
+
+    if (meter) {
+      logger.log(`   🔗 Found existing meter for "${featureKey}" (${meter.id})`);
+      stats.metersSynced++;
+    } else {
+      try {
+        logger.log(`   🔄 Creating meter for "${featureKey}"...`);
+        meter = await stripe.billing.meters.create({
+          display_name: featureKey,
+          event_name: eventName,
+          default_aggregation: { formula: "sum" },
+        });
+        metersByEventName[eventName] = meter;
+        stats.metersCreated++;
+        logger.log(`   ✅ Created meter (${meter.id})`);
+      } catch (err) {
+        logger.error(`   ❌ Failed to create meter for "${featureKey}": ${err.message}`);
+        continue;
+      }
+    }
+    metersForFeature[featureKey] = meter;
+  }
+
+  // Step 2: Create or validate metered prices for each plan+feature combination
+  for (let i = 0; i < plans.length; i++) {
+    const plan = plans[i];
+    if (!plan.features || !plan.id) continue;
+
+    for (const [featureKey, featureConfig] of Object.entries(plan.features)) {
+      if (!featureConfig.trackUsage || !featureConfig.pricePerCredit) continue;
+
+      const meter = metersForFeature[featureKey];
+      if (!meter) continue;
+
+      const displayName = featureConfig.displayName || featureKey;
+
+      // If already has meteredPriceId, validate it still exists and update metadata if needed
+      if (featureConfig.meteredPriceId) {
+        try {
+          const existingPrice = await stripe.prices.retrieve(featureConfig.meteredPriceId);
+          if (!existingPrice.active) {
+            logger.error(`   ⚠️  Metered price ${featureConfig.meteredPriceId} is inactive for "${plan.name}:${featureKey}". Clearing from config.`);
+            plan.features[featureKey].meteredPriceId = undefined;
+            configModified = true;
+            // Continue to create a new one below
+          } else {
+            // Ensure feature_key metadata is set
+            if (existingPrice.metadata?.feature_key !== featureKey) {
+              try {
+                await stripe.prices.update(existingPrice.id, {
+                  metadata: { feature_key: featureKey },
+                });
+                logger.log(`   🔧 Updated metadata on metered price for "${plan.name}:${featureKey}"`);
+              } catch (err) {
+                logger.error(`   ⚠️  Could not update metadata: ${err.message}`);
+              }
+            }
+            continue; // Price exists and is valid
+          }
+        } catch (err) {
+          logger.error(`   ⚠️  Could not retrieve metered price ${featureConfig.meteredPriceId}: ${err.message}. Clearing from config.`);
+          plan.features[featureKey].meteredPriceId = undefined;
+          configModified = true;
+          // Continue to find/create below
+        }
+      }
+
+      // Find existing metered price for this plan+meter
+      try {
+        const prices = await stripe.prices.list({
+          product: plan.id,
+          type: "recurring",
+          limit: 100,
+        });
+
+        const existingMeteredPrice = prices.data.find(
+          (p) => p.recurring?.meter === meter.id && p.active
+        );
+
+        if (existingMeteredPrice) {
+          plan.features[featureKey].meteredPriceId = existingMeteredPrice.id;
+          configModified = true;
+          logger.log(`   🔗 Matched metered price for "${plan.name}:${featureKey}" (${existingMeteredPrice.id})`);
+
+          // Ensure feature_key metadata
+          if (existingMeteredPrice.metadata?.feature_key !== featureKey) {
+            try {
+              await stripe.prices.update(existingMeteredPrice.id, {
+                metadata: { feature_key: featureKey },
+              });
+              logger.log(`   🔧 Updated metadata on metered price`);
+            } catch (err) {
+              logger.error(`   ⚠️  Could not update metadata: ${err.message}`);
+            }
+          }
+        } else {
+          // Create metered price
+          const baseCurrency = plan.price?.[0]?.currency || "usd";
+
+          logger.log(`   🔄 Creating metered price for "${plan.name}:${featureKey}"...`);
+          const meteredPrice = await stripe.prices.create({
+            product: plan.id,
+            currency: baseCurrency.toLowerCase(),
+            unit_amount: featureConfig.pricePerCredit,
+            recurring: {
+              interval: "month",
+              usage_type: "metered",
+              meter: meter.id,
+            },
+            nickname: `${plan.name} - ${displayName} (usage)`,
+            metadata: { feature_key: featureKey },
+          });
+
+          plan.features[featureKey].meteredPriceId = meteredPrice.id;
+          stats.meteredPricesCreated++;
+          configModified = true;
+          logger.log(`   ✅ Created metered price (${meteredPrice.id})`);
+        }
+      } catch (err) {
+        logger.error(`   ❌ Failed to sync metered price for "${plan.name}:${featureKey}": ${err.message}`);
+      }
+    }
+  }
+
+  return { stats, configModified };
+}
+
 // --- TypeScript Config Parsing (for billing.config.ts) ---
 
 function findMatchingBrace(content, startIndex) {
@@ -471,6 +672,27 @@ async function sync(options = {}) {
     logger.log("   No new products or prices to push to Stripe.\n");
   }
 
+  // --- Sync Meters for Usage-Based Billing ---
+  const hasUsageFeatures = currentPlans.some((plan) => {
+    if (!plan.features) return false;
+    return Object.values(plan.features).some((f) => f.trackUsage && f.pricePerCredit);
+  });
+
+  if (hasUsageFeatures) {
+    logger.log("📊 Syncing usage meters...\n");
+    const meterResult = await syncMeters(stripe, currentPlans, mode, logger);
+    if (meterResult.configModified) {
+      configModified = true;
+    }
+    stats.metersCreated = meterResult.stats.metersCreated;
+    stats.metersSynced = meterResult.stats.metersSynced;
+    stats.meteredPricesCreated = meterResult.stats.meteredPricesCreated;
+
+    if (meterResult.stats.metersCreated > 0 || meterResult.stats.meteredPricesCreated > 0) {
+      logger.log("");
+    }
+  }
+
   if (configModified) {
     const newContent =
       content.substring(0, extracted.start) +
@@ -481,9 +703,16 @@ async function sync(options = {}) {
   }
 
   console.log();
-  success(
-    `Synced ${stats.productsPulled + stats.productsSynced + stats.productsCreated} products, ${stats.pricesPulled + stats.pricesSynced + stats.pricesCreated} prices`
-  );
+  const productTotal = stats.productsPulled + stats.productsSynced + stats.productsCreated;
+  const priceTotal = stats.pricesPulled + stats.pricesSynced + stats.pricesCreated;
+  const meterTotal = (stats.metersCreated || 0) + (stats.metersSynced || 0);
+  const meteredPriceTotal = stats.meteredPricesCreated || 0;
+
+  let syncSummary = `Synced ${productTotal} products, ${priceTotal} prices`;
+  if (meterTotal > 0 || meteredPriceTotal > 0) {
+    syncSummary += `, ${meterTotal} meters, ${meteredPriceTotal} metered prices`;
+  }
+  success(syncSummary);
 
   return {
     success: true,
@@ -695,6 +924,24 @@ async function setupWebhooks(options = {}) {
               error(`Failed to create price: ${err.message}`);
             }
           }
+        }
+      }
+
+      // Sync meters for usage-based billing in production
+      const prodPlans = prodConfig.production.plans || [];
+      const hasUsageFeatures = prodPlans.some((plan) => {
+        if (!plan.features) return false;
+        return Object.values(plan.features).some((f) => f.trackUsage && f.pricePerCredit);
+      });
+
+      if (hasUsageFeatures) {
+        info("Syncing usage meters for production...");
+        const meterResult = await syncMeters(liveStripe, prodPlans, "production", { log: info, error });
+        if (meterResult.configModified) {
+          prodConfigModified = true;
+        }
+        if (meterResult.stats.metersCreated > 0 || meterResult.stats.meteredPricesCreated > 0) {
+          success(`Synced ${meterResult.stats.metersCreated + meterResult.stats.metersSynced} meters, ${meterResult.stats.meteredPricesCreated} metered prices`);
         }
       }
 

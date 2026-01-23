@@ -12,10 +12,6 @@ export function getMode(stripeKey: string): "test" | "production" {
   }
 }
 
-export function planHasCredits(plan: Plan | null | undefined): boolean {
-  return plan?.credits !== undefined && Object.keys(plan.credits).length > 0;
-}
-
 export function findPlanByPriceId(
   billingConfig: BillingConfig | undefined,
   mode: "test" | "production",

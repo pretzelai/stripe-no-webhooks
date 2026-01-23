@@ -95,6 +95,25 @@ export async function setupTestDb(): Promise<Pool> {
     );
   `);
 
+  // Usage events table for usage-based billing
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${SCHEMA}.usage_events (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL,
+      key text NOT NULL,
+      amount numeric NOT NULL,
+      stripe_meter_event_id text,
+      period_start timestamptz NOT NULL,
+      period_end timestamptz NOT NULL,
+      created_at timestamptz DEFAULT now()
+    );
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_usage_events_user_key_period
+      ON ${SCHEMA}.usage_events(user_id, key, period_start, period_end);
+  `);
+
   await client.end();
 
   // Create pool for tests
@@ -309,6 +328,7 @@ export async function cleanupAllTestData(): Promise<void> {
       ${SCHEMA}.credit_balances,
       ${SCHEMA}.credit_ledger,
       ${SCHEMA}.topup_failures,
+      ${SCHEMA}.usage_events,
       ${SCHEMA}.subscription_items,
       ${SCHEMA}.subscriptions,
       ${SCHEMA}.customers,

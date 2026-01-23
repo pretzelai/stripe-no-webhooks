@@ -652,6 +652,44 @@ class StripeMock {
     };
   }
 
+  // Billing meters (for usage-based billing)
+  get billing() {
+    const self = this;
+    return {
+      meterEvents: {
+        async create(params) {
+          const event = {
+            identifier: self._generateId("mevt"),
+            object: "billing.meter_event",
+            event_name: params.event_name,
+            payload: params.payload,
+            timestamp: params.timestamp || self._now(),
+            created: self._now(),
+            livemode: false,
+          };
+          return event;
+        },
+      },
+      meters: {
+        async create(params) {
+          return {
+            id: self._generateId("mtr"),
+            object: "billing.meter",
+            display_name: params.display_name,
+            event_name: params.event_name,
+            default_aggregation: params.default_aggregation,
+            status: "active",
+            created: self._now(),
+            livemode: false,
+          };
+        },
+        async list() {
+          return { data: [], has_more: false };
+        },
+      },
+    };
+  }
+
   // Checkout (stub)
   get checkout() {
     const self = this;

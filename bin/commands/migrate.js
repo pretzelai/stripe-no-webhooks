@@ -118,6 +118,27 @@ async function migrate(dbUrl, options = {}) {
     `);
     success("Created stripe.topup_failures");
 
+    // Usage events table for local usage tracking (post-paid metered billing)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${SCHEMA}.usage_events (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id text NOT NULL,
+        key text NOT NULL,
+        amount numeric NOT NULL,
+        stripe_meter_event_id text,
+        period_start timestamptz NOT NULL,
+        period_end timestamptz NOT NULL,
+        created_at timestamptz DEFAULT now()
+      );
+    `);
+    success("Created stripe.usage_events");
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_usage_events_user_key_period
+        ON ${SCHEMA}.usage_events(user_id, key, period_start, period_end);
+    `);
+    success("Created usage_events indexes");
+
     await client.end();
 
     if (!env.DATABASE_URL) {

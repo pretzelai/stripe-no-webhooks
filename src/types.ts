@@ -88,6 +88,30 @@ export interface StripeWebhookCallbacks {
     balance: number;
     threshold: number;
   }) => void | Promise<void>;
+
+  onUsageRecorded?: (params: {
+    userId: string;
+    key: string;
+    amount: number;
+    totalForPeriod: number;
+    estimatedCost: number;
+    currency: string;
+    periodStart: Date;
+    periodEnd: Date;
+  }) => void | Promise<void>;
+
+  onUsageInvoiced?: (params: {
+    userId: string;
+    stripeCustomerId: string;
+    invoiceId: string;
+    usageCharges: Array<{
+      key: string;
+      amount: number;
+      cost: number;
+      currency: string;
+    }>;
+    totalUsageCost: number;
+  }) => void | Promise<void>;
 }
 
 /**
@@ -218,6 +242,11 @@ export interface StripeConfig {
    * If not set, handlers will return a 401 error response instead.
    */
   loginUrl?: string;
+
+  /**
+   * @internal For testing only. Inject a mock Stripe client.
+   */
+  _stripeClient?: Stripe;
 }
 
 /**

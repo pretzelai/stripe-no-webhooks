@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 import type { Pool } from "pg";
-import type { BillingConfig } from "../BillingConfig";
+import type { BillingConfig, FeatureConfig } from "../BillingConfig";
+import { isUsageTrackingEnabled } from "../BillingConfig";
 import type { TaxConfig } from "../types";
 import { credits } from "./index";
 import * as db from "./db";
@@ -463,8 +464,9 @@ export function createTopUpHandler(deps: {
       };
     }
 
-    const creditConfig = plan.credits?.[key];
-    if (!creditConfig?.pricePerCredit) {
+    const features = plan.features || {};
+    const featureConfig = features[key];
+    if (!featureConfig?.pricePerCredit) {
       return {
         success: false,
         error: {
@@ -474,11 +476,22 @@ export function createTopUpHandler(deps: {
       };
     }
 
+    // Disallow top-ups when usage tracking is enabled
+    if (isUsageTrackingEnabled(featureConfig)) {
+      return {
+        success: false,
+        error: {
+          code: "TOPUP_NOT_CONFIGURED",
+          message: `Top-ups are disabled for ${key} because usage tracking is enabled`,
+        },
+      };
+    }
+
     const {
       pricePerCredit,
       minPerPurchase = 1,
       maxPerPurchase,
-    } = creditConfig;
+    } = featureConfig;
     if (amount < minPerPurchase) {
       return {
         success: false,
@@ -515,7 +528,7 @@ export function createTopUpHandler(deps: {
 
     // Use configured displayName if available, otherwise construct from ID
     const displayName =
-      creditConfig.displayName ||
+      featureConfig.displayName ||
       key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     if (!customer.defaultPaymentMethod) {
@@ -1049,17 +1062,23 @@ export function createTopUpHandler(deps: {
       return { triggered: false, reason: "not_configured" };
     }
 
-    const creditConfig = plan.credits?.[key];
-    if (!creditConfig?.pricePerCredit || !creditConfig.autoTopUp) {
+    const features = plan.features || {};
+    const featureConfig = features[key];
+    if (!featureConfig?.pricePerCredit || !featureConfig.autoTopUp) {
       return { triggered: false, reason: "not_configured" };
     }
 
-    const { pricePerCredit } = creditConfig;
+    // Disallow auto top-ups when usage tracking is enabled
+    if (isUsageTrackingEnabled(featureConfig)) {
+      return { triggered: false, reason: "not_configured" };
+    }
+
+    const { pricePerCredit } = featureConfig;
     const {
       threshold: balanceThreshold,
       amount: purchaseAmount,
       maxPerMonth = 10,
-    } = creditConfig.autoTopUp;
+    } = featureConfig.autoTopUp;
 
     // Validate config to fail fast with clear errors
     if (
@@ -1170,7 +1189,7 @@ export function createTopUpHandler(deps: {
 
     // Use configured displayName if available, otherwise construct from ID
     const displayName =
-      creditConfig.displayName ||
+      featureConfig.displayName ||
       key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     // Helper to record failure and fire callback

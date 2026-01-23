@@ -29,9 +29,9 @@ const TEST_BILLING_CONFIG: BillingConfig = {
         id: "team",
         name: "Team",
         price: [{ id: "price_team_monthly", amount: 2999, currency: "usd", interval: "month" }],
-        credits: {
-          api_calls: { allocation: 5000, onRenewal: "reset" },
-          storage_gb: { allocation: 50, onRenewal: "add" },
+        features: {
+          api_calls: { credits: { allocation: 5000, onRenewal: "reset" } },
+          storage_gb: { credits: { allocation: 50, onRenewal: "add" } },
         },
       },
       {
@@ -39,17 +39,17 @@ const TEST_BILLING_CONFIG: BillingConfig = {
         name: "Team Per Seat",
         price: [{ id: "price_team_per_seat", amount: 1999, currency: "usd", interval: "month" }],
         perSeat: true,
-        credits: {
-          api_calls: { allocation: 1000, onRenewal: "reset" },
+        features: {
+          api_calls: { credits: { allocation: 1000, onRenewal: "reset" } },
         },
       },
       {
         id: "enterprise",
         name: "Enterprise",
         price: [{ id: "price_enterprise", amount: 9999, currency: "usd", interval: "month" }],
-        credits: {
-          api_calls: { allocation: 100000, onRenewal: "reset" },
-          storage_gb: { allocation: 1000, onRenewal: "add" },
+        features: {
+          api_calls: { credits: { allocation: 100000, onRenewal: "reset" } },
+          storage_gb: { credits: { allocation: 1000, onRenewal: "add" } },
         },
       },
       {

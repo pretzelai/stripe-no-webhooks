@@ -13,16 +13,27 @@
  *   description: "For growing teams",
  *   price: [{ amount: 2000, currency: "usd", interval: "month" }],
  *
- *   // Credit-based features (tracked automatically)
- *   credits: {
+ *   // Billing features with credits, top-ups, and/or usage tracking
+ *   features: {
  *     api_calls: {
- *       allocation: 1000,
- *       displayName: "API Calls",  // Shows "1,000 API Calls/mo"
+ *       displayName: "API Calls",
+ *       credits: { allocation: 1000 },  // Shows "1,000 API Calls/month"
+ *     },
+ *     compute: {
+ *       displayName: "Compute Hours",
+ *       pricePerCredit: 10,  // Shows "Compute Hours at $0.10 each"
+ *       trackUsage: true,
+ *     },
+ *     storage: {
+ *       displayName: "Storage GB",
+ *       credits: { allocation: 50 },
+ *       pricePerCredit: 5,   // Shows "50 Storage GB/month, then $0.05 each"
+ *       trackUsage: true,
  *     }
  *   },
  *
- *   // Custom features (just text, no tracking)
- *   features: [
+ *   // Custom highlights (just text, no tracking)
+ *   highlights: [
  *     "Priority support",
  *     "Custom integrations",
  *     "Unlimited exports"
@@ -82,6 +93,39 @@ const getYearlyDiscount = (plan: Plan): number => {
   const yearly = plan.price?.find((p) => p.interval === "year");
   if (!monthly || !yearly || monthly.amount === 0) return 0;
   return Math.round((1 - yearly.amount / (monthly.amount * 12)) * 100);
+};
+
+// Normalized feature type for rendering
+type NormalizedFeature = {
+  allocation?: number;
+  displayName?: string;
+  onRenewal?: "reset" | "add";
+  /** Price per unit in cents (for usage-based billing) */
+  pricePerCredit?: number;
+  /** Whether usage tracking is enabled */
+  trackUsage?: boolean;
+};
+
+// Get features from plan that have credit allocations or usage pricing
+const getPlanFeatures = (plan: Plan): Record<string, NormalizedFeature> => {
+  if (!plan.features) return {};
+
+  const features: Record<string, NormalizedFeature> = {};
+  for (const [key, config] of Object.entries(plan.features)) {
+    const hasCredits = config.credits?.allocation !== undefined;
+    const hasUsagePricing = config.trackUsage && config.pricePerCredit !== undefined;
+
+    if (hasCredits || hasUsagePricing) {
+      features[key] = {
+        allocation: config.credits?.allocation,
+        displayName: config.displayName,
+        onRenewal: config.credits?.onRenewal,
+        pricePerCredit: config.pricePerCredit,
+        trackUsage: config.trackUsage,
+      };
+    }
+  }
+  return features;
 };
 
 // Get credit allocation scaled for the interval
@@ -386,18 +430,48 @@ export function PricingPage({
                   <p className="snw-unavailable-note">Only available {displayInterval}ly</p>
                 )}
 
-                {(plan.credits || plan.wallet || plan.features) && (
+                {(plan.features || plan.wallet || plan.highlights) && (
                   <ul className="snw-plan-features">
-                    {/* Credit-based features with scaled allocations */}
-                    {plan.credits && Object.entries(plan.credits).map(([type, config]) => {
+                    {/* Credit-based and usage-based features */}
+                    {Object.entries(getPlanFeatures(plan)).map(([type, config]) => {
                       const effectiveInterval = supportsInterval ? interval : displayInterval;
-                      const scaledAllocation = getScaledAllocation(config.allocation, effectiveInterval);
                       const intervalLabel = effectiveInterval === "year" ? "year" : "month";
+                      const featureName = config.displayName || type;
+                      const currency = displayPrice?.currency || "usd";
+
+                      // Format usage price (e.g., "$0.02" for 2 cents)
+                      const formatUsagePrice = (cents: number) => {
+                        return new Intl.NumberFormat("en-US", {
+                          style: "currency",
+                          currency: currency.toUpperCase(),
+                          minimumFractionDigits: cents < 100 ? 2 : 0,
+                          maximumFractionDigits: cents < 100 ? 4 : 2,
+                        }).format(cents / 100);
+                      };
+
+                      const hasCredits = config.allocation !== undefined;
+                      const hasUsage = config.trackUsage && config.pricePerCredit !== undefined;
+
+                      // Build the display text based on what's configured
+                      let displayText: string;
+                      if (hasCredits && hasUsage) {
+                        // Credits + Usage: "1,000 API Calls/month, then $0.02/call"
+                        const scaledAllocation = getScaledAllocation(config.allocation!, effectiveInterval);
+                        const usagePrice = formatUsagePrice(config.pricePerCredit!);
+                        displayText = `${scaledAllocation.toLocaleString()} ${featureName}/${intervalLabel}, then ${usagePrice} each`;
+                      } else if (hasCredits) {
+                        // Credits only: "1,000 API Calls/month"
+                        const scaledAllocation = getScaledAllocation(config.allocation!, effectiveInterval);
+                        displayText = `${scaledAllocation.toLocaleString()} ${featureName}${config.onRenewal === "add" ? " (accumulates)" : `/${intervalLabel}`}`;
+                      } else {
+                        // Usage only: "API Calls at $0.02 each"
+                        const usagePrice = formatUsagePrice(config.pricePerCredit!);
+                        displayText = `${featureName} at ${usagePrice} each`;
+                      }
 
                       return (
                         <li key={type} className={`snw-plan-feature ${isUnavailable ? "muted" : ""}`}>
-                          {scaledAllocation.toLocaleString()} {config.displayName || type}
-                          {config.onRenewal === "add" ? " (accumulates)" : `/${intervalLabel}`}
+                          {displayText}
                         </li>
                       );
                     })}
@@ -417,10 +491,10 @@ export function PricingPage({
                         </li>
                       );
                     })()}
-                    {/* Custom features */}
-                    {plan.features?.map((feature) => (
-                      <li key={feature} className={`snw-plan-feature ${isUnavailable ? "muted" : ""}`}>
-                        {feature}
+                    {/* Custom highlights */}
+                    {plan.highlights?.map((highlight) => (
+                      <li key={highlight} className={`snw-plan-feature ${isUnavailable ? "muted" : ""}`}>
+                        {highlight}
                       </li>
                     ))}
                   </ul>

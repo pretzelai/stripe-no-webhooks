@@ -57,7 +57,7 @@ describe("Billing Class", () => {
               {
                 name: "Pro",
                 price: [{ amount: 1000, currency: "usd", interval: "month" }],
-                credits: { api_calls: { allocation: 100 } },
+                features: { api_calls: { credits: { allocation: 100 } } },
               },
             ],
           },
