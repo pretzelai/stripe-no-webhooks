@@ -116,19 +116,29 @@ export function createCreditLifecycle(config: Config) {
     idempotencyPrefix?: string,
     interval?: PriceInterval
   ): Promise<void> {
+    console.log("[lifecycle] grantPlanCredits called", { userId, planName: plan.name, subscriptionId });
     const features = plan.features || {};
-    if (Object.keys(features).length === 0) return;
+    console.log("[lifecycle] grantPlanCredits features:", { featureKeys: Object.keys(features), features });
+    if (Object.keys(features).length === 0) {
+      console.log("[lifecycle] grantPlanCredits: no features, returning early");
+      return;
+    }
 
     const effectiveInterval = interval || "month";
 
     for (const [key, featureConfig] of Object.entries(features)) {
+      console.log("[lifecycle] grantPlanCredits processing feature:", { key, featureConfig, hasAllocation: !!featureConfig.credits?.allocation });
       // Skip features without credits allocation
-      if (!featureConfig.credits?.allocation) continue;
+      if (!featureConfig.credits?.allocation) {
+        console.log("[lifecycle] grantPlanCredits: skipping feature without allocation:", key);
+        continue;
+      }
 
       const idempotencyKey = idempotencyPrefix
         ? `${idempotencyPrefix}:${key}`
         : undefined;
       const scaledAmount = scaleAllocation(featureConfig, effectiveInterval);
+      console.log("[lifecycle] grantPlanCredits: granting", { key, scaledAmount, idempotencyKey });
       const newBalance = await credits.grant({
         userId,
         key,
@@ -137,6 +147,7 @@ export function createCreditLifecycle(config: Config) {
         sourceId: subscriptionId,
         idempotencyKey,
       });
+      console.log("[lifecycle] grantPlanCredits: granted", { key, newBalance });
       await callbacks?.onCreditsGranted?.({
         userId,
         key,
@@ -381,16 +392,29 @@ export function createCreditLifecycle(config: Config) {
 
   return {
     async onSubscriptionCreated(subscription: Stripe.Subscription): Promise<void> {
-      if (grantTo === "manual") return;
+      console.log("[lifecycle] onSubscriptionCreated called", { subscriptionId: subscription.id, grantTo });
+      if (grantTo === "manual") {
+        console.log("[lifecycle] grantTo is manual, skipping");
+        return;
+      }
 
       const plan = resolvePlan(subscription);
       const interval = getSubscriptionInterval(subscription);
       const currency = getSubscriptionCurrency(subscription);
 
+      console.log("[lifecycle] resolved plan:", {
+        planName: plan?.name,
+        hasFeatures: !!plan?.features,
+        featuresKeys: plan?.features ? Object.keys(plan.features) : [],
+        features: plan?.features,
+      });
+
       // Check if plan has any credits allocation
       const hasCredits = plan && planHasCredits(plan);
+      console.log("[lifecycle] planHasCredits result:", hasCredits);
 
       if (hasCredits && plan) {
+        console.log("[lifecycle] hasCredits is true, granting credits...");
         if (grantTo === "seat-users") {
           const firstSeatUserId = subscription.metadata?.first_seat_user_id;
           if (firstSeatUserId) {
@@ -405,10 +429,14 @@ export function createCreditLifecycle(config: Config) {
           }
         } else {
           const userId = await resolveUserId(subscription);
+          console.log("[lifecycle] resolved userId:", userId);
           if (userId) {
             await grantPlanCredits(userId, plan, subscription.id, "subscription", subscription.id, interval);
+            console.log("[lifecycle] grantPlanCredits completed");
           }
         }
+      } else {
+        console.log("[lifecycle] hasCredits is false, skipping credit grant");
       }
 
       if (plan?.wallet && grantTo !== "seat-users") {

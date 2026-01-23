@@ -125,10 +125,16 @@ export function defineConfig<const T extends BillingConfig>(config: T): T {
  * Check if a plan has any features with credit allocations.
  */
 export function planHasCredits(plan: Plan | null | undefined): boolean {
-  if (!plan?.features) return false;
-  return Object.values(plan.features).some(
+  console.log("[planHasCredits] checking plan:", { planName: plan?.name, hasFeatures: !!plan?.features, features: plan?.features });
+  if (!plan?.features) {
+    console.log("[planHasCredits] no features, returning false");
+    return false;
+  }
+  const result = Object.values(plan.features).some(
     (f) => f.credits?.allocation !== undefined && f.credits.allocation > 0
   );
+  console.log("[planHasCredits] result:", result);
+  return result;
 }
 
 /**
