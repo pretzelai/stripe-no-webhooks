@@ -77,7 +77,7 @@ Plans can also include credits, wallet, and usage-based billing:
   features: {
     api_calls: {
       credits: { allocation: 1000 },   // 1000 included/month
-      pricePerCredit: 1,               // $0.01 per extra call (top-ups)
+      pricePerCredit: 1,               // $0.01 per extra call (used for top-ups and usage billing)
       trackUsage: true,                // enable usage-based billing for overages
     },
   },
@@ -133,7 +133,7 @@ Your setup is complete! Now let's use it.
 
 ### Trigger a checkout
 
-You can [generate a full pricing page](#generate-a-pricing-page) with plan selection, monthly/yearly toggle, and checkout flow built-in. Or call `checkout()` directly:
+`stripe-no-webhooks` lets you [generate a full pricing page](#generate-a-pricing-page) with plan selection, monthly/yearly toggle, and checkout flow built-in. Or you can call `checkout()` directly:
 
 ```typescript
 import { checkout } from "stripe-no-webhooks/client";
@@ -186,6 +186,8 @@ await billing.wallet.consume({
 // Usage: record for end-of-period billing
 await billing.usage.record({ userId, key: "api_calls", amount: 1 });
 ```
+
+See the full set of features in the [Credits](./docs/credits.md), [Wallet](./docs/credits.md#wallet), and [Usage](./docs/usage.md) docs.
 
 ### Open billing portal
 
