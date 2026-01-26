@@ -8,8 +8,24 @@ import {
   type ConsumeResult,
   type AutoTopUpStatus,
 } from "./credits";
-import { wallet, type WalletBalance, type WalletEvent } from "./wallet";
-export type { WalletBalance, WalletEvent };
+import {
+  wallet,
+  createWalletTopUpHandler,
+  type WalletBalance,
+  type WalletEvent,
+  type WalletTopUpParams,
+  type WalletTopUpResult,
+  type WalletAutoTopUpResult,
+  type WalletAutoTopUpFailedCallbackParams,
+} from "./wallet";
+export type {
+  WalletBalance,
+  WalletEvent,
+  WalletTopUpParams,
+  WalletTopUpResult,
+  WalletAutoTopUpResult,
+  WalletAutoTopUpFailedCallbackParams,
+};
 import {
   initUsage,
   usage,
@@ -94,7 +110,7 @@ export type {
 export class Billing {
   readonly subscriptions: ReturnType<typeof createSubscriptionsApi>;
   readonly credits: ReturnType<typeof Billing.prototype.createCreditsApi>;
-  readonly wallet: typeof wallet;
+  readonly wallet: ReturnType<typeof Billing.prototype.createWalletApi>;
   readonly usage: ReturnType<typeof Billing.prototype.createUsageApi>;
   readonly seats: ReturnType<typeof createSeatsApi>;
 
@@ -190,8 +206,15 @@ export class Billing {
       onCreditsLow: callbacks?.onCreditsLow ?? creditsConfig?.onCreditsLow,
     };
 
+    // Wallet-specific callbacks
+    const walletCallbacks = {
+      onWalletTopUpCompleted: callbacks?.onWalletTopUpCompleted,
+      onWalletAutoTopUpFailed: callbacks?.onWalletAutoTopUpFailed,
+      onWalletLow: callbacks?.onWalletLow,
+    };
+
     this.credits = this.createCreditsApi(mergedCallbacks);
-    this.wallet = wallet;
+    this.wallet = this.createWalletApi(walletCallbacks);
     this.usage = this.createUsageApi({
       onUsageRecorded: callbacks?.onUsageRecorded,
     });
@@ -476,6 +499,91 @@ export class Billing {
     };
   }
 
+  createWalletApi(callbacks?: {
+    onWalletAutoTopUpFailed?: (
+      params: WalletAutoTopUpFailedCallbackParams
+    ) => void | Promise<void>;
+    onWalletTopUpCompleted?: (params: {
+      userId: string;
+      amountAdded: number;
+      amountCharged: number;
+      currency: string;
+      newBalance: WalletBalance;
+      sourceId: string;
+    }) => void | Promise<void>;
+    onWalletLow?: (params: {
+      userId: string;
+      balance: number;
+      threshold: number;
+    }) => void | Promise<void>;
+  }) {
+    const walletTopUpHandler = createWalletTopUpHandler({
+      stripe: this.stripe,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+      successUrl: this.defaultSuccessUrl || "",
+      cancelUrl: this.defaultCancelUrl || "",
+      tax: this.tax,
+      onWalletAutoTopUpFailed: callbacks?.onWalletAutoTopUpFailed,
+      onWalletTopUpCompleted: callbacks?.onWalletTopUpCompleted,
+      onWalletLow: callbacks?.onWalletLow,
+    });
+
+    // Helper to look up Stripe customer ID for error callbacks
+    const getStripeCustomerId = async (userId: string): Promise<string> => {
+      if (!this.pool) return "";
+      try {
+        const result = await this.pool.query(
+          `SELECT stripe_customer_id FROM ${this.schema}.user_stripe_customer_map WHERE user_id = $1`,
+          [userId]
+        );
+        return result.rows[0]?.stripe_customer_id ?? "";
+      } catch {
+        return "";
+      }
+    };
+
+    const consumeWallet = async (params: {
+      userId: string;
+      amount: number;
+      description?: string;
+      idempotencyKey?: string;
+    }): Promise<{ balance: WalletBalance }> => {
+      const result = await wallet.consume(params);
+
+      // Trigger auto top-up if balance dropped below threshold
+      // Both wallet balance and threshold are in cents
+      walletTopUpHandler
+        .triggerAutoTopUpIfNeeded({
+          userId: params.userId,
+          currentBalance: result.balance.amount,
+        })
+        .catch(async (err) => {
+          console.error("Wallet auto top-up error:", err);
+          const stripeCustomerId = await getStripeCustomerId(params.userId);
+          callbacks?.onWalletAutoTopUpFailed?.({
+            userId: params.userId,
+            stripeCustomerId,
+            trigger: "unexpected_error",
+            status: "action_required",
+            failureCount: 0,
+          });
+        });
+
+      return result;
+    };
+
+    return {
+      getBalance: wallet.getBalance,
+      add: wallet.add,
+      consume: consumeWallet,
+      getHistory: wallet.getHistory,
+      topUp: walletTopUpHandler.topUp,
+    };
+  }
+
   createUsageApi(callbacks?: {
     onUsageRecorded?: (params: {
       userId: string;
@@ -611,6 +719,20 @@ export class Billing {
       onCreditsLow: callbacks?.onCreditsLow,
     });
 
+    const walletTopUpHandler = createWalletTopUpHandler({
+      stripe: this.stripe,
+      pool: this.pool,
+      schema: this.schema,
+      billingConfig: this.billingConfig,
+      mode: this.mode,
+      successUrl: this.defaultSuccessUrl || "",
+      cancelUrl: this.defaultCancelUrl || "",
+      tax: taxConfig,
+      onWalletTopUpCompleted: callbacks?.onWalletTopUpCompleted,
+      onWalletAutoTopUpFailed: callbacks?.onWalletAutoTopUpFailed,
+      onWalletLow: callbacks?.onWalletLow,
+    });
+
     const routeContext: HandlerContext = {
       stripe: this.stripe,
       pool: this.pool,
@@ -633,6 +755,7 @@ export class Billing {
       sync: this.sync,
       creditLifecycle,
       topUpHandler,
+      walletTopUpHandler,
       callbacks,
       pool: this.pool,
       schema: this.schema,

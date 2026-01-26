@@ -4,6 +4,10 @@ import type { BillingConfig, PriceInterval } from "./BillingConfig";
 import type { TransactionSource } from "./credits";
 import type { CreditsGrantTo } from "./credits/lifecycle";
 import type { AutoTopUpFailedCallbackParams } from "./credits/topup";
+import type {
+  WalletAutoTopUpFailedCallbackParams,
+  WalletBalance,
+} from "./wallet";
 
 export interface User {
   id: string;
@@ -111,6 +115,25 @@ export interface StripeWebhookCallbacks {
       currency: string;
     }>;
     totalUsageCost: number;
+  }) => void | Promise<void>;
+
+  onWalletTopUpCompleted?: (params: {
+    userId: string;
+    amountAdded: number;
+    amountCharged: number;
+    currency: string;
+    newBalance: WalletBalance;
+    sourceId: string; // PaymentIntent ID (B2C) or Invoice ID (B2B)
+  }) => void | Promise<void>;
+
+  onWalletAutoTopUpFailed?: (
+    params: WalletAutoTopUpFailedCallbackParams
+  ) => void | Promise<void>;
+
+  onWalletLow?: (params: {
+    userId: string;
+    balance: number;
+    threshold: number;
   }) => void | Promise<void>;
 }
 
