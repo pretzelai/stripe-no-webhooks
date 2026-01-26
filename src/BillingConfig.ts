@@ -117,7 +117,7 @@ export type BillingConfig = {
   };
 };
 
-export function defineConfig<const T extends BillingConfig>(config: T): T {
+export function defineConfig(config: BillingConfig): BillingConfig {
   return config;
 }
 
@@ -127,7 +127,7 @@ export function defineConfig<const T extends BillingConfig>(config: T): T {
 export function planHasCredits(plan: Plan | null | undefined): boolean {
   if (!plan?.features) return false;
   return Object.values(plan.features).some(
-    (f) => f.credits?.allocation !== undefined && f.credits.allocation > 0
+    (f) => f.credits?.allocation !== undefined && f.credits.allocation > 0,
   );
 }
 
