@@ -487,17 +487,6 @@ export function createTopUpHandler(deps: {
       };
     }
 
-    // Disallow top-ups when usage tracking is enabled
-    if (isUsageTrackingEnabled(featureConfig)) {
-      return {
-        success: false,
-        error: {
-          code: "TOPUP_NOT_CONFIGURED",
-          message: `Top-ups are disabled for ${key} because usage tracking is enabled`,
-        },
-      };
-    }
-
     const {
       pricePerCredit,
       minPerPurchase = 1,
