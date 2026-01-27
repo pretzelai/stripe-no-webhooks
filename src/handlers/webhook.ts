@@ -4,6 +4,7 @@ import type { StripeSync } from "@pretzelai/stripe-sync-engine";
 import type { StripeWebhookCallbacks } from "../types";
 import type { CreditLifecycle } from "../credits/lifecycle";
 import type { TopUpHandler } from "../credits/topup";
+import type { WalletTopUpHandler } from "../wallet/topup";
 import {
   getCustomerIdFromSubscription,
   getUserIdFromStripeCustomer,
@@ -15,6 +16,7 @@ export interface WebhookContext {
   sync: StripeSync | null;
   creditLifecycle: CreditLifecycle;
   topUpHandler: TopUpHandler;
+  walletTopUpHandler?: WalletTopUpHandler;
   callbacks?: StripeWebhookCallbacks;
   pool: Pool | null;
   schema: string;
@@ -412,10 +414,16 @@ async function handleEvent(
     case "invoice.paid": {
       const invoice = event.data.object as Stripe.Invoice;
 
-      // Handle top-up invoices (B2B mode)
+      // Handle credit top-up invoices (B2B mode)
       // Credits are typically granted inline, but webhook handles edge cases
       if (invoice.metadata?.top_up_key) {
         await ctx.topUpHandler.handleInvoicePaid(invoice);
+        break;
+      }
+
+      // Handle wallet top-up invoices (B2B mode)
+      if (invoice.metadata?.wallet_top_up && ctx.walletTopUpHandler) {
+        await ctx.walletTopUpHandler.handleInvoicePaid(invoice);
         break;
       }
 
@@ -483,9 +491,14 @@ async function handleEvent(
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
 
-      // Handle top-up recovery checkout completion
+      // Handle credit top-up recovery checkout completion
       if (session.metadata?.top_up_key) {
         await ctx.topUpHandler.handleTopUpCheckoutCompleted(session);
+      }
+
+      // Handle wallet top-up recovery checkout completion
+      if (session.metadata?.wallet_top_up && ctx.walletTopUpHandler) {
+        await ctx.walletTopUpHandler.handleTopUpCheckoutCompleted(session);
       }
 
       // Handle setup mode upgrade: user upgraded from Free/no-payment-method plan
@@ -509,8 +522,13 @@ async function handleEvent(
     case "payment_intent.succeeded": {
       const paymentIntent = event.data.object as Stripe.PaymentIntent;
 
-      // Handle successful top-up payment
+      // Handle successful credit top-up payment
       await ctx.topUpHandler.handlePaymentIntentSucceeded(paymentIntent);
+
+      // Handle successful wallet top-up payment
+      if (ctx.walletTopUpHandler) {
+        await ctx.walletTopUpHandler.handlePaymentIntentSucceeded(paymentIntent);
+      }
       break;
     }
 
@@ -522,6 +540,9 @@ async function handleEvent(
 
       // Clear top-up failures if payment method changed
       await ctx.topUpHandler.handleCustomerUpdated(customer, previousAttributes);
+      if (ctx.walletTopUpHandler) {
+        await ctx.walletTopUpHandler.handleCustomerUpdated(customer, previousAttributes);
+      }
       break;
     }
 

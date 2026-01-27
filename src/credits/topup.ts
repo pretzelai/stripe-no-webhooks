@@ -423,6 +423,17 @@ export function createTopUpHandler(deps: {
   async function topUp(params: TopUpParams): Promise<TopUpResult> {
     const { userId, key, amount, idempotencyKey } = params;
 
+    // Validate amount is a valid positive integer
+    if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount <= 0) {
+      return {
+        success: false,
+        error: {
+          code: "INVALID_AMOUNT",
+          message: "Amount must be a positive integer",
+        },
+      };
+    }
+
     const customer = await getCustomerByUserId(userId);
     if (!customer) {
       return {
@@ -472,17 +483,6 @@ export function createTopUpHandler(deps: {
         error: {
           code: "TOPUP_NOT_CONFIGURED",
           message: `Top-up not configured for ${key}`,
-        },
-      };
-    }
-
-    // Disallow top-ups when usage tracking is enabled
-    if (isUsageTrackingEnabled(featureConfig)) {
-      return {
-        success: false,
-        error: {
-          code: "TOPUP_NOT_CONFIGURED",
-          message: `Top-ups are disabled for ${key} because usage tracking is enabled`,
         },
       };
     }

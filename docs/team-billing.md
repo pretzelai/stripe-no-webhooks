@@ -2,9 +2,17 @@
 
 Bill organizations instead of individuals.
 
+## When to Use
+
+- You want to bill a company/team, not individual users
+- One subscription covers multiple team members
+- Optionally charge per seat ($X/user/month)
+
+---
+
 ## Setup
 
-Add `resolveOrg` to your billing config to enable org billing:
+Add `resolveOrg` to your billing config:
 
 ```typescript
 // lib/billing.ts
@@ -21,71 +29,71 @@ export const billing = new Billing({
     return userId ? { id: userId } : null;
   },
 
-  // Enable org billing
+  // Return org ID when doing org billing
   resolveOrg: async () => {
-    // Return the org ID if this is an org checkout, null otherwise
-    // You decide how to determine this (session state, user's current org, etc.)
     const session = await getSession();
-    return session.currentOrgId ?? null;
+    return session.currentOrgId ?? null;  // null = bill user, string = bill org
   },
 });
 ```
 
-Then your route handler is zero-config:
-
-```typescript
-// app/api/stripe/[...all]/route.ts
-import { billing } from "@/lib/billing";
-
-const handler = billing.createHandler();
-
-export const POST = handler;
-export const GET = handler;
-```
-
 When `resolveOrg` returns an org ID:
+- The org becomes the Stripe customer
+- Subscriptions are tied to the org, not the user
+- Credits/wallet go to the org (shared pool)
 
-- The org becomes the Stripe customer (billing entity)
-- In `seat-users` mode, the user (from `resolveUser`) becomes the first seat
+---
 
-## Frontend
+## Checkout
 
-The frontend just requests the plan—no org ID needed:
+The frontend is the same—no org ID needed:
 
 ```typescript
-checkout({
-  planName: "Team",
-  interval: "month",
-});
+checkout({ planName: "Team", interval: "month" });
 ```
 
-The server determines which org to bill via your `resolveOrg` function.
+The server uses your `resolveOrg` function to determine which org to bill.
+
+---
+
+## Check Org Subscription
+
+```typescript
+// Check if org has active subscription
+const subscription = await billing.subscriptions.get({ userId: orgId });
+
+if (subscription?.status === "active") {
+  // Org is subscribed
+}
+```
+
+Note: For org billing, pass the `orgId` as `userId` to subscription methods.
+
+---
 
 ## Credit Distribution
 
 Two modes via `grantTo` config:
 
-| Mode                     | Credits go to                 |
-| ------------------------ | ----------------------------- |
-| `"subscriber"` (default) | Org (shared pool)             |
-| `"seat-users"`           | Each team member individually |
+| Mode | Credits go to | Use case |
+|------|---------------|----------|
+| `"subscriber"` (default) | The org (shared pool) | Team shares a quota |
+| `"seat-users"` | Each team member | Individual quotas |
 
-### Shared Pool
+### Shared Pool (Default)
 
-```typescript
-// lib/billing.ts - credits go to subscriber (org) by default
-import { Billing } from "stripe-no-webhooks";
-
-export const billing = new Billing({ billingConfig });
-```
+All team members consume from the org's balance:
 
 ```typescript
-// Anywhere in your app
-import { billing } from "@/lib/billing";
+// Check org's balance
+const balance = await billing.credits.getBalance({
+  userId: orgId,  // org ID
+  key: "api_calls",
+});
 
-// All team members consume from org's balance
+// Consume from org's pool
 await billing.credits.consume({
-  userId: "org_456", // org ID
+  userId: orgId,  // org ID
   key: "api_calls",
   amount: 1,
 });
@@ -93,45 +101,49 @@ await billing.credits.consume({
 
 ### Per-Seat Credits
 
+Each team member gets their own allocation:
+
 ```typescript
 // lib/billing.ts
-import { Billing } from "stripe-no-webhooks";
-
 export const billing = new Billing({
   billingConfig,
   credits: { grantTo: "seat-users" },
 });
 ```
 
-Each team member gets their own credit allocation automatically when you add seats:
+Manage seats:
 
 ```typescript
-import { billing } from "@/lib/billing";
-
-// Add members
+// Add member (grants them credits)
 await billing.seats.add({ userId: "user_123", orgId: "org_456" });
 
-// Remove members
+// Remove member (revokes their credits)
 await billing.seats.remove({ userId: "user_123", orgId: "org_456" });
 
-// Consume individual credits
+// Consume from individual's balance
 await billing.credits.consume({
-  userId: "user_123", // individual user
+  userId: "user_123",  // user ID, not org
   key: "api_calls",
   amount: 1,
 });
 ```
 
-## Per-Seat Billing
+---
+
+## Per-Seat Pricing
 
 Charge per team member ($X/user/month):
 
 ```typescript
 {
   name: "Team",
-  price: [{ amount: 1000, currency: "usd", interval: "month" }],
+  price: [{ amount: 1000, currency: "usd", interval: "month" }],  // $10/seat/month
   perSeat: true,
 }
 ```
 
-`seats.add` increments subscription quantity (prorated). `seats.remove` decrements it.
+When `perSeat: true`:
+- `seats.add()` increments subscription quantity (prorated)
+- `seats.remove()` decrements subscription quantity (prorated)
+
+The first seat is the user who subscribes.

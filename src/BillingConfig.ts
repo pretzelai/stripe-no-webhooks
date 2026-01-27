@@ -62,8 +62,17 @@ export type FeatureConfig = {
   meteredPriceId?: string;
 };
 
+export type WalletAutoTopUpConfig = {
+  /** Trigger auto top-up when balance drops below this threshold (in cents) */
+  threshold: number;
+  /** Amount to add when auto top-up triggers (in cents) */
+  amount: number;
+  /** Maximum auto top-ups per calendar month (default: 10) */
+  maxPerMonth?: number;
+};
+
 export type WalletConfig = {
-  /** Amount to add per billing period */
+  /** Amount to add per billing period (in cents) */
   allocation: number;
   /**
    * Human-readable name shown on pricing page.
@@ -77,6 +86,12 @@ export type WalletConfig = {
    * - 'add': Add allocation to current balance (balance accumulates, negative is paid back)
    */
   onRenewal?: "reset" | "add";
+  /** Minimum amount per top-up purchase (in cents). Default: 50 (Stripe minimum) */
+  minPerPurchase?: number;
+  /** Maximum amount per top-up purchase (in cents) */
+  maxPerPurchase?: number;
+  /** Configure automatic top-ups when balance drops below threshold */
+  autoTopUp?: WalletAutoTopUpConfig;
 };
 
 export type Plan = {

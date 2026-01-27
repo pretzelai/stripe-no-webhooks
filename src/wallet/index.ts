@@ -231,3 +231,19 @@ export const wallet = {
   consume,
   getHistory,
 };
+
+// Re-export top-up types
+export {
+  createWalletTopUpHandler,
+  type WalletTopUpHandler,
+  type WalletTopUpParams,
+  type WalletTopUpResult,
+  type WalletTopUpSuccess,
+  type WalletTopUpPending,
+  type WalletTopUpFailure,
+  type WalletAutoTopUpResult,
+  type WalletAutoTopUpTriggered,
+  type WalletAutoTopUpSkipped,
+  type WalletAutoTopUpFailed,
+  type WalletAutoTopUpFailedCallbackParams,
+} from "./topup";

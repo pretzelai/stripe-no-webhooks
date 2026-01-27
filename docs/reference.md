@@ -1,144 +1,129 @@
 # API Reference
 
-Quick lookup for all APIs.
+Complete reference for all APIs.
 
-## Client
+## Contents
+
+- [Billing Client](#billing-client)
+- [HTTP Routes](#http-routes)
+- [Subscriptions API](#subscriptions-api)
+- [Credits API](#credits-api)
+- [Wallet API](#wallet-api)
+- [Usage API](#usage-api)
+- [Seats API](#seats-api)
+- [Callbacks](#callbacks)
+- [BillingConfig Types](#billingconfig-types)
+- [Frontend Client](#frontend-client)
+- [CLI Commands](#cli-commands)
+
+---
+
+## Billing Client
 
 ```typescript
 import { Billing } from "stripe-no-webhooks";
 
-// Create once in lib/billing.ts
 const billing = new Billing({
-  stripeSecretKey: string, // Default: STRIPE_SECRET_KEY env
-  stripeWebhookSecret: string, // Default: STRIPE_WEBHOOK_SECRET env
-  databaseUrl: string, // Default: DATABASE_URL env
-  schema: string, // Default: "stripe"
+  // Connection (default to env vars)
+  stripeSecretKey?: string,      // Default: STRIPE_SECRET_KEY
+  stripeWebhookSecret?: string,  // Default: STRIPE_WEBHOOK_SECRET
+  databaseUrl?: string,          // Default: DATABASE_URL
+  schema?: string,               // Default: "stripe"
+
+  // Required
   billingConfig: BillingConfig,
   successUrl: string,
   cancelUrl: string,
-
-  // REQUIRED: Resolve authenticated user from request
   resolveUser: (request: Request) => User | null | Promise<User | null>,
 
-  // OPTIONAL: Resolve org for team/org billing
-  resolveOrg: (request: Request) => string | null | Promise<string | null>,
-
-  credits: {
-    grantTo: "subscriber" | "organization" | "seat-users" | "manual",
-  },
-
-  // Tax configuration (see docs/tax.md for details)
-  tax: {
-    automaticTax: boolean,              // Enable Stripe Tax
-    billingAddressCollection: "auto" | "required",
-    taxIdCollection: boolean,           // Collect VAT/GST IDs
-    customerUpdate: {
-      address: "auto" | "never",
-      name: "auto" | "never",
-    },
-  },
-
-  // Callbacks for subscription and credit events
-  callbacks: StripeWebhookCallbacks,
-
-  // Map user ID to existing Stripe customer ID (for migrations)
-  mapUserIdToStripeCustomerId: (userId: string) =>
-    string | null | Promise<string | null>,
+  // Optional
+  resolveOrg?: (request: Request) => string | null | Promise<string | null>,
+  callbacks?: StripeWebhookCallbacks,
+  tax?: TaxConfig,
+  credits?: { grantTo: "subscriber" | "organization" | "seat-users" | "manual" },
+  mapUserIdToStripeCustomerId?: (userId: string) => string | null | Promise<string | null>,
 });
 
-// Properties and methods
-billing.mode        // "test" | "production" - based on STRIPE_SECRET_KEY
+// Properties
+billing.mode  // "test" | "production" - based on STRIPE_SECRET_KEY
 billing.getPlans()  // Returns plans for current mode
-```
 
-## Handler
-
-```typescript
-// Create HTTP handler - typically zero-config since resolveUser is on Billing instance
+// Create HTTP handler
 const handler = billing.createHandler();
 
-export const POST = handler;
-export const GET = handler;
-
-// Or with optional overrides (rarely needed)
-export const POST = billing.createHandler({
-  // Override resolveUser for this specific handler
-  resolveUser: (request: Request) => User | null | Promise<User | null>,
-
-  // Override resolveOrg for this specific handler
-  resolveOrg: (request: Request) => string | null | Promise<string | null>,
-
-  // Override callbacks for this specific handler
-  callbacks: StripeWebhookCallbacks,
-});
-
-// User type
-type User = {
-  id: string;
-  name?: string;
-  email?: string;
-};
+// Assign user to a free plan (useful on login/signup)
+await billing.assignFreePlan({
+  userId: string,
+  planName?: string,     // Optional - auto-detects if only one free plan
+  interval?: "month" | "year" | "week",  // Default: "month"
+}): Promise<Stripe.Subscription | null>  // null if user already has subscription
 ```
 
-All config should be defined on the `Billing` instance. Handler-level overrides are only needed for special cases (e.g., different auth for a specific route).
+---
 
-## Routes
+## HTTP Routes
 
-The handler responds to POST requests:
+The handler responds to these endpoints:
 
-| Endpoint           | Description                                    |
-| ------------------ | ---------------------------------------------- |
-| `/checkout`        | Create checkout session                        |
-| `/webhook`         | Handle Stripe webhooks                         |
-| `/customer_portal` | Open billing portal                            |
-| `/billing`         | Get plans and current subscription (for UI)    |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/checkout` | POST | Create checkout session |
+| `/webhook` | POST | Handle Stripe webhooks |
+| `/customer_portal` | POST | Open billing portal |
+| `/billing` | POST | Get plans and current subscription |
+| `/recovery` | GET | Redirect to Customer Portal for payment recovery |
 
-### Calling from the browser
+### Browser Usage
 
-When using `fetch()` from the browser, send the `Accept: application/json` header to receive a JSON response with the URL. Without this header, the server returns a 303 redirect which causes CORS errors.
+Send `Accept: application/json` header to get JSON response (avoids CORS issues):
 
 ```typescript
-// Checkout
 const res = await fetch("/api/stripe/checkout", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    Accept: "application/json",
+    "Accept": "application/json",
   },
   body: JSON.stringify({ planName: "Pro", interval: "month" }),
 });
 const { url } = await res.json();
 window.location.href = url;
-
-// Customer Portal
-const res = await fetch("/api/stripe/customer_portal", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  },
-});
-const { url } = await res.json();
-window.location.href = url;
 ```
+
+---
 
 ## Subscriptions API
 
 ```typescript
 // Check if user has active subscription
-await billing.subscriptions.isActive({ userId: string }): Promise<boolean>
+await billing.subscriptions.isActive({ userId }): Promise<boolean>
 
 // Get current subscription
-await billing.subscriptions.get({ userId: string }): Promise<Subscription | null>
+await billing.subscriptions.get({ userId }): Promise<Subscription | null>
 
 // List all subscriptions
-await billing.subscriptions.list({ userId: string }): Promise<Subscription[]>
+await billing.subscriptions.list({ userId }): Promise<Subscription[]>
 
-// Check payment status (for showing warnings in UI)
-await billing.subscriptions.getPaymentStatus({ userId: string }): Promise<SubscriptionPaymentStatus>
+// Check payment status (for showing warnings)
+await billing.subscriptions.getPaymentStatus({ userId }): Promise<SubscriptionPaymentStatus>
 ```
 
+### Types
+
 ```typescript
+type Subscription = {
+  id: string;
+  status: "active" | "trialing" | "past_due" | "canceled" | "unpaid" | "incomplete" | "paused";
+  plan: {
+    id: string;
+    name: string;
+    priceId: string;
+  } | null;
+  currentPeriodStart: Date;
+  currentPeriodEnd: Date;
+  cancelAtPeriodEnd: boolean;
+};
+
 type SubscriptionPaymentStatus = {
   status: "ok" | "past_due" | "unpaid" | "no_subscription";
   failedInvoice?: {
@@ -147,170 +132,140 @@ type SubscriptionPaymentStatus = {
     currency: string;
     attemptCount: number;
     nextPaymentAttempt: Date | null;
-    hostedInvoiceUrl: string | null;  // Direct link for user to pay
+    hostedInvoiceUrl: string | null;
   };
 };
 ```
 
-```typescript
-type SubscriptionStatus =
-  | "active"
-  | "trialing"
-  | "past_due"
-  | "canceled"
-  | "unpaid"
-  | "incomplete"
-  | "paused";
-
-type Subscription = {
-  id: string;
-  status: SubscriptionStatus;
-  plan: {
-    id: string;
-    name: string;
-    priceId: string;  // Use this to look up the interval from your billing config
-  } | null;
-  currentPeriodStart: Date;
-  currentPeriodEnd: Date;
-  cancelAtPeriodEnd: boolean;
-};
-
-// To get the billing interval, look up the price in your config:
-const price = plan.price.find(p => p.id === subscription.plan.priceId);
-const interval = price?.interval; // "month" | "year" | "week"
-```
+---
 
 ## Credits API
 
-All methods on `billing.credits`:
-
-### Read
+### Read Methods
 
 ```typescript
 // Get balance for one credit type
-await billing.credits.getBalance({ userId: string, key: string }): Promise<number>
+await billing.credits.getBalance({ userId, key }): Promise<number>
 
 // Get all balances
-await billing.credits.getAllBalances({ userId: string }): Promise<Record<string, number>>
+await billing.credits.getAllBalances({ userId }): Promise<Record<string, number>>
 
 // Check if user has enough
-await billing.credits.hasCredits({ userId: string, key: string, amount: number }): Promise<boolean>
+await billing.credits.hasCredits({ userId, key, amount }): Promise<boolean>
 
 // Get transaction history
-await billing.credits.getHistory({
-  userId: string,
-  key?: string,
-  limit?: number,
-  offset?: number,
-}): Promise<CreditTransaction[]>
+await billing.credits.getHistory({ userId, key?, limit?, offset? }): Promise<CreditTransaction[]>
 
 // Check for saved payment method
-await billing.credits.hasPaymentMethod({ userId: string }): Promise<boolean>
+await billing.credits.hasPaymentMethod({ userId }): Promise<boolean>
 
-// Check if auto top-up is blocked (and why)
-await billing.credits.getAutoTopUpStatus({ userId: string, key: string }): Promise<AutoTopUpStatus | null>
-
-// Unblock auto top-up after user updates payment method
-await billing.credits.unblockAutoTopUp({ userId: string, key: string }): Promise<void>
-
-// Unblock all auto top-ups for user
-await billing.credits.unblockAllAutoTopUps({ userId: string }): Promise<void>
+// Check auto top-up status
+await billing.credits.getAutoTopUpStatus({ userId, key }): Promise<AutoTopUpStatus | null>
 ```
 
-### Write
+### Write Methods
 
 ```typescript
-// Consume credits (with auto top-up if configured)
+// Consume credits (always succeeds, balance can go negative)
 await billing.credits.consume({
-  userId: string,
-  key: string,
-  amount: number,
-  description?: string,
-  metadata?: Record<string, unknown>,
-  idempotencyKey?: string,
-}): Promise<{ success: true, balance: number } | { success: false, balance: number }>
+  userId,
+  key,
+  amount,
+  description?,
+  metadata?,
+  idempotencyKey?,
+}): Promise<{ success: true, balance: number }>
 
-// Grant credits
+// Grant credits (ledger operation - doesn't charge anyone)
 await billing.credits.grant({
-  userId: string,
-  key: string,
-  amount: number,
-  source?: TransactionSource,
-  sourceId?: string,
-  description?: string,
-  idempotencyKey?: string,
+  userId,
+  key,
+  amount,
+  source?,
+  sourceId?,
+  description?,
+  idempotencyKey?,
 }): Promise<number>  // Returns new balance
 
-// Revoke specific amount
+// Purchase credits (charges customer's card)
+await billing.credits.topUp({
+  userId,
+  key,
+  amount,
+  idempotencyKey?,
+}): Promise<TopUpResult>
+
+// Revoke credits
 await billing.credits.revoke({
-  userId: string,
-  key: string,
-  amount: number,
-  source?: "cancellation" | "manual" | "seat_revoke",
-  sourceId?: string,
+  userId,
+  key,
+  amount,
+  source?,
+  sourceId?,
 }): Promise<{ balance: number, amountRevoked: number }>
 
 // Revoke all of a credit type
-await billing.credits.revokeAll({
-  userId: string,
-  key: string,
-}): Promise<{ amountRevoked: number }>
+await billing.credits.revokeAll({ userId, key }): Promise<{ amountRevoked: number }>
 
 // Set exact balance
 await billing.credits.setBalance({
-  userId: string,
-  key: string,
-  balance: number,
-  reason?: string,
+  userId,
+  key,
+  balance,
+  reason?,
 }): Promise<{ previousBalance: number }>
 
-// Purchase credits
-await billing.credits.topUp({
-  userId: string,
-  key: string,
-  amount: number,
-}): Promise<TopUpResult>
+// Unblock auto top-up
+await billing.credits.unblockAutoTopUp({ userId, key }): Promise<void>
+await billing.credits.unblockAllAutoTopUps({ userId }): Promise<void>
 ```
+
+---
 
 ## Wallet API
 
 ```typescript
-import { wallet } from "stripe-no-webhooks";
+// Get balance (returns null if no wallet)
+await billing.wallet.getBalance({ userId }): Promise<WalletBalance | null>
 
-// Get balance
-await wallet.getBalance({ userId: string }): Promise<WalletBalance | null>
-
-type WalletBalance = {
-  amount: number;
-  formatted: string;  // "$3.50" or "-$1.50"
-  currency: string;
-};
-
-// Add funds
-await wallet.add({
-  userId: string,
-  amount: number,
-  currency?: string,
-  source?: TransactionSource,
-  sourceId?: string,
-  description?: string,
-  idempotencyKey?: string,
+// Add funds (ledger operation - doesn't charge anyone)
+await billing.wallet.add({
+  userId,
+  amount,         // cents
+  currency?,      // default: "usd"
+  source?,
+  sourceId?,
+  description?,
+  idempotencyKey?,
 }): Promise<{ balance: WalletBalance }>
 
-// Consume (always succeeds, can go negative)
-await wallet.consume({
-  userId: string,
-  amount: number,
-  description?: string,
-  idempotencyKey?: string,
+// Consume (balance can go negative)
+await billing.wallet.consume({
+  userId,
+  amount,         // cents
+  description?,
+  idempotencyKey?,
 }): Promise<{ balance: WalletBalance }>
 
 // Get transaction history
-await wallet.getHistory({
-  userId: string,
-  limit?: number,
-  offset?: number,
-}): Promise<WalletEvent[]>
+await billing.wallet.getHistory({ userId, limit?, offset? }): Promise<WalletEvent[]>
+
+// Purchase wallet balance (charges customer's card)
+await billing.wallet.topUp({
+  userId,
+  amount,         // cents to add
+  idempotencyKey?,
+}): Promise<WalletTopUpResult>
+```
+
+### Types
+
+```typescript
+type WalletBalance = {
+  amount: number;      // cents (can be negative)
+  formatted: string;   // "$3.50" or "-$1.50"
+  currency: string;
+};
 
 type WalletEvent = {
   id: string;
@@ -322,69 +277,109 @@ type WalletEvent = {
   description?: string;
   createdAt: Date;
 };
+
+type WalletTopUpResult =
+  | { success: true; balance: WalletBalance; sourceId: string }
+  | { success: false; error: { code: string; message: string; recoveryUrl?: string } };
 ```
 
-See [Credits & Wallet](./credits.md#wallet) for details on negative balances and renewal behavior.
+---
 
 ## Usage API
 
 ```typescript
 // Record usage (sends to Stripe Meter + stores locally)
 await billing.usage.record({
-  userId: string,
-  key: string,           // Feature key from config (must have trackUsage: true)
-  amount?: number,       // Units consumed (default: 1)
-}): Promise<void>
+  userId,
+  key,           // Feature key (must have trackUsage: true)
+  amount,        // Units to record (required)
+  timestamp?,    // Optional timestamp (defaults to now)
+}): Promise<RecordUsageResult>
 
 // Get usage summary for current billing period
-await billing.usage.getSummary({
-  userId: string,
-  key: string,
-}): Promise<UsageSummary | null>
+await billing.usage.getSummary({ userId, key }): Promise<UsageSummary>
+
+// Get usage event history
+await billing.usage.getHistory({
+  userId,
+  key,
+  limit?,        // Default: 50
+  offset?,
+}): Promise<UsageEvent[]>
+
+// Enable usage billing for existing subscriber
+// (adds metered price to subscription if not already present)
+await billing.usage.enableForUser({ userId, key }): Promise<void>
+```
+
+### Types
+
+```typescript
+type RecordUsageResult = {
+  event: UsageEvent;
+  meterEventId: string;
+};
+
+type UsageEvent = {
+  id: string;
+  userId: string;
+  key: string;
+  amount: number;
+  stripeMeterEventId: string;
+  periodStart: Date;
+  periodEnd: Date;
+  createdAt: Date;
+};
 
 type UsageSummary = {
-  totalAmount: number;     // Total units consumed this period
-  estimatedCost: number;   // totalAmount × pricePerCredit (in cents)
-  period: {
-    start: Date;
-    end: Date;
-  };
+  totalAmount: number;    // Units consumed this period
+  eventCount: number;     // Number of usage events
+  estimatedCost: number;  // totalAmount × pricePerCredit (cents)
+  currency: string;       // e.g., "usd"
+  periodStart: Date;
+  periodEnd: Date;
 };
 ```
 
-See [Usage-Based Billing](./usage.md) for configuration and examples.
+---
 
 ## Seats API
+
+For team billing with per-seat credit grants:
 
 ```typescript
 // Add user as seat
 await billing.seats.add({
-  userId: string,
-  orgId: string,
+  userId,
+  orgId,
 }): Promise<{ success: true, creditsGranted: Record<string, number> }
-            | { success: false, error: string }>
+          | { success: false, error: string }>
 
 // Remove user as seat
 await billing.seats.remove({
-  userId: string,
-  orgId: string,
+  userId,
+  orgId,
 }): Promise<{ success: true, creditsRevoked: Record<string, number> }
-            | { success: false, error: string }>
+          | { success: false, error: string }>
 ```
+
+---
 
 ## Callbacks
 
-Define callbacks when creating the `Billing` instance:
-
 ```typescript
-// lib/billing.ts
 const billing = new Billing({
   billingConfig,
   callbacks: {
+    // Subscription events
     onSubscriptionCreated?: (subscription: Stripe.Subscription) => void,
     onSubscriptionCancelled?: (subscription: Stripe.Subscription) => void,
     onSubscriptionRenewed?: (subscription: Stripe.Subscription) => void,
-
+    onSubscriptionPlanChanged?: (params: {
+      subscription: Stripe.Subscription,
+      previousPlanId: string,
+      newPlanId: string,
+    }) => void,
     onSubscriptionPaymentFailed?: (params: {
       userId: string,
       stripeCustomerId: string,
@@ -395,12 +390,13 @@ const billing = new Billing({
       stripeDeclineCode?: string,
       failureMessage?: string,
       attemptCount: number,
-      nextPaymentAttempt: Date | null,  // null if final attempt
+      nextPaymentAttempt: Date | null,
       willRetry: boolean,
       planName?: string,
       priceId: string,
     }) => void,
 
+    // Credit events
     onCreditsGranted?: (params: {
       userId: string,
       key: string,
@@ -409,7 +405,6 @@ const billing = new Billing({
       source: TransactionSource,
       sourceId?: string,
     }) => void,
-
     onCreditsRevoked?: (params: {
       userId: string,
       key: string,
@@ -418,7 +413,6 @@ const billing = new Billing({
       newBalance: number,
       source: "cancellation" | "manual" | "seat_revoke",
     }) => void,
-
     onCreditsLow?: (params: {
       userId: string,
       key: string,
@@ -426,6 +420,7 @@ const billing = new Billing({
       threshold: number,
     }) => void,
 
+    // Top-up events
     onTopUpCompleted?: (params: {
       userId: string,
       key: string,
@@ -433,9 +428,8 @@ const billing = new Billing({
       amountCharged: number,
       currency: string,
       newBalance: number,
-      sourceId: string, // PaymentIntent ID (B2C) or Invoice ID (B2B)
+      sourceId: string,
     }) => void,
-
     onAutoTopUpFailed?: (params: {
       userId: string,
       stripeCustomerId: string,
@@ -449,16 +443,48 @@ const billing = new Billing({
       stripeDeclineCode?: string,
     }) => void,
 
+    // Usage events
     onUsageRecorded?: (params: {
       userId: string,
       key: string,
       amount: number,
-    }) => void,
+      totalForPeriod: number,
+      estimatedCost: number,
+      currency: string,
+      periodStart: Date,
+      periodEnd: Date,
+    }) => void | Promise<void>,
+
+    // Wallet events
+    onWalletLow?: (params: {
+      userId: string,
+      balance: number,
+      threshold: number,
+    }) => void | Promise<void>,
+    onWalletTopUpCompleted?: (params: {
+      userId: string,
+      amountAdded: number,
+      amountCharged: number,
+      currency: string,
+      newBalance: WalletBalance,
+      sourceId: string,
+    }) => void | Promise<void>,
+    onWalletAutoTopUpFailed?: (params: {
+      userId: string,
+      stripeCustomerId: string,
+      trigger: string,
+      status: "will_retry" | "action_required",
+      nextAttemptAt?: Date,
+      failureCount: number,
+      stripeDeclineCode?: string,
+    }) => void | Promise<void>,
   },
 });
 ```
 
-## BillingConfig
+---
+
+## BillingConfig Types
 
 ```typescript
 type BillingConfig = {
@@ -467,243 +493,141 @@ type BillingConfig = {
 };
 
 type Plan = {
-  id?: string;
+  id?: string;           // Set by sync
   name: string;
   description?: string;
   price: Price[];
-  features?: Record<string, FeatureConfig>;  // Credits, top-ups, and/or usage tracking
+  features?: Record<string, FeatureConfig>;
   wallet?: WalletConfig;
-  highlights?: string[];  // Custom bullet points for pricing page
+  highlights?: string[];  // Bullet points for pricing page
   perSeat?: boolean;
 };
 
 type Price = {
-  id?: string; // Set by sync command
-  amount: number; // In cents
+  id?: string;           // Set by sync
+  amount: number;        // cents
   currency: string;
   interval: "month" | "year" | "week" | "one_time";
 };
 
-// Example: Plan with monthly and yearly pricing
-{
-  name: "Pro",
-  price: [
-    { amount: 2000, currency: "usd", interval: "month" },   // $20/mo
-    { amount: 20000, currency: "usd", interval: "year" },   // $200/yr (17% savings)
-  ],
-  features: {
-    api_calls: {
-      displayName: "API Calls",
-      credits: { allocation: 1000 },  // Yearly gets 12,000 upfront
-      pricePerCredit: 10,             // 10 cents for top-ups or usage
-      trackUsage: true,               // Enable usage-based billing
-    },
-  },
-}
-
 type FeatureConfig = {
-  displayName?: string;              // Human-readable name for pricing page and invoices
-  pricePerCredit?: number;           // Price per unit in cents (enables top-ups, usage billing)
-  minPerPurchase?: number;           // Default: 1
+  displayName?: string;
+  pricePerCredit?: number;       // cents (enables top-ups and/or usage billing)
+  minPerPurchase?: number;
   maxPerPurchase?: number;
-  autoTopUp?: AutoTopUpConfig;       // Automatic top-ups (disabled when trackUsage is true)
-  credits?: CreditAllocation;        // Pre-paid credit allocation
-  trackUsage?: boolean;              // Enable usage-based billing
-  meteredPriceId?: string;           // Auto-set by sync when trackUsage is true
+  autoTopUp?: AutoTopUpConfig;
+  credits?: CreditAllocation;
+  trackUsage?: boolean;          // Enable usage-based billing
+  meteredPriceId?: string;       // Set by sync when trackUsage is true
 };
 
 type CreditAllocation = {
   allocation: number;
-  onRenewal?: "reset" | "add";       // Default: "reset"
+  onRenewal?: "reset" | "add";   // Default: "reset"
 };
 
 type AutoTopUpConfig = {
-  threshold: number; // Trigger when balance drops below this
-  amount: number; // Number of credits to purchase
-  maxPerMonth?: number; // Default: 10
+  threshold: number;
+  amount: number;
+  maxPerMonth?: number;          // Default: 10
 };
 
 type WalletConfig = {
-  allocation: number; // Amount in cents per billing period
-  displayName?: string; // Shown on pricing page (default: "usage credit")
-  onRenewal?: "reset" | "add"; // Default: "reset"
+  allocation: number;            // cents
+  displayName?: string;
+  onRenewal?: "reset" | "add";   // Default: "reset"
 };
 ```
 
+### Example
+
+```typescript
+{
+  name: "Pro",
+  price: [
+    { amount: 2000, currency: "usd", interval: "month" },
+    { amount: 20000, currency: "usd", interval: "year" },
+  ],
+  features: {
+    api_calls: {
+      displayName: "API Calls",
+      credits: { allocation: 1000 },
+      pricePerCredit: 10,
+      trackUsage: true,
+    },
+  },
+  wallet: {
+    allocation: 500,
+    displayName: "AI Usage",
+  },
+}
+```
+
+---
+
 ## Frontend Client
 
-### Generated Pricing Page (Recommended)
-
-Generate a ready-to-use pricing component:
+### Generated Component (Recommended)
 
 ```bash
 npx stripe-no-webhooks generate pricing-page
 ```
 
-Creates `components/PricingPage.tsx` with loading states, error handling, and styling built-in.
-
 ```tsx
 import { PricingPage } from "@/components/PricingPage";
 
-// Basic usage - fetches plans and subscription automatically
 <PricingPage />
 
-// With optional overrides
+// With options
 <PricingPage
-  currentPlanId="pro"             // Override auto-detected current plan
-  currentInterval="year"          // Override auto-detected interval
-  onError={(err) => {}}           // Error callback
-  redirectCountdown={3}           // Countdown seconds after plan switch (default: 5)
-  endpoint="/api/stripe/billing"  // Custom billing endpoint (default shown)
+  currentPlanId="pro"
+  currentInterval="year"
+  onError={(err) => {}}
 />
 ```
 
-The component automatically:
-- Fetches plans from `/api/stripe/billing` (based on your `STRIPE_SECRET_KEY` mode)
-- Detects the user's current subscription if they're logged in
-- Highlights their current plan with a "Current Plan" badge
-- Defaults the interval toggle to match their subscription
-- Shows monthly/yearly toggle with discount badge when plans support both intervals
-- Disables checkout for plans that don't support the selected interval
-- Scales credit display (yearly shows 12× monthly allocation)
-
 ### Manual Implementation
-
-For full control over the UI, use `createCheckoutClient` with callbacks:
 
 ```typescript
 import { createCheckoutClient } from "stripe-no-webhooks/client";
 
 const { checkout, customerPortal } = createCheckoutClient({
-  // Optional: Custom endpoints
-  checkoutEndpoint: "/api/stripe/checkout",
-  customerPortalEndpoint: "/api/stripe/customer_portal",
-
-  // Callbacks for UI state management
-  onLoading: (isLoading: boolean) => {
-    // Update your loading state
-    setIsLoading(isLoading);
-  },
-  onError: (error: Error) => {
-    // Show error to user
-    toast.error(error.message);
-  },
-  onRedirect: (url: string) => {
-    // Called right before redirect - show a message, track analytics, etc.
-    console.log("Redirecting to:", url);
-  },
+  checkoutEndpoint?: string,
+  customerPortalEndpoint?: string,
+  onLoading?: (isLoading: boolean) => void,
+  onError?: (error: Error) => void,
+  onRedirect?: (url: string) => void,
 });
-```
 
-Example with React state:
-
-```tsx
-"use client";
-import { useState } from "react";
-import { createCheckoutClient } from "stripe-no-webhooks/client";
-
-export function CheckoutButton({ planName }: { planName: string }) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const { checkout } = createCheckoutClient({
-    onLoading: setLoading,
-    onError: (err) => setError(err.message),
-  });
-
-  return (
-    <>
-      <button
-        onClick={() => checkout({ planName, interval: "month" })}
-        disabled={loading}
-      >
-        {loading ? "Loading..." : "Subscribe"}
-      </button>
-      {error && <p className="error">{error}</p>}
-    </>
-  );
-}
-```
-
-### Checkout Options
-
-```typescript
+// Start checkout
 checkout({
-  planName: string, // Plan name from billing config
-  planId: string, // Plan ID from billing config
-  interval: "month" | "year" | "week" | "one_time",
-  priceId: string, // Direct Stripe price ID (bypasses config)
-  quantity: number, // Default: 1
-  successUrl: string, // Override success redirect
-  cancelUrl: string, // Override cancel redirect
-  metadata: Record<string, string>,
+  planName: string,
+  interval: "month" | "year",
+  quantity?: number,
+  metadata?: Record<string, string>,
 });
 
-// Customer Portal - redirects to Stripe billing portal
+// Open billing portal
 customerPortal();
 ```
 
-### Default Exports
-
-For simple usage without callbacks:
+### Simple Usage
 
 ```typescript
 import { checkout, customerPortal } from "stripe-no-webhooks/client";
 
-// These use default /api/stripe endpoints with no callbacks
-<button onClick={() => checkout({ planName: "Pro", interval: "month" })}>Subscribe</button>
-<button onClick={() => customerPortal()}>Manage Billing</button>
+checkout({ planName: "Pro", interval: "month" });
+customerPortal();
 ```
 
-## Types
-
-```typescript
-type TransactionType = "grant" | "consume" | "revoke" | "adjust";
-
-type TransactionSource =
-  | "subscription"
-  | "renewal"
-  | "cancellation"
-  | "topup"
-  | "auto_topup"
-  | "manual"
-  | "usage"
-  | "seat_grant"
-  | "seat_revoke";
-
-type CreditTransaction = {
-  id: string;
-  userId: string;
-  key: string;
-  amount: number;
-  balanceAfter: number;
-  transactionType: TransactionType;
-  source: TransactionSource;
-  sourceId?: string;
-  description?: string;
-  metadata?: Record<string, unknown>;
-  createdAt: Date;
-};
-
-class CreditError extends Error {
-  code: string;
-  details?: Record<string, unknown>;
-}
-```
+---
 
 ## CLI Commands
 
 ```bash
-# Create database tables
-npx stripe-no-webhooks migrate <database_url>
-
-# Generate config files and webhook
-npx stripe-no-webhooks config
-
-# Sync plans to Stripe
-npx stripe-no-webhooks sync
-
-# Generate UI components
-npx stripe-no-webhooks generate pricing-page
-npx stripe-no-webhooks generate pricing-page --output src/components/Pricing.tsx
+npx stripe-no-webhooks init        # Create config files and .env
+npx stripe-no-webhooks migrate     # Create database tables
+npx stripe-no-webhooks sync        # Sync plans to Stripe
+npx stripe-no-webhooks generate pricing-page  # Generate pricing component
+npx stripe-no-webhooks backfill    # Import existing Stripe data
 ```
