@@ -12,7 +12,7 @@ export function errorResponse(message: string, status = 500): Response {
 export function successResponse(
   request: Request,
   data: Record<string, unknown>,
-  redirectUrl: string
+  redirectUrl: string,
 ): Response {
   const acceptHeader = request.headers.get("accept") || "";
   if (acceptHeader.includes("application/json")) {
@@ -20,3 +20,6 @@ export function successResponse(
   }
   return Response.redirect(redirectUrl, 303);
 }
+
+export const UNAUTHORIZED_ERROR =
+  "Unauthorized. Configure resolveUser and loginUrl in lib/billing.ts";

@@ -1,9 +1,9 @@
 import type { HandlerContext, CustomerPortalRequestBody } from "../types";
-import { errorResponse, successResponse } from "./utils";
+import { errorResponse, successResponse, UNAUTHORIZED_ERROR } from "./utils";
 
 export async function handleCustomerPortal(
   request: Request,
-  ctx: HandlerContext
+  ctx: HandlerContext,
 ): Promise<Response> {
   try {
     const body: CustomerPortalRequestBody = await request
@@ -16,10 +16,7 @@ export async function handleCustomerPortal(
         const loginUrl = new URL(ctx.loginUrl, request.url).href;
         return successResponse(request, { url: loginUrl }, loginUrl);
       }
-      return errorResponse(
-        "Unauthorized. Configure resolveUser to extract authenticated user.",
-        401
-      );
+      return errorResponse(UNAUTHORIZED_ERROR, 401);
     }
 
     const orgId = ctx.resolveOrg ? await ctx.resolveOrg(request) : null;

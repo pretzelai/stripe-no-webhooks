@@ -2,11 +2,8 @@ import type Stripe from "stripe";
 import type { BillingConfig, Plan } from "../BillingConfig";
 import { planHasCredits, isUsageTrackingEnabled } from "../BillingConfig";
 import type { HandlerContext, CheckoutRequestBody } from "../types";
-import { jsonResponse, errorResponse, successResponse } from "./utils";
-import {
-  findPlanByPriceId,
-  getActiveSubscription,
-} from "../helpers";
+import { jsonResponse, errorResponse, successResponse, UNAUTHORIZED_ERROR } from "./utils";
+import { findPlanByPriceId, getActiveSubscription } from "../helpers";
 
 /**
  * Get all metered price IDs for a plan (features with trackUsage: true)
@@ -25,7 +22,7 @@ function getMeteredPriceIds(plan: Plan | null): string[] {
 
 async function hasPaymentMethod(
   stripe: Stripe,
-  customerId: string
+  customerId: string,
 ): Promise<boolean> {
   const customer = await stripe.customers.retrieve(customerId);
   if ("deleted" in customer && customer.deleted) return false;
@@ -36,7 +33,7 @@ async function hasPaymentMethod(
 function resolvePriceId(
   body: CheckoutRequestBody,
   billingConfig: BillingConfig | undefined,
-  mode: "test" | "production"
+  mode: "test" | "production",
 ): string {
   if (body.priceId) {
     return body.priceId;
@@ -48,15 +45,15 @@ function resolvePriceId(
 
   if (!billingConfig?.[mode]?.plans) {
     throw new Error(
-      "billingConfig with plans is required when using planName or planId"
+      "billingConfig with plans is required when using planName or planId",
     );
   }
 
   const plan = body.planName
     ? billingConfig[mode]?.plans?.find((p) => p.name === body.planName)
     : body.planId
-    ? billingConfig[mode]?.plans?.find((p) => p.id === body.planId)
-    : null;
+      ? billingConfig[mode]?.plans?.find((p) => p.id === body.planId)
+      : null;
 
   if (!plan) {
     const identifier = body.planName || body.planId;
@@ -66,13 +63,13 @@ function resolvePriceId(
   const price = plan.price.find((p) => p.interval === body.interval);
   if (!price) {
     throw new Error(
-      `Price with interval "${body.interval}" not found for plan "${plan.name}"`
+      `Price with interval "${body.interval}" not found for plan "${plan.name}"`,
     );
   }
 
   if (!price.id) {
     throw new Error(
-      `Price ID not set for plan "${plan.name}" with interval "${body.interval}". Run stripe-sync to sync price IDs.`
+      `Price ID not set for plan "${plan.name}" with interval "${body.interval}". Run stripe-sync to sync price IDs.`,
     );
   }
 
@@ -81,7 +78,7 @@ function resolvePriceId(
 
 async function getPriceMode(
   stripe: Stripe,
-  priceId: string
+  priceId: string,
 ): Promise<"payment" | "subscription"> {
   const price = await stripe.prices.retrieve(priceId);
   return price.type === "recurring" ? "subscription" : "payment";
@@ -92,7 +89,7 @@ function shouldDisableProration(
   billingConfig: BillingConfig | undefined,
   mode: "test" | "production",
   oldPriceId: string,
-  newPriceId: string
+  newPriceId: string,
 ): boolean {
   const oldPlan = findPlanByPriceId(billingConfig, mode, oldPriceId);
   const newPlan = findPlanByPriceId(billingConfig, mode, newPriceId);
@@ -101,7 +98,7 @@ function shouldDisableProration(
 
 export async function handleCheckout(
   request: Request,
-  ctx: HandlerContext
+  ctx: HandlerContext,
 ): Promise<Response> {
   try {
     const body: CheckoutRequestBody = await request.json().catch(() => ({}));
@@ -109,7 +106,7 @@ export async function handleCheckout(
     if (!body.priceId && !body.planName && !body.planId) {
       return errorResponse(
         "Provide either priceId, planName+interval, or planId+interval",
-        400
+        400,
       );
     }
 
@@ -131,8 +128,8 @@ export async function handleCheckout(
         return successResponse(request, { url: loginUrl }, loginUrl);
       }
       return errorResponse(
-        "Unauthorized. Configure resolveUser to extract authenticated user.",
-        401
+        UNAUTHORIZED_ERROR,
+        401,
       );
     }
 
@@ -165,7 +162,7 @@ export async function handleCheckout(
         const targetAmount = targetPrice.unit_amount ?? 0;
         const customerHasPaymentMethod = await hasPaymentMethod(
           ctx.stripe,
-          customerId
+          customerId,
         );
 
         const isUpgrade = targetAmount > currentAmount;
@@ -174,10 +171,14 @@ export async function handleCheckout(
         // Downgrade: schedule for period end (credits stay until renewal)
         if (isDowngrade) {
           // Build subscription items - update base price and handle metered prices
-          const newPlan = findPlanByPriceId(ctx.billingConfig, ctx.mode, priceId);
+          const newPlan = findPlanByPriceId(
+            ctx.billingConfig,
+            ctx.mode,
+            priceId,
+          );
           const newMeteredPriceIds = getMeteredPriceIds(newPlan);
           const existingMeteredItems = currentSub.items.data.filter(
-            (item) => item.price.recurring?.usage_type === "metered"
+            (item) => item.price.recurring?.usage_type === "metered",
           );
 
           const subscriptionItems: Stripe.SubscriptionUpdateParams.Item[] = [
@@ -209,13 +210,14 @@ export async function handleCheckout(
             {
               success: true,
               downgraded: true,
-              message: "Plan changed. Credits will adjust at your next billing date.",
+              message:
+                "Plan changed. Credits will adjust at your next billing date.",
               ...(periodEnd && {
                 creditAdjustmentAt: new Date(periodEnd * 1000).toISOString(),
               }),
               url: successUrl,
             },
-            successUrl
+            successUrl,
           );
         }
 
@@ -224,16 +226,20 @@ export async function handleCheckout(
           ctx.billingConfig,
           ctx.mode,
           currentPriceId,
-          priceId
+          priceId,
         );
 
         if (customerHasPaymentMethod && isUpgrade) {
           try {
             // Build subscription items update - include metered prices for usage tracking
-            const newPlan = findPlanByPriceId(ctx.billingConfig, ctx.mode, priceId);
+            const newPlan = findPlanByPriceId(
+              ctx.billingConfig,
+              ctx.mode,
+              priceId,
+            );
             const meteredPriceIds = getMeteredPriceIds(newPlan);
             const existingMeteredItems = currentSub.items.data.filter(
-              (item) => item.price.recurring?.usage_type === "metered"
+              (item) => item.price.recurring?.usage_type === "metered",
             );
 
             const subscriptionItems: Stripe.SubscriptionUpdateParams.Item[] = [
@@ -274,7 +280,7 @@ export async function handleCheckout(
                 error: "Payment issue",
                 portalUrl: portal.url,
               },
-              portal.url
+              portal.url,
             );
           }
 
@@ -285,13 +291,17 @@ export async function handleCheckout(
               upgraded: true,
               url: successUrl,
             },
-            successUrl
+            successUrl,
           );
         }
 
         // No payment method - collect via setup mode checkout
         // Collect metered prices for the new plan to include in metadata
-        const setupNewPlan = findPlanByPriceId(ctx.billingConfig, ctx.mode, priceId);
+        const setupNewPlan = findPlanByPriceId(
+          ctx.billingConfig,
+          ctx.mode,
+          priceId,
+        );
         const setupMeteredPriceIds = getMeteredPriceIds(setupNewPlan);
         const setupExistingMeteredItemIds = currentSub.items.data
           .filter((item) => item.price.recurring?.usage_type === "metered")
