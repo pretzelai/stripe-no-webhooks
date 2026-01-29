@@ -51,7 +51,15 @@ billing.getPlans()  // Returns plans for current mode
 
 // Create HTTP handler
 const handler = billing.createHandler();
+```
 
+---
+
+## Assign Free Plan
+
+It is recommended you automatically assign your free tier plan to your users on log in so they get access to test credits (if you have them)
+
+```typescript
 // Assign user to a free plan (useful on login/signup)
 await billing.assignFreePlan({
   userId: string,
@@ -60,19 +68,50 @@ await billing.assignFreePlan({
 }): Promise<Stripe.Subscription | null>  // null if user already has subscription
 ```
 
----
+E.g. if you are using better auth, you can add this to your betterAuth object:
+
+```typescript
+// auth.ts
+export const auth = betterAuth({
+  // ...
+  hooks: {
+    after: createAuthMiddleware(async (ctx) => {
+      if (
+        ctx.path.startsWith("/callback") || // google sign in
+        ctx.path.startsWith("/sign-up") ||
+        ctx.path.startsWith("/sign-in")
+      ) {
+        const userId = ctx.context.newSession?.user.id;
+        if (userId) {
+          try {
+            // idempotent assignment of free plan
+            const plan = await billing.assignFreePlan({
+              userId,
+            });
+            console.log(`Assigned free plan to user ${userId}: ${plan?.id}`);
+          } catch (error) {
+            console.error(
+              `Failed to assign free plan to user ${userId}: ${error}`,
+            );
+          }
+        }
+      }
+    }),
+  },
+});
+```
 
 ## HTTP Routes
 
 The handler responds to these endpoints:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/checkout` | POST | Create checkout session |
-| `/webhook` | POST | Handle Stripe webhooks |
-| `/customer_portal` | POST | Open billing portal |
-| `/billing` | POST | Get plans and current subscription |
-| `/recovery` | GET | Redirect to Customer Portal for payment recovery |
+| Endpoint           | Method | Description                                      |
+| ------------------ | ------ | ------------------------------------------------ |
+| `/checkout`        | POST   | Create checkout session                          |
+| `/webhook`         | POST   | Handle Stripe webhooks                           |
+| `/customer_portal` | POST   | Open billing portal                              |
+| `/billing`         | POST   | Get plans and current subscription               |
+| `/recovery`        | GET    | Redirect to Customer Portal for payment recovery |
 
 ### Browser Usage
 
@@ -83,7 +122,7 @@ const res = await fetch("/api/stripe/checkout", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    "Accept": "application/json",
+    Accept: "application/json",
   },
   body: JSON.stringify({ planName: "Pro", interval: "month" }),
 });
@@ -114,7 +153,14 @@ await billing.subscriptions.getPaymentStatus({ userId }): Promise<SubscriptionPa
 ```typescript
 type Subscription = {
   id: string;
-  status: "active" | "trialing" | "past_due" | "canceled" | "unpaid" | "incomplete" | "paused";
+  status:
+    | "active"
+    | "trialing"
+    | "past_due"
+    | "canceled"
+    | "unpaid"
+    | "incomplete"
+    | "paused";
   plan: {
     id: string;
     name: string;
@@ -263,8 +309,8 @@ await billing.wallet.topUp({
 
 ```typescript
 type WalletBalance = {
-  amount: number;      // cents (can be negative)
-  formatted: string;   // "$3.50" or "-$1.50"
+  amount: number; // cents (can be negative)
+  formatted: string; // "$3.50" or "-$1.50"
   currency: string;
 };
 
@@ -281,7 +327,10 @@ type WalletEvent = {
 
 type WalletTopUpResult =
   | { success: true; balance: WalletBalance; sourceId: string }
-  | { success: false; error: { code: string; message: string; recoveryUrl?: string } };
+  | {
+      success: false;
+      error: { code: string; message: string; recoveryUrl?: string };
+    };
 ```
 
 ---
@@ -333,10 +382,10 @@ type UsageEvent = {
 };
 
 type UsageSummary = {
-  totalAmount: number;    // Units consumed this period
-  eventCount: number;     // Number of usage events
-  estimatedCost: number;  // totalAmount × pricePerCredit (cents)
-  currency: string;       // e.g., "usd"
+  totalAmount: number; // Units consumed this period
+  eventCount: number; // Number of usage events
+  estimatedCost: number; // totalAmount × pricePerCredit (cents)
+  currency: string; // e.g., "usd"
   periodStart: Date;
   periodEnd: Date;
 };
@@ -494,49 +543,49 @@ type BillingConfig = {
 };
 
 type Plan = {
-  id?: string;           // Set by sync
+  id?: string; // Set by sync
   name: string;
   description?: string;
   price: Price[];
   features?: Record<string, FeatureConfig>;
   wallet?: WalletConfig;
-  highlights?: string[];  // Bullet points for pricing page
+  highlights?: string[]; // Bullet points for pricing page
   perSeat?: boolean;
 };
 
 type Price = {
-  id?: string;           // Set by sync
-  amount: number;        // cents
+  id?: string; // Set by sync
+  amount: number; // cents
   currency: string;
   interval: "month" | "year" | "week" | "one_time";
 };
 
 type FeatureConfig = {
   displayName?: string;
-  pricePerCredit?: number;       // cents (enables top-ups and/or usage billing)
+  pricePerCredit?: number; // cents (enables top-ups and/or usage billing)
   minPerPurchase?: number;
   maxPerPurchase?: number;
   autoTopUp?: AutoTopUpConfig;
   credits?: CreditAllocation;
-  trackUsage?: boolean;          // Enable usage-based billing
-  meteredPriceId?: string;       // Set by sync when trackUsage is true
+  trackUsage?: boolean; // Enable usage-based billing
+  meteredPriceId?: string; // Set by sync when trackUsage is true
 };
 
 type CreditAllocation = {
   allocation: number;
-  onRenewal?: "reset" | "add";   // Default: "reset"
+  onRenewal?: "reset" | "add"; // Default: "reset"
 };
 
 type AutoTopUpConfig = {
   threshold: number;
   amount: number;
-  maxPerMonth?: number;          // Default: 10
+  maxPerMonth?: number; // Default: 10
 };
 
 type WalletConfig = {
-  allocation: number;            // cents
+  allocation: number; // cents
   displayName?: string;
-  onRenewal?: "reset" | "add";   // Default: "reset"
+  onRenewal?: "reset" | "add"; // Default: "reset"
 };
 ```
 
