@@ -5,7 +5,7 @@ import { Pool, PoolConfig } from "pg";
 // Types
 // ============================================================================
 
-export interface FasterStripeConfig extends Stripe.StripeConfig {
+export interface StripeProxyConfig extends Stripe.StripeConfig {
   /**
    * PostgreSQL connection string or pool config
    * Falls back to DATABASE_URL environment variable
@@ -39,7 +39,7 @@ interface BaseListParams {
 function buildCreatedFilter(
   created: number | CreatedFilter | undefined,
   params: unknown[],
-  paramIndex: number
+  paramIndex: number,
 ): { sql: string; params: unknown[]; nextIndex: number } {
   if (created === undefined) {
     return { sql: "", params: [], nextIndex: paramIndex };
@@ -87,7 +87,7 @@ function buildPaginationFilter(
   startingAfter: string | undefined,
   endingBefore: string | undefined,
   params: unknown[],
-  paramIndex: number
+  paramIndex: number,
 ): { sql: string; params: unknown[]; nextIndex: number; orderDesc: boolean } {
   let idx = paramIndex;
   const newParams: unknown[] = [];
@@ -123,7 +123,7 @@ function createResourceProxy<
   TResource,
   TListParams extends BaseListParams,
   TCreateParams,
-  TUpdateParams
+  TUpdateParams,
 >(
   pool: Pool | null,
   schema: string,
@@ -131,33 +131,33 @@ function createResourceProxy<
     list: (params?: TListParams) => Stripe.ApiListPromise<TResource>;
     retrieve: (
       id: string,
-      params?: Stripe.RequestOptions
+      params?: Stripe.RequestOptions,
     ) => Promise<Stripe.Response<TResource>>;
     create?: (params: TCreateParams) => Promise<Stripe.Response<TResource>>;
     update?: (
       id: string,
-      params: TUpdateParams
+      params: TUpdateParams,
     ) => Promise<Stripe.Response<TResource>>;
     del?: (id: string) => Promise<Stripe.Response<unknown>>;
   },
-  config: ResourceConfig
+  config: ResourceConfig,
 ): {
   list: (params?: TListParams) => Promise<Stripe.ApiList<TResource>>;
   retrieve: (
     id: string,
-    params?: Stripe.RequestOptions
+    params?: Stripe.RequestOptions,
   ) => Promise<Stripe.Response<TResource>>;
   create?: (params: TCreateParams) => Promise<Stripe.Response<TResource>>;
   update?: (
     id: string,
-    params: TUpdateParams
+    params: TUpdateParams,
   ) => Promise<Stripe.Response<TResource>>;
   del?: typeof stripeResource.del;
 } {
   const { tableName, filterMappings = {}, defaultFilters = {} } = config;
 
   async function listFromDb(
-    params: TListParams | undefined
+    params: TListParams | undefined,
   ): Promise<Stripe.ApiList<TResource> | null> {
     if (!pool) return null;
 
@@ -178,7 +178,7 @@ function createResourceProxy<
       const createdResult = buildCreatedFilter(
         params?.created,
         queryParams,
-        paramIdx
+        paramIdx,
       );
       if (createdResult.sql) {
         conditions.push(createdResult.sql);
@@ -191,7 +191,7 @@ function createResourceProxy<
         params?.starting_after,
         params?.ending_before,
         queryParams,
-        paramIdx
+        paramIdx,
       );
       if (paginationResult.sql) {
         conditions.push(paginationResult.sql);
@@ -242,8 +242,8 @@ function createResourceProxy<
       };
     } catch (error) {
       console.warn(
-        `FasterStripe: DB query failed for ${tableName}.list, falling back to Stripe API:`,
-        error
+        `StripeProxy: DB query failed for ${tableName}.list, falling back to Stripe API:`,
+        error,
       );
       return null;
     }
@@ -263,8 +263,8 @@ function createResourceProxy<
       return result.rows[0] as TResource;
     } catch (error) {
       console.warn(
-        `FasterStripe: DB query failed for ${tableName}.retrieve, falling back to Stripe API:`,
-        error
+        `StripeProxy: DB query failed for ${tableName}.retrieve, falling back to Stripe API:`,
+        error,
       );
       return null;
     }
@@ -288,7 +288,7 @@ function createResourceProxy<
 
     async retrieve(
       id: string,
-      params?: Stripe.RequestOptions
+      params?: Stripe.RequestOptions,
     ): Promise<Stripe.Response<TResource>> {
       const dbResult = await retrieveFromDb(id);
       if (dbResult) {
@@ -320,10 +320,10 @@ function createResourceProxy<
 }
 
 // ============================================================================
-// FasterStripe Class
+// StripeProxy Class
 // ============================================================================
 
-class FasterStripe {
+class StripeProxy {
   private stripe: Stripe;
   private pool: Pool | null = null;
   private schema: string;
@@ -453,7 +453,7 @@ class FasterStripe {
   public webhookEndpoints: Stripe["webhookEndpoints"];
 
   /**
-   * Create a new FasterStripe instance.
+   * Create a new StripeProxy instance.
    *
    * @param apiKey - Stripe secret key. If not provided, reads from STRIPE_SECRET_KEY env var.
    * @param config - Optional configuration (extends Stripe.StripeConfig with databaseUrl and schema)
@@ -466,11 +466,11 @@ class FasterStripe {
    * // Bonus: auto-read from env
    * const stripe = new Stripe(); // reads STRIPE_SECRET_KEY
    */
-  constructor(apiKey?: string, config?: FasterStripeConfig) {
+  constructor(apiKey?: string, config?: StripeProxyConfig) {
     const stripeSecretKey = apiKey ?? process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
       throw new Error(
-        "Stripe secret key is required. Pass it as first argument or set STRIPE_SECRET_KEY env var."
+        "Stripe secret key is required. Pass it as first argument or set STRIPE_SECRET_KEY env var.",
       );
     }
 
@@ -490,8 +490,8 @@ class FasterStripe {
             : new Pool(dbUrl);
       } catch (error) {
         console.warn(
-          "FasterStripe: Failed to initialize database pool, falling back to Stripe API only:",
-          error
+          "StripeProxy: Failed to initialize database pool, falling back to Stripe API only:",
+          error,
         );
       }
     }
@@ -674,7 +674,7 @@ class FasterStripe {
   }
 
   /**
-   * Get the underlying Stripe instance for operations not covered by FasterStripe
+   * Get the underlying Stripe instance for operations not covered by StripeProxy
    */
   get raw(): Stripe {
     return this.stripe;
@@ -699,7 +699,4 @@ class FasterStripe {
 }
 
 // Named export for explicit imports
-export { FasterStripe };
-
-// Default export for drop-in replacement compatibility
-export default FasterStripe;
+export { StripeProxy };
