@@ -61,6 +61,8 @@ import { handleCheckout } from "./handlers/checkout";
 import { handleCustomerPortal } from "./handlers/customer-portal";
 import { handleWebhook } from "./handlers/webhook";
 import { handleBilling } from "./handlers/billing";
+import { handleCheckoutComplete } from "./handlers/checkout-complete";
+import { handleCheckoutStatus } from "./handlers/checkout-status";
 import { getActiveSubscription } from "./helpers";
 
 export type { CreditsGrantTo };
@@ -116,6 +118,8 @@ export class Billing {
   private readonly resolveUser?: StripeConfig["resolveUser"];
   private readonly resolveOrg?: StripeConfig["resolveOrg"];
   private readonly loginUrl?: string;
+  private readonly waitForWebhook: boolean;
+  private readonly webhookWaitTimeout: number;
 
   constructor(config: StripeConfig = {}) {
     const {
@@ -133,6 +137,8 @@ export class Billing {
       resolveUser,
       resolveOrg,
       loginUrl,
+      waitForWebhook = false,
+      webhookWaitTimeout = 30000,
       _stripeClient,
     } = config;
 
@@ -154,6 +160,8 @@ export class Billing {
     this.resolveUser = resolveUser;
     this.resolveOrg = resolveOrg;
     this.loginUrl = loginUrl;
+    this.waitForWebhook = waitForWebhook;
+    this.webhookWaitTimeout = webhookWaitTimeout;
 
     initCredits(this.pool, this.schema);
 
@@ -625,6 +633,8 @@ export class Billing {
       resolveOrg,
       loginUrl,
       resolveStripeCustomerId: this.resolveStripeCustomerId,
+      waitForWebhook: this.waitForWebhook,
+      webhookWaitTimeout: this.webhookWaitTimeout,
     };
 
     const webhookContext = {
@@ -641,6 +651,16 @@ export class Billing {
     return async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       const action = url.pathname.split("/").filter(Boolean).pop();
+
+      // checkout-complete serves the loading page (GET)
+      if (action === "checkout-complete" && request.method === "GET") {
+        return handleCheckoutComplete(request, routeContext);
+      }
+
+      // checkout-status is polled from the loading page (GET)
+      if (action === "checkout-status" && request.method === "GET") {
+        return handleCheckoutStatus(request, routeContext);
+      }
 
       // Recovery endpoint accepts GET (clicked from email links)
       if (action === "recovery" && request.method === "GET") {
@@ -700,7 +720,7 @@ export class Billing {
         default:
           return new Response(
             JSON.stringify({
-              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing, recovery (GET)`,
+              error: `Unknown action: ${action}. Supported: checkout, webhook, customer_portal, billing, recovery (GET), checkout-complete (GET), checkout-status (GET)`,
             }),
             { status: 404, headers: { "Content-Type": "application/json" } }
           );

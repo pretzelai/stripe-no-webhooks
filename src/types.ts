@@ -213,6 +213,19 @@ export interface StripeConfig {
   tax?: TaxConfig;
 
   /**
+   * Wait for webhook processing before redirecting to success URL.
+   * Shows a loading page until subscription is active in DB.
+   * @default false
+   */
+  waitForWebhook?: boolean;
+
+  /**
+   * Timeout for waiting for webhook (ms). Redirects to success URL after this.
+   * @default 30000
+   */
+  webhookWaitTimeout?: number;
+
+  /**
    * Resolve the current user from an incoming request.
    * Used by the HTTP handler to determine who is making the request.
    * @example
@@ -303,4 +316,6 @@ export interface HandlerContext {
     user: User;
     createIfNotFound?: boolean;
   }) => Promise<string | null>;
+  waitForWebhook?: boolean;
+  webhookWaitTimeout?: number;
 }

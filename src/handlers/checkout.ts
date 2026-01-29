@@ -9,6 +9,29 @@ import {
 } from "../helpers";
 
 /**
+ * Build the success URL, optionally wrapping it for webhook wait handling.
+ */
+function buildSuccessUrl(
+  userSuccessUrl: string,
+  origin: string,
+  ctx: HandlerContext,
+  basePath: string
+): string {
+  // Add session_id to the URL if not already present
+  const urlWithSession = userSuccessUrl.includes("{CHECKOUT_SESSION_ID}")
+    ? userSuccessUrl
+    : `${userSuccessUrl}${userSuccessUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
+
+  if (!ctx.waitForWebhook) {
+    return urlWithSession;
+  }
+
+  // Intercept: redirect to our handler first
+  const encoded = encodeURIComponent(userSuccessUrl);
+  return `${origin}${basePath}/checkout-complete?session_id={CHECKOUT_SESSION_ID}&redirect=${encoded}`;
+}
+
+/**
  * Get all metered price IDs for a plan (features with trackUsage: true)
  */
 function getMeteredPriceIds(plan: Plan | null): string[] {
@@ -114,10 +137,17 @@ export async function handleCheckout(
     }
 
     const origin = request.headers.get("origin") || "";
-    const successUrl =
+    const reqUrl = new URL(request.url);
+    // Extract base path (everything up to but not including the last segment)
+    const pathParts = reqUrl.pathname.split("/").filter(Boolean);
+    pathParts.pop(); // Remove "checkout"
+    const basePath = pathParts.length > 0 ? `/${pathParts.join("/")}` : "";
+
+    const userSuccessUrl =
       body.successUrl ||
       ctx.defaultSuccessUrl ||
-      `${origin}/success?session_id={CHECKOUT_SESSION_ID}`;
+      `${origin}/success`;
+    const successUrl = buildSuccessUrl(userSuccessUrl, origin, ctx, basePath);
     const cancelUrl = body.cancelUrl || ctx.defaultCancelUrl || `${origin}/`;
 
     const priceId = resolvePriceId(body, ctx.billingConfig, ctx.mode);
