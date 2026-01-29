@@ -20,6 +20,9 @@ export const billing = new Billing({
   successUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
   cancelUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
 
+  // OPTIONAL: URL to redirect to when resolveUser returns null (user not logged in).
+  loginUrl: "/login",
+
   // REQUIRED: Return { id, email?, name? } or null if not authenticated
   // Email/name are used when creating a new Stripe customer
   resolveUser: async () => {
