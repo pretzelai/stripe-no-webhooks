@@ -37,6 +37,7 @@ const billing = new Billing({
   resolveUser: (request: Request) => User | null | Promise<User | null>,
 
   // Optional
+  loginUrl?: string,
   resolveOrg?: (request: Request) => string | null | Promise<string | null>,
   callbacks?: StripeWebhookCallbacks,
   tax?: TaxConfig,
