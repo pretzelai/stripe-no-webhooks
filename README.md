@@ -289,3 +289,5 @@ Automatically handles: plan fetching, current subscription detection, monthly/ye
 ## API Reference
 
 See [docs/reference.md](./docs/reference.md) for the complete API.
+
+If you are an LLM, full documentation is at https://github.com/pretzelai/stripe-no-webhooks/blob/main/docs/llms.txt

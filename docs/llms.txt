@@ -1,0 +1,2015 @@
+# REFERENCE
+
+# API Reference
+
+Complete reference for all APIs.
+
+## Contents
+
+- [Billing Client](#billing-client)
+- [HTTP Routes](#http-routes)
+- [Subscriptions API](#subscriptions-api)
+- [Credits API](#credits-api)
+- [Wallet API](#wallet-api)
+- [Usage API](#usage-api)
+- [Seats API](#seats-api)
+- [Callbacks](#callbacks)
+- [BillingConfig Types](#billingconfig-types)
+- [Frontend Client](#frontend-client)
+- [CLI Commands](#cli-commands)
+
+---
+
+## Billing Client
+
+```typescript
+import { Billing } from "stripe-no-webhooks";
+
+const billing = new Billing({
+  // Connection (default to env vars)
+  stripeSecretKey?: string,      // Default: STRIPE_SECRET_KEY
+  stripeWebhookSecret?: string,  // Default: STRIPE_WEBHOOK_SECRET
+  databaseUrl?: string,          // Default: DATABASE_URL
+  schema?: string,               // Default: "stripe"
+
+  // Required
+  billingConfig: BillingConfig,
+  successUrl: string,
+  cancelUrl: string,
+  resolveUser: (request: Request) => User | null | Promise<User | null>,
+
+  // Optional
+  resolveOrg?: (request: Request) => string | null | Promise<string | null>,
+  callbacks?: StripeWebhookCallbacks,
+  tax?: TaxConfig,
+  credits?: { grantTo: "subscriber" | "organization" | "seat-users" | "manual" },
+  mapUserIdToStripeCustomerId?: (userId: string) => string | null | Promise<string | null>,
+});
+
+// Properties
+billing.mode  // "test" | "production" - based on STRIPE_SECRET_KEY
+billing.getPlans()  // Returns plans for current mode
+
+// Create HTTP handler
+const handler = billing.createHandler();
+
+// Assign user to a free plan (useful on login/signup)
+await billing.assignFreePlan({
+  userId: string,
+  planName?: string,     // Optional - auto-detects if only one free plan
+  interval?: "month" | "year" | "week",  // Default: "month"
+}): Promise<Stripe.Subscription | null>  // null if user already has subscription
+```
+
+---
+
+## HTTP Routes
+
+The handler responds to these endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/checkout` | POST | Create checkout session |
+| `/webhook` | POST | Handle Stripe webhooks |
+| `/customer_portal` | POST | Open billing portal |
+| `/billing` | POST | Get plans and current subscription |
+| `/recovery` | GET | Redirect to Customer Portal for payment recovery |
+
+### Browser Usage
+
+Send `Accept: application/json` header to get JSON response (avoids CORS issues):
+
+```typescript
+const res = await fetch("/api/stripe/checkout", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  },
+  body: JSON.stringify({ planName: "Pro", interval: "month" }),
+});
+const { url } = await res.json();
+window.location.href = url;
+```
+
+---
+
+## Subscriptions API
+
+```typescript
+// Check if user has active subscription
+await billing.subscriptions.isActive({ userId }): Promise<boolean>
+
+// Get current subscription
+await billing.subscriptions.get({ userId }): Promise<Subscription | null>
+
+// List all subscriptions
+await billing.subscriptions.list({ userId }): Promise<Subscription[]>
+
+// Check payment status (for showing warnings)
+await billing.subscriptions.getPaymentStatus({ userId }): Promise<SubscriptionPaymentStatus>
+```
+
+### Types
+
+```typescript
+type Subscription = {
+  id: string;
+  status: "active" | "trialing" | "past_due" | "canceled" | "unpaid" | "incomplete" | "paused";
+  plan: {
+    id: string;
+    name: string;
+    priceId: string;
+  } | null;
+  currentPeriodStart: Date;
+  currentPeriodEnd: Date;
+  cancelAtPeriodEnd: boolean;
+};
+
+type SubscriptionPaymentStatus = {
+  status: "ok" | "past_due" | "unpaid" | "no_subscription";
+  failedInvoice?: {
+    id: string;
+    amountDue: number;
+    currency: string;
+    attemptCount: number;
+    nextPaymentAttempt: Date | null;
+    hostedInvoiceUrl: string | null;
+  };
+};
+```
+
+---
+
+## Credits API
+
+### Read Methods
+
+```typescript
+// Get balance for one credit type
+await billing.credits.getBalance({ userId, key }): Promise<number>
+
+// Get all balances
+await billing.credits.getAllBalances({ userId }): Promise<Record<string, number>>
+
+// Check if user has enough
+await billing.credits.hasCredits({ userId, key, amount }): Promise<boolean>
+
+// Get transaction history
+await billing.credits.getHistory({ userId, key?, limit?, offset? }): Promise<CreditTransaction[]>
+
+// Check for saved payment method
+await billing.credits.hasPaymentMethod({ userId }): Promise<boolean>
+
+// Check auto top-up status
+await billing.credits.getAutoTopUpStatus({ userId, key }): Promise<AutoTopUpStatus | null>
+```
+
+### Write Methods
+
+```typescript
+// Consume credits (always succeeds, balance can go negative)
+await billing.credits.consume({
+  userId,
+  key,
+  amount,
+  description?,
+  metadata?,
+  idempotencyKey?,
+}): Promise<{ success: true, balance: number }>
+
+// Grant credits (ledger operation - doesn't charge anyone)
+await billing.credits.grant({
+  userId,
+  key,
+  amount,
+  source?,
+  sourceId?,
+  description?,
+  idempotencyKey?,
+}): Promise<number>  // Returns new balance
+
+// Purchase credits (charges customer's card)
+await billing.credits.topUp({
+  userId,
+  key,
+  amount,
+  idempotencyKey?,
+}): Promise<TopUpResult>
+
+// Revoke credits
+await billing.credits.revoke({
+  userId,
+  key,
+  amount,
+  source?,
+  sourceId?,
+}): Promise<{ balance: number, amountRevoked: number }>
+
+// Revoke all of a credit type
+await billing.credits.revokeAll({ userId, key }): Promise<{ amountRevoked: number }>
+
+// Set exact balance
+await billing.credits.setBalance({
+  userId,
+  key,
+  balance,
+  reason?,
+}): Promise<{ previousBalance: number }>
+
+// Unblock auto top-up
+await billing.credits.unblockAutoTopUp({ userId, key }): Promise<void>
+await billing.credits.unblockAllAutoTopUps({ userId }): Promise<void>
+```
+
+---
+
+## Wallet API
+
+```typescript
+// Get balance (returns null if no wallet)
+await billing.wallet.getBalance({ userId }): Promise<WalletBalance | null>
+
+// Add funds (ledger operation - doesn't charge anyone)
+await billing.wallet.add({
+  userId,
+  amount,         // cents
+  currency?,      // default: "usd"
+  source?,
+  sourceId?,
+  description?,
+  idempotencyKey?,
+}): Promise<{ balance: WalletBalance }>
+
+// Consume (balance can go negative)
+await billing.wallet.consume({
+  userId,
+  amount,         // cents
+  description?,
+  idempotencyKey?,
+}): Promise<{ balance: WalletBalance }>
+
+// Get transaction history
+await billing.wallet.getHistory({ userId, limit?, offset? }): Promise<WalletEvent[]>
+
+// Purchase wallet balance (charges customer's card)
+await billing.wallet.topUp({
+  userId,
+  amount,         // cents to add
+  idempotencyKey?,
+}): Promise<WalletTopUpResult>
+```
+
+### Types
+
+```typescript
+type WalletBalance = {
+  amount: number;      // cents (can be negative)
+  formatted: string;   // "$3.50" or "-$1.50"
+  currency: string;
+};
+
+type WalletEvent = {
+  id: string;
+  amount: number;
+  balanceAfter: number;
+  type: "add" | "consume" | "adjust" | "revoke";
+  source: string;
+  sourceId?: string;
+  description?: string;
+  createdAt: Date;
+};
+
+type WalletTopUpResult =
+  | { success: true; balance: WalletBalance; sourceId: string }
+  | { success: false; error: { code: string; message: string; recoveryUrl?: string } };
+```
+
+---
+
+## Usage API
+
+```typescript
+// Record usage (sends to Stripe Meter + stores locally)
+await billing.usage.record({
+  userId,
+  key,           // Feature key (must have trackUsage: true)
+  amount,        // Units to record (required)
+  timestamp?,    // Optional timestamp (defaults to now)
+}): Promise<RecordUsageResult>
+
+// Get usage summary for current billing period
+await billing.usage.getSummary({ userId, key }): Promise<UsageSummary>
+
+// Get usage event history
+await billing.usage.getHistory({
+  userId,
+  key,
+  limit?,        // Default: 50
+  offset?,
+}): Promise<UsageEvent[]>
+
+// Enable usage billing for existing subscriber
+// (adds metered price to subscription if not already present)
+await billing.usage.enableForUser({ userId, key }): Promise<void>
+```
+
+### Types
+
+```typescript
+type RecordUsageResult = {
+  event: UsageEvent;
+  meterEventId: string;
+};
+
+type UsageEvent = {
+  id: string;
+  userId: string;
+  key: string;
+  amount: number;
+  stripeMeterEventId: string;
+  periodStart: Date;
+  periodEnd: Date;
+  createdAt: Date;
+};
+
+type UsageSummary = {
+  totalAmount: number;    // Units consumed this period
+  eventCount: number;     // Number of usage events
+  estimatedCost: number;  // totalAmount × pricePerCredit (cents)
+  currency: string;       // e.g., "usd"
+  periodStart: Date;
+  periodEnd: Date;
+};
+```
+
+---
+
+## Seats API
+
+For team billing with per-seat credit grants:
+
+```typescript
+// Add user as seat
+await billing.seats.add({
+  userId,
+  orgId,
+}): Promise<{ success: true, creditsGranted: Record<string, number> }
+          | { success: false, error: string }>
+
+// Remove user as seat
+await billing.seats.remove({
+  userId,
+  orgId,
+}): Promise<{ success: true, creditsRevoked: Record<string, number> }
+          | { success: false, error: string }>
+```
+
+---
+
+## Callbacks
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  callbacks: {
+    // Subscription events
+    onSubscriptionCreated?: (subscription: Stripe.Subscription) => void,
+    onSubscriptionCancelled?: (subscription: Stripe.Subscription) => void,
+    onSubscriptionRenewed?: (subscription: Stripe.Subscription) => void,
+    onSubscriptionPlanChanged?: (params: {
+      subscription: Stripe.Subscription,
+      previousPlanId: string,
+      newPlanId: string,
+    }) => void,
+    onSubscriptionPaymentFailed?: (params: {
+      userId: string,
+      stripeCustomerId: string,
+      subscriptionId: string,
+      invoiceId: string,
+      amountDue: number,
+      currency: string,
+      stripeDeclineCode?: string,
+      failureMessage?: string,
+      attemptCount: number,
+      nextPaymentAttempt: Date | null,
+      willRetry: boolean,
+      planName?: string,
+      priceId: string,
+    }) => void,
+
+    // Credit events
+    onCreditsGranted?: (params: {
+      userId: string,
+      key: string,
+      amount: number,
+      newBalance: number,
+      source: TransactionSource,
+      sourceId?: string,
+    }) => void,
+    onCreditsRevoked?: (params: {
+      userId: string,
+      key: string,
+      amount: number,
+      previousBalance: number,
+      newBalance: number,
+      source: "cancellation" | "manual" | "seat_revoke",
+    }) => void,
+    onCreditsLow?: (params: {
+      userId: string,
+      key: string,
+      balance: number,
+      threshold: number,
+    }) => void,
+
+    // Top-up events
+    onTopUpCompleted?: (params: {
+      userId: string,
+      key: string,
+      creditsAdded: number,
+      amountCharged: number,
+      currency: string,
+      newBalance: number,
+      sourceId: string,
+    }) => void,
+    onAutoTopUpFailed?: (params: {
+      userId: string,
+      stripeCustomerId: string,
+      key: string,
+      trigger: "stripe_declined_payment" | "waiting_for_retry_cooldown"
+             | "blocked_until_card_updated" | "no_payment_method"
+             | "monthly_limit_reached" | "unexpected_error",
+      status: "will_retry" | "action_required",
+      nextAttemptAt?: Date,
+      failureCount: number,
+      stripeDeclineCode?: string,
+    }) => void,
+
+    // Usage events
+    onUsageRecorded?: (params: {
+      userId: string,
+      key: string,
+      amount: number,
+      totalForPeriod: number,
+      estimatedCost: number,
+      currency: string,
+      periodStart: Date,
+      periodEnd: Date,
+    }) => void | Promise<void>,
+
+    // Wallet events
+    onWalletLow?: (params: {
+      userId: string,
+      balance: number,
+      threshold: number,
+    }) => void | Promise<void>,
+    onWalletTopUpCompleted?: (params: {
+      userId: string,
+      amountAdded: number,
+      amountCharged: number,
+      currency: string,
+      newBalance: WalletBalance,
+      sourceId: string,
+    }) => void | Promise<void>,
+    onWalletAutoTopUpFailed?: (params: {
+      userId: string,
+      stripeCustomerId: string,
+      trigger: string,
+      status: "will_retry" | "action_required",
+      nextAttemptAt?: Date,
+      failureCount: number,
+      stripeDeclineCode?: string,
+    }) => void | Promise<void>,
+  },
+});
+```
+
+---
+
+## BillingConfig Types
+
+```typescript
+type BillingConfig = {
+  test?: { plans?: Plan[] };
+  production?: { plans?: Plan[] };
+};
+
+type Plan = {
+  id?: string;           // Set by sync
+  name: string;
+  description?: string;
+  price: Price[];
+  features?: Record<string, FeatureConfig>;
+  wallet?: WalletConfig;
+  highlights?: string[];  // Bullet points for pricing page
+  perSeat?: boolean;
+};
+
+type Price = {
+  id?: string;           // Set by sync
+  amount: number;        // cents
+  currency: string;
+  interval: "month" | "year" | "week" | "one_time";
+};
+
+type FeatureConfig = {
+  displayName?: string;
+  pricePerCredit?: number;       // cents (enables top-ups and/or usage billing)
+  minPerPurchase?: number;
+  maxPerPurchase?: number;
+  autoTopUp?: AutoTopUpConfig;
+  credits?: CreditAllocation;
+  trackUsage?: boolean;          // Enable usage-based billing
+  meteredPriceId?: string;       // Set by sync when trackUsage is true
+};
+
+type CreditAllocation = {
+  allocation: number;
+  onRenewal?: "reset" | "add";   // Default: "reset"
+};
+
+type AutoTopUpConfig = {
+  threshold: number;
+  amount: number;
+  maxPerMonth?: number;          // Default: 10
+};
+
+type WalletConfig = {
+  allocation: number;            // cents
+  displayName?: string;
+  onRenewal?: "reset" | "add";   // Default: "reset"
+};
+```
+
+### Example
+
+```typescript
+{
+  name: "Pro",
+  price: [
+    { amount: 2000, currency: "usd", interval: "month" },
+    { amount: 20000, currency: "usd", interval: "year" },
+  ],
+  features: {
+    api_calls: {
+      displayName: "API Calls",
+      credits: { allocation: 1000 },
+      pricePerCredit: 10,
+      trackUsage: true,
+    },
+  },
+  wallet: {
+    allocation: 500,
+    displayName: "AI Usage",
+  },
+}
+```
+
+---
+
+## Frontend Client
+
+### Generated Component (Recommended)
+
+```bash
+npx stripe-no-webhooks generate pricing-page
+```
+
+```tsx
+import { PricingPage } from "@/components/PricingPage";
+
+<PricingPage />
+
+// With options
+<PricingPage
+  currentPlanId="pro"
+  currentInterval="year"
+  onError={(err) => {}}
+/>
+```
+
+### Manual Implementation
+
+```typescript
+import { createCheckoutClient } from "stripe-no-webhooks/client";
+
+const { checkout, customerPortal } = createCheckoutClient({
+  checkoutEndpoint?: string,
+  customerPortalEndpoint?: string,
+  onLoading?: (isLoading: boolean) => void,
+  onError?: (error: Error) => void,
+  onRedirect?: (url: string) => void,
+});
+
+// Start checkout
+checkout({
+  planName: string,
+  interval: "month" | "year",
+  quantity?: number,
+  metadata?: Record<string, string>,
+});
+
+// Open billing portal
+customerPortal();
+```
+
+### Simple Usage
+
+```typescript
+import { checkout, customerPortal } from "stripe-no-webhooks/client";
+
+checkout({ planName: "Pro", interval: "month" });
+customerPortal();
+```
+
+---
+
+## CLI Commands
+
+```bash
+npx stripe-no-webhooks init        # Create config files and .env
+npx stripe-no-webhooks migrate     # Create database tables
+npx stripe-no-webhooks sync        # Sync plans to Stripe
+npx stripe-no-webhooks generate pricing-page  # Generate pricing component
+npx stripe-no-webhooks backfill    # Import existing Stripe data
+```
+
+
+---
+
+# CREDITS
+
+# Credits & Wallet
+
+Include consumable resources with your subscription plans.
+
+| Type        | What it is                  | Example                          |
+| ----------- | --------------------------- | -------------------------------- |
+| **Credits** | Discrete units              | "1,000 API calls/month"          |
+| **Wallet**  | Monetary balance (in cents) | "$5.00/month spending allowance" |
+
+Both renew automatically with subscriptions and scale for yearly plans (12×).
+
+---
+
+## Credits
+
+Credits are discrete units included with a subscription—like "1000 API calls/month". The library automatically grants credits when users subscribe and tracks the balance in your database.
+
+### Configuration
+
+Let's say we have a "Pro" plan that has two consumable features: "API Calls" and "Exports". The configuration for this plan would look like this:
+
+```typescript
+// billing.config.ts
+{
+  name: "Pro",
+  price: [
+    { amount: 2000, currency: "usd", interval: "month" },   // $20/month
+    { amount: 20000, currency: "usd", interval: "year" },   // $200/year
+  ],
+  features: {
+    api_calls: {                          // key used in billing.credits.*()
+      displayName: "API Calls",           // shown on pricing page
+      credits: {
+        allocation: 1000,                 // 1000/month or 12000/year
+        onRenewal: "reset",               // (optional) "reset" (default) or "add" to roll over
+      },
+    },
+    exports: {
+      displayName: "Exports",
+      credits: { allocation: 50 },
+    },
+  },
+}
+```
+
+### Basic Usage
+
+```typescript
+import { billing } from "@/lib/billing";
+
+// Check balance
+const balance = await billing.credits.getBalance({ userId, key: "api_calls" });
+// Returns: number (e.g., 847)
+
+// Check if user has enough
+const hasEnough = await billing.credits.hasCredits({
+  userId,
+  key: "api_calls",
+  amount: 10,
+});
+// Returns: boolean
+
+// Consume credits
+await billing.credits.consume({ userId, key: "api_calls", amount: 10 });
+```
+
+**Important:** `consume()` always succeeds. If the user has 5 credits and you consume 10, their balance becomes -5.
+
+### Common Patterns
+
+**1. Known amount upfront** (e.g., 1 API call = 1 credit)
+
+```typescript
+if (await billing.credits.hasCredits({ userId, key: "api_calls", amount: 1 })) {
+  await billing.credits.consume({ userId, key: "api_calls", amount: 1 });
+  doTheAction();
+} else {
+  return "No credits remaining";
+}
+```
+
+**2. Unknown amount** (e.g., AI generation where token count varies)
+
+```typescript
+// Check they have SOME credits before starting
+const balance = await billing.credits.getBalance({ userId, key: "tokens" });
+if (balance <= 0) {
+  return "No credits remaining";
+}
+
+// Do the action
+const result = await generateWithAI(prompt);
+const tokensUsed = result.usage.totalTokens;
+
+// Consume afterward (balance may go negative - that's ok)
+await billing.credits.consume({ userId, key: "tokens", amount: tokensUsed });
+```
+
+**3. Credits first, then usage billing** (hybrid model)
+
+```typescript
+const result = await generateWithAI(prompt); // run expensive AI operation
+const tokensUsed = result.usage.totalTokens; // get the number of tokens used
+const balance = await billing.credits.getBalance({ userId, key: "tokens" });
+
+if (balance >= tokensUsed) {
+  // user has enough credits
+  await billing.credits.consume({ userId, key: "tokens", amount: tokensUsed });
+} else if (balance > 0) {
+  // user has some credits but not enough to cover the usage
+  // partially consume the remaining credits
+  await billing.credits.consume({ userId, key: "tokens", amount: balance });
+  // then, record the remaining usage as usage billing
+  await billing.usage.record({
+    userId,
+    key: "tokens",
+    amount: tokensUsed - balance,
+  });
+} else {
+  // user has no credits, record all the usage as usage billing
+  await billing.usage.record({ userId, key: "tokens", amount: tokensUsed });
+}
+```
+
+For a full example of Credits → Wallet → Usage fallback flow, see [Usage-Based Billing](./usage.md#hybrid-billing).
+
+### Buying More Credits (Top-Ups)
+
+Let users purchase additional credits beyond their plan allocation. Add `pricePerCredit` to enable:
+
+```typescript
+features: {
+  api_calls: {
+    displayName: "API Calls",
+    credits: { allocation: 1000 },
+    pricePerCredit: 1,               // 1 cent per credit (required for top-ups)
+  },
+}
+```
+
+```typescript
+const result = await billing.credits.topUp({
+  userId,
+  key: "api_calls",
+  amount: 500, // buy 500 credits, charges $5.00
+});
+
+if (!result.success && result.error?.recoveryUrl) {
+  // Payment failed - redirect user to update their card
+  redirect(result.error.recoveryUrl);
+}
+```
+
+### Auto Top-Up
+
+Automatically purchase credits when balance drops below a threshold. To enable auto top-up, you need to set `pricePerCredit` and `autoTopUp` in the configuration:
+
+```typescript
+features: {
+  api_calls: {
+    credits: { allocation: 1000 },
+    pricePerCredit: 1,               // required for auto top-up
+    autoTopUp: {
+      threshold: 100,                // trigger when balance drops below 100
+      amount: 500,                   // buy 500 credits ($5.00)
+      maxPerMonth: 5,                // (optional) limit: 5 auto top-ups/month
+    },
+  },
+}
+```
+
+**IMPORTANT**: Auto top-up triggers automatically when `credits.consume()` drops the balance below the threshold. This can be dangerous if there's an error with the user's payment method (for eg, low balance) - if we keep attempting to charge the card, it will keep failing and will trigger a fraud block from the user's bank and/or Stripe.
+
+To prevent this, `stripe-no-webhooks` handles payment failures smartly (24 hours cooldowns, blocks until user updates card, etc.) - see [Payment Failures](./payment-failures.md) for failure handling.
+
+---
+
+## Wallet
+
+A wallet is a **monetary balance** (in cents / lowest denomination of the currency) included with a subscription—like "$5.00/month for AI usage".
+
+**When to use wallet vs credits:**
+
+- **Credits**: Each action costs the same (1 API call = 1 credit)
+- **Wallet**: Costs vary (for eg, if you have multiple AI model tokens that you need to charge for, you can use a wallet to charge for them)
+
+### Configuration
+
+```typescript
+{
+  name: "Pro",
+  price: [{ amount: 2000, currency: "usd", interval: "month" }],
+  wallet: {
+    allocation: 500,              // 500 cents = $5.00/month
+    displayName: "AI Usage",      // (optional) shown on pricing page
+    onRenewal: "reset",           // (optional) "reset" (default) or "add" to roll over
+  },
+}
+```
+
+### Basic Usage
+
+```typescript
+import { billing } from "@/lib/billing";
+
+// Get balance
+const balance = await billing.wallet.getBalance({ userId });
+// Returns: { amount: 350, formatted: "$3.50", currency: "usd" }
+// Returns null if user has no wallet
+
+// Consume from wallet
+await billing.wallet.consume({
+  userId,
+  amount: 50, // 50 cents
+  description: "GPT-4 usage", // (optional) shown in transaction history
+});
+
+// Add funds (ledger operation - does NOT charge card)
+// Use for: promotional credits, refunds, manual adjustments
+await billing.wallet.add({
+  userId,
+  amount: 1000, // $10.00
+  description: "Promotional credit",
+});
+```
+
+**Important:** `consume()` always succeeds. Balance can go negative.
+
+### Sub-Cent Precision
+
+Wallet supports fractional cents (up to micro-cent precision) for AI token pricing:
+
+```typescript
+const COST_PER_TOKEN = 0.00015; // $0.00015 per token
+const tokenCount = 1500;
+const amount = COST_PER_TOKEN * tokenCount; // 0.225 cents
+
+await billing.wallet.consume({ userId, amount });
+```
+
+### Buying More (Top-Ups)
+
+Let users add money to their wallet. Wallet top-ups are always available for plans with a wallet configured—pay `$10`, get `$10`.
+
+```typescript
+const result = await billing.wallet.topUp({
+  userId,
+  amount: 1000, // charge user's card $10.00 and add $10.00 to wallet
+});
+
+if (!result.success && result.error?.recoveryUrl) {
+  redirect(result.error.recoveryUrl);
+}
+```
+
+Optionally set purchase limits:
+
+```typescript
+wallet: {
+  allocation: 500,
+  minPerPurchase: 100,           // (optional) must add at least $1.00 (default: ~$0.50 Stripe minimum)
+  maxPerPurchase: 10000,         // (optional) can't add more than $100.00
+},
+```
+
+### Auto Top-Up
+
+Automatically add funds when balance drops below a threshold:
+
+```typescript
+wallet: {
+  allocation: 500,
+  autoTopUp: {
+    threshold: 100,              // trigger when balance drops below $1.00
+    amount: 500,                 // add $5.00 when triggered
+    maxPerMonth: 5,              // (optional) limit: 5 auto top-ups/month
+  },
+},
+```
+
+Auto top-up triggers automatically when `wallet.consume()` drops the balance below the threshold. See [Payment Failures](./payment-failures.md) for failure handling.
+
+---
+
+## Behavior
+
+### Renewal
+
+By default, balances **reset** each billing cycle. Use `onRenewal: "add"` to roll over unused balance:
+
+```typescript
+credits: {
+  allocation: 1000,
+  onRenewal: "add",  // unused credits accumulate
+},
+
+wallet: {
+  allocation: 500,
+  onRenewal: "add",  // unused balance accumulates
+},
+```
+
+### Yearly Plans
+
+Yearly subscribers get 12× the monthly allocation upfront:
+
+| Interval | Multiplier | Example (1000/mo) |
+| -------- | ---------- | ----------------- |
+| Month    | 1×         | 1,000             |
+| Year     | 12×        | 12,000            |
+
+### Plan Changes
+
+| Event         | What Happens                                       |
+| ------------- | -------------------------------------------------- |
+| **Upgrade**   | Keep current balance + grant new plan's allocation |
+| **Downgrade** | Keep current balance until period ends, then reset |
+| **Cancel**    | Revoke all balances immediately                    |
+
+**Upgrade example:**
+
+```
+Basic (1,000/mo, $20/month) → Pro (10,000/mo, $200/month)
+User has 400 remaining
+After: 400 + 10,000 = 10,400
+No refunds of the old plan. User paid amount ($20 + $200 = $220 ) == total credits they got overall (10,400 credits). Fair to the end user.
+```
+
+**Exception:** Free → Paid revokes free balance first (it had no monetary value).
+
+**Interval changes:**
+
+| Change           | Treatment                                 |
+| ---------------- | ----------------------------------------- |
+| Monthly → Yearly | Upgrade (immediate, +12× new allocation)  |
+| Yearly → Monthly | Downgrade (keeps balance until year ends) |
+
+### Negative Balances
+
+Both `credits.consume()` and `wallet.consume()` always succeed—balances can go negative.
+
+At renewal:
+
+- **`onRenewal: "reset"`** (default): Debt is forgiven, fresh allocation granted
+- **`onRenewal: "add"`**: New allocation added to negative balance
+
+### Combining with Usage Billing
+
+Include credits AND bill for overages. Users consume included credits first, then overages are billed at period end.
+
+See [Usage-Based Billing](./usage.md) for the hybrid billing pattern.
+
+---
+
+## Developer Reference
+
+### Transaction History
+
+Every grant, consumption, and revocation is recorded:
+
+```typescript
+// Credit history
+const history = await billing.credits.getHistory({
+  userId,
+  key: "api_calls",
+  limit: 50,           // (optional) default: 50
+});
+
+// Wallet history
+const walletHistory = await billing.wallet.getHistory({
+  userId,
+  limit: 50,           // (optional)
+});
+
+// Each entry:
+{
+  id: "abc123",
+  amount: -10,           // negative = consumed, positive = granted
+  balanceAfter: 990,
+  type: "consume",       // "grant" | "consume" | "revoke" | "adjust"
+  description: "API call",
+  createdAt: Date,
+}
+```
+
+### Callbacks
+
+React to credit and wallet events:
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  callbacks: {
+    // Credits
+    onCreditsGranted: ({ userId, key, amount, newBalance }) => {},
+    onCreditsRevoked: ({
+      userId,
+      key,
+      amount,
+      previousBalance,
+      newBalance,
+    }) => {},
+    onCreditsLow: ({ userId, key, balance, threshold }) => {},
+    onTopUpCompleted: ({ userId, key, creditsAdded, amountCharged }) => {},
+    onAutoTopUpFailed: ({ userId, key, trigger, status, failureCount }) => {},
+
+    // Wallet
+    onWalletLow: ({ userId, balance, threshold }) => {},
+    onWalletTopUpCompleted: ({
+      userId,
+      amountAdded,
+      amountCharged,
+      newBalance,
+    }) => {},
+    onWalletAutoTopUpFailed: ({ userId, trigger, status, failureCount }) => {},
+  },
+});
+```
+
+
+---
+
+# USAGE
+
+# Usage-Based Billing
+
+You're building something where users consume resources—API calls, AI tokens, storage, compute time. Now you need to figure out how to charge for it.
+
+This guide helps you decide between **pre-paid** (credits), **post-paid** (usage billing), or a **hybrid** of both.
+
+---
+
+## Choosing Your Pricing Model
+
+### The Three Approaches
+
+**Pre-paid (Credits/Wallet)** — Users have a visible balance
+
+> "You have 847 API calls remaining" → User buys more when low, or auto top-up kicks in
+
+- Users see exactly what they have and control their spending
+- You get paid before or during usage (low risk)
+- You decide what happens at zero: prompt to buy more, auto top-up, or let balance go negative
+
+**Post-paid (Usage Billing)** — No balance, invoice at end of month
+
+> "January Invoice: 1,500 API calls × $0.10 = $150.00"
+
+- Frictionless "just use it" experience
+- Users don't think about limits—they get a bill later
+- You can't enforce hard limits (that's what credits are for)
+
+**Hybrid** — Include credits, bill overages as usage
+
+> "1,000 API calls included with your plan. You used 1,500, so we're billing $50 for the extra 500."
+
+- Predictable value: users know what they're getting
+- No hard ceiling: power users keep going and pay for overages
+- This is what most SaaS companies do
+
+### Which Should You Choose?
+
+**Choose pre-paid credits if:**
+
+- You want zero risk of non-payment (they've already paid)
+- Your users want to see a credit/wallet balance and control their spending
+- You want the option to enforce limits (or let them top up / auto top-up)
+- You're selling to consumers or budget-conscious teams
+
+**Choose post-paid usage if:**
+
+- Your users expect to "just use it" without thinking about balances
+- You're selling to businesses who are used to getting invoices
+- You're comfortable with some non-payment risk
+
+**Choose hybrid if:**
+
+- You want to give predictable value ("1,000 API calls included, $0.50 per additional API call")
+- But also let power users scale without hard limits
+- This is the most common SaaS model—familiar to users
+
+### The Risk Tradeoff
+
+|                            | Your Risk                        | User Experience                                         |
+| -------------------------- | -------------------------------- | ------------------------------------------------------- |
+| **Pre-paid**               | None—already paid                | Visible balance, user controls spending, manual top-ups |
+| **Pre-paid + auto top-up** | Low—card on file                 | Seamless, never runs out                                |
+| **Post-paid**              | Higher—invoice might not be paid | No friction, "just works"                               |
+| **Hybrid**                 | Low—base subscription guaranteed | Predictable value + flexibility for power users         |
+
+**Practical tip**: If you're unsure, start with hybrid. Users get predictable value from their subscription, power users aren't blocked, and your base revenue is guaranteed.
+
+---
+
+## Implementing Usage Billing
+
+Decided on post-paid or hybrid? Here's how to set it up. (For pre-paid credits only, see [Credits & Wallet](./credits.md).)
+
+#### 1. Add to your config
+
+```typescript
+// billing.config.ts
+{
+  name: "Pro",
+  price: [{ amount: 2000, currency: "usd", interval: "month" }],
+  features: {
+    api_calls: {
+      displayName: "API Calls",
+      pricePerCredit: 10,   // 10 cents per unit
+      trackUsage: true,     // Enable usage billing
+    },
+  },
+}
+```
+
+Two things enable usage billing:
+
+- `pricePerCredit` — how much to charge per unit (in cents)
+- `trackUsage: true` — tells the library to track and bill usage, also tells the library to create Stripe usage price and meters.
+
+#### 2. Sync to Stripe
+
+```bash
+npx stripe-no-webhooks sync
+```
+
+This creates a **Stripe Meter** for tracking usage and a **metered price** for billing.
+
+#### 3. Record usage when it happens
+
+```typescript
+import { billing } from "@/lib/billing";
+
+// Call this every time a billable action occurs
+await billing.usage.record({
+  userId,
+  key: "api_calls",
+  amount: 1,
+});
+```
+
+That's it. The library sends the event to Stripe's meter and stores it locally (so you can query it in real-time).
+
+#### 4. Stripe handles the rest
+
+At the end of each billing period, Stripe automatically:
+
+1. Totals up all usage events for the period
+2. Adds a line item to the invoice
+3. Charges the customer's card
+
+```
+Pro                        1 × $20.00    $20.00
+API Calls (Jan 1-31)     150 × $0.10     $15.00
+------------------------------------------------
+Total                                    $35.00
+```
+
+---
+
+## Showing Usage in Your App
+
+Users want to know what they've used and what their bill will be. Query current period usage in real-time:
+
+```typescript
+const summary = await billing.usage.getSummary({ userId, key: "api_calls" });
+
+// Returns:
+{
+  totalAmount: 150,        // Units consumed this period
+  estimatedCost: 1500,     // 150 × 10 cents = $15.00 (in cents)
+  period: {
+    start: Date,           // Start of current billing period
+    end: Date,             // End of current billing period
+  },
+}
+```
+
+Display it in your UI:
+
+```typescript
+const formatted = `${summary.totalAmount} calls ($${(summary.estimatedCost / 100).toFixed(2)})`;
+// "150 calls ($15.00)"
+```
+
+**Why this works in real-time**: The library stores usage events locally (not just in Stripe). This lets you query usage instantly without waiting for Stripe's meter API.
+
+---
+
+## Common Pricing Models
+
+### Pure Pay-As-You-Go
+
+No monthly fee—just pay for usage. Great for getting users started with zero commitment.
+
+```typescript
+{
+  name: "Pay As You Go",
+  price: [{ amount: 0, currency: "usd", interval: "month" }],  // $0 base
+  features: {
+    api_calls: {
+      displayName: "API Calls",
+      pricePerCredit: 5,   // 5 cents per call
+      trackUsage: true,
+    },
+  },
+}
+```
+
+### Base + Usage
+
+Monthly subscription that includes platform access, plus pay-per-use for consumption based product lines. Most B2B SaaS apps use this model (make sure you trust your users to pay for their usage).
+
+```typescript
+{
+  name: "Pro",
+  price: [{ amount: 2000, currency: "usd", interval: "month" }],  // $20 base
+  features: {
+    api_calls: {
+      displayName: "API Calls",
+      pricePerCredit: 10,  // 10 cents per call
+      trackUsage: true,
+    },
+  },
+}
+```
+
+### Credits + Usage (Hybrid)
+
+Include some calls free, bill for overages. This is the "best of both worlds"—users get predictable value from their subscription, but power users aren't blocked. Companies like Cursor use this model - you get some fixed AI Completion calls included, then you get charged for extra usage.
+
+```typescript
+{
+  name: "Pro",
+  price: [{ amount: 2000, currency: "usd", interval: "month" }],
+  features: {
+    api_calls: {
+      credits: {
+        allocation: 100,  // 100 calls included free
+      },
+      displayName: "API Calls",
+      pricePerCredit: 10,  // 10 cents per call
+      trackUsage: true,
+    },
+  },
+}
+```
+
+See [Hybrid Billing](#hybrid-billing) for how to implement the consumption logic, starting with consuming credits first, then wallet (if exists), then usage billing.
+
+---
+
+## Hybrid Billing
+
+The most user-friendly model: include credits with the subscription, then bill for overages. **"100 API calls included, then $0.10 each"**
+
+### Why This Is Great
+
+- **Predictable value**: Users know what they're getting for their subscription
+- **No hard blocks**: Power users can keep going (and pay more)
+- **Fair pricing**: Light users don't subsidize heavy users
+
+### How to Implement
+
+The library doesn't automatically decide when to use credits vs. usage billing—**you control the logic**. This is intentional: different apps have different rules.
+
+Here's the basic pattern:
+
+```typescript
+async function handleApiCall(userId: string) {
+  // 1. Check if user has included credits
+  const hasCredits = await billing.credits.hasCredits({
+    userId,
+    key: "api_calls",
+    amount: 1,
+  });
+
+  if (hasCredits) {
+    // Use included credits (free to the user)
+    await billing.credits.consume({ userId, key: "api_calls", amount: 1 });
+    return;
+  }
+
+  // 2. No credits left—record as usage (billed at period end)
+  await billing.usage.record({ userId, key: "api_calls", amount: 1 });
+}
+```
+
+### Credits → Wallet → Usage
+
+If you also have a wallet (pre-paid monetary balance), you might want: free credits first, then wallet balance, then usage billing.
+
+```typescript
+async function handleApiCall(userId: string, units: number) {
+  const pricePerUnit = 10; // cents, get this from your billing.config.ts
+  let remaining = units;
+
+  // 1. Credits first (free included units)
+  const creditBalance = await billing.credits.getBalance({
+    userId,
+    key: "api_calls",
+  });
+  if (creditBalance > 0) {
+    const use = Math.min(creditBalance, remaining);
+    await billing.credits.consume({ userId, key: "api_calls", amount: use });
+
+    // if the usage was more than the available credits, we can fall back to wallets / usage billing
+    remaining -= use;
+  }
+  if (remaining === 0) return;
+
+  // 2. Wallet next, if exists (pre-paid balance available to the user)
+  const wallet = await billing.wallet.getBalance({ userId });
+  if (wallet && wallet.amount > 0) {
+    const cost = remaining * pricePerUnit;
+    const walletToUse = Math.min(wallet.amount, cost);
+    await billing.wallet.consume({ userId, amount: walletToUse });
+
+    // if wallet didn't have enough money to cover the usage, we can fall back to usage billing
+    remaining -= Math.floor(walletToUse / pricePerUnit);
+  }
+  if (remaining === 0) return;
+
+  // 3. Usage last (post-paid, billed at period end)
+  await billing.usage.record({ userId, key: "api_calls", amount: remaining });
+}
+```
+
+---
+
+## Testing Usage Billing
+
+Usage charges appear at the end of the billing period. To test without waiting a month, use Stripe's simulation feature:
+
+1. Create a subscription in test mode
+2. Record some usage in your app
+3. Go to the subscription in Stripe Dashboard
+4. Click **"Run simulation"** in the purple banner at the top
+5. Click **"+ 1 month"** and then **"+ 1 day"** to advance time to next billing period + 1 day
+6. Check the newly created invoice for usage charges
+
+---
+
+## Callbacks
+
+Get notified when usage is recorded:
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  callbacks: {
+    onUsageRecorded: ({ userId, key, amount }) => {
+      // Called after each usage.record()
+      // Useful for: analytics, logging, real-time dashboards
+    },
+  },
+});
+```
+
+---
+
+## Good to Know
+
+### Auto Top-Ups Are Disabled with Usage Billing
+
+When `trackUsage: true` is set, **auto top-ups** are disabled for that feature. This makes sense—usage billing already handles the "overflow" case automatically.
+
+**On-demand top-ups still work.** This lets merchants support customers who want spending control:
+
+```typescript
+if (await billing.credits.hasCredits({ userId, key, amount: 1 })) {
+  await billing.credits.consume({ userId, key, amount: 1 });
+} else if (customer.allowUsageBilling) {
+  // allowUsageBilling might be a flag in your DB at the customer level
+  await billing.usage.record({ userId, key, amount: 1 });
+} else {
+  // Customer wants control - prompt to top up manually
+  throw new Error("Out of credits. Please top up to continue.");
+}
+```
+
+### Usage Events Are Permanent
+
+Once you call `usage.record()`, the event is sent to Stripe and can't be undone. If you need to adjust:
+
+- **Before invoice is paid**: Grant credits to offset the charge
+- **After invoice is paid**: Issue a refund through Stripe Dashboard
+
+### Very High-Volume Usage
+
+For very high-throughput applications (thousands of events per second), batch your usage instead of recording each event individually:
+
+```typescript
+// Instead of calling record() on every request...
+// Accumulate in memory, then flush periodically:
+await billing.usage.record({
+  userId,
+  key: "api_calls",
+  amount: batchedTotal, // e.g., 1000 calls at once
+});
+```
+
+Stripe meters are optimized for batched events. The library stores events locally, so your real-time queries are still accurate but your DB might not be able to handle the load if you have very high throughput (e.g. 1000s of events per second) therefore batching is recommended if you have any issues.
+
+---
+
+## Summary
+
+| What You Need to Do                                 | What Stripe/Library Handles                                   |
+| --------------------------------------------------- | ------------------------------------------------------------- |
+| Add `pricePerCredit` + `trackUsage: true` to config | Creates Stripe meter and metered price                        |
+| Run `sync` command                                  | —                                                             |
+| Call `usage.record()` when billable actions happen  | Sends to Stripe, stores locally                               |
+| Show usage in your UI with `getSummary()`           | Calculates totals and estimated cost                          |
+| —                                                   | Totals usage at period end, adds to invoice, charges customer |
+
+**The most important thing**: Call `usage.record()` every time a billable action happens. Everything else flows from there.
+
+
+---
+
+# PAYMENT-FAILURES
+
+# Handling Payment Failures
+
+Payments fail all the time. Cards expire, banks decline transactions, users forget to update their payment info. This is normal, and the good news is: **Stripe handles most of the hard work for you**.
+
+This guide explains what happens when payments fail, what Stripe takes care of automatically, and what (little) you need to do.
+
+---
+
+## The TL;DR
+
+**For subscription payments**: Stripe automatically retries failed payments and emails your customers. You don't need to do anything unless you want custom notifications.
+
+**For top-ups (credits/wallet)**: The library returns a recovery URL. Redirect users there to fix their payment method.
+
+**For auto top-ups**: The library handles retry logic and blocks repeated failures automatically. Users fix it by updating their card in Customer Portal.
+
+---
+
+## Subscription Payment Failures
+
+When a user's subscription renewal fails (e.g., their card expired), here's what happens:
+
+### What Stripe Does Automatically
+
+1. **Retries the payment** - Stripe will retry several times over days/weeks (configurable)
+2. **Emails the customer** - "Your payment failed, please update your card"
+3. **Marks subscription as `past_due`** - User still has access while Stripe retries
+4. **Eventually cancels** - If all retries fail, subscription is canceled
+
+You can configure all of this in **Stripe Dashboard → Settings → Billing → Manage failed payments**.
+
+### What You Might Want to Do
+
+Most apps don't need to do anything beyond Stripe's automatic handling. But if you want custom behavior:
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  callbacks: {
+    onSubscriptionPaymentFailed: async (params) => {
+      // Only notify on final failure (don't spam during retries)
+      if (!params.willRetry) {
+        await sendSlackAlert(`User ${params.userId} subscription failing`);
+        // Or send a custom email, show an in-app banner, etc.
+      }
+    },
+  },
+});
+```
+
+**Practical tip**: Don't send emails on every failure—Stripe is already emailing them, and `willRetry: true` means Stripe will try again. Only act on `willRetry: false` (final attempt failed).
+
+### Showing Payment Status in Your UI
+
+If you want to show a warning banner like "Your payment failed - please update your card":
+
+```typescript
+const status = await billing.subscriptions.getPaymentStatus({ userId });
+
+if (status.status === "past_due") {
+  // Show a non-blocking warning
+  // User can still use your app while Stripe retries
+}
+
+if (status.status === "unpaid") {
+  // All retries exhausted - subscription will cancel soon
+  // Show a more urgent warning
+}
+```
+
+### How Users Can Fix It
+
+Users update their payment method in the **Stripe Customer Portal**:
+
+```typescript
+import { customerPortal } from "stripe-no-webhooks/client";
+
+// In your settings page
+<button onClick={() => customerPortal()}>Manage Billing</button>
+```
+
+Once they update their card, Stripe automatically retries the failed payment. You don't need to do anything.
+
+---
+
+## On-Demand Top-Up Failures
+
+When a user explicitly clicks "Buy more credits" or "Add funds to wallet" and the payment fails:
+
+### What Happens
+
+The `topUp()` function returns an error with a `recoveryUrl`. This URL takes them to a Stripe Checkout page where they can enter a new card and complete the purchase.
+
+```typescript
+// Credits
+const result = await billing.credits.topUp({
+  userId,
+  key: "api_calls",
+  amount: 500,
+});
+
+if (!result.success) {
+  if (result.error?.recoveryUrl) {
+    // Redirect them to fix their payment and complete the purchase
+    redirect(result.error.recoveryUrl);
+  } else {
+    // Some other error (no subscription, invalid amount, etc.)
+    showError(result.error.message);
+  }
+}
+```
+
+```typescript
+// Wallet
+const result = await billing.wallet.topUp({ userId, amount: 1000 });
+
+if (!result.success && result.error?.recoveryUrl) {
+  redirect(result.error.recoveryUrl);
+}
+```
+
+### What the Recovery Flow Does
+
+1. User lands on Stripe Checkout
+2. They enter a new card
+3. Payment completes
+4. New card is saved as their default (so future payments work)
+5. They're redirected back to your app
+6. Credits/wallet balance is updated
+
+**You don't need to handle any of this**—just redirect to the `recoveryUrl`.
+
+---
+
+## Auto Top-Up Failures
+
+Auto top-ups happen in the background when a user's credit/wallet balance drops below a threshold. Since the user isn't actively clicking a button, failed payments need special handling.
+
+### The Problem We Solve
+
+If a user's card keeps failing and we keep retrying immediately, bad things happen:
+
+- Card networks flag it as potential fraud
+- The user's bank might block their card
+- Stripe might flag your account
+
+### What the Library Does Automatically
+
+The library has smart retry logic built in:
+
+| Failure Type                                           | What Happens                                     |
+| ------------------------------------------------------ | ------------------------------------------------ |
+| **Soft decline** (insufficient funds, temporary issue) | Waits 24 hours, then retries on next `consume()` |
+| **Hard decline** (expired card, stolen card)           | Stops retrying until user updates their card     |
+| **3 soft declines in a row**                           | Escalates to hard decline behavior               |
+
+**This is automatic—you don't need to do anything.** Consider emailing users when their card fails, since otherwise they won't know (see below).
+
+### Getting Notified
+
+If you want to know when auto top-ups fail (e.g., to send a custom email or show an in-app alert):
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  callbacks: {
+    // For credit auto top-ups
+    onAutoTopUpFailed: async (params) => {
+      if (params.status === "action_required") {
+        // User needs to update their card - consider notifying them
+        await sendEmail(
+          params.userId,
+          "Your auto top-up failed. Please update your payment method.",
+        );
+      }
+      // "will_retry" means we'll try again in 24h - probably don't spam them
+    },
+
+    // For wallet auto top-ups
+    onWalletAutoTopUpFailed: async (params) => {
+      if (params.status === "action_required") {
+        await sendEmail(
+          params.userId,
+          "Your auto top-up failed. Please update your payment method.",
+        );
+      }
+    },
+  },
+});
+```
+
+**Practical tip**: Only notify on `action_required`. If status is `will_retry`, the library will automatically try again later—don't spam users about temporary issues.
+
+### How Users Fix It
+
+Same as subscription failures: they update their card in **Stripe Customer Portal**.
+
+```typescript
+<button onClick={() => customerPortal()}>Update Payment Method</button>
+```
+
+When they update their card, the library **automatically unblocks** auto top-ups. The next time they consume credits/wallet and drop below the threshold, auto top-up will work again.
+
+### Checking Auto Top-Up Status (Optional)
+
+For credits, you can check if auto top-up is blocked:
+
+```typescript
+const status = await billing.credits.getAutoTopUpStatus({
+  userId,
+  key: "api_calls",
+});
+
+if (status?.disabled) {
+  // Show in your UI: "Auto top-up is paused. Update your payment method to resume."
+}
+```
+
+This is optional—most apps just rely on the callback notifications.
+
+---
+
+## Summary: What You Actually Need to Do
+
+| Scenario               | What Stripe/Library Handles                     | What You Might Do                                 |
+| ---------------------- | ----------------------------------------------- | ------------------------------------------------- |
+| **Subscription fails** | Retries, emails customer, eventually cancels    | Optionally: custom notifications, in-app warnings |
+| **Top-up fails**       | Provides recovery URL                           | Redirect user to `recoveryUrl`                    |
+| **Auto top-up fails**  | Smart retry logic, auto-unblocks on card update | Optionally: notify user when `action_required`    |
+
+**The most important thing**: Make sure users can access Customer Portal to update their payment method. Everything else is handled for you.
+
+```typescript
+import { customerPortal } from "stripe-no-webhooks/client";
+
+// Put this somewhere accessible in your app (settings page, billing page, etc.)
+<button onClick={() => customerPortal()}>Manage Billing</button>
+```
+
+
+---
+
+# TAX
+
+# Tax Collection
+
+Automatic tax calculation with Stripe Tax.
+
+## Do You Need This?
+
+**You likely need tax collection if:**
+- Selling to EU, UK, Australia, Canada, or US states with sales tax
+- Revenue exceeds tax registration thresholds
+- Selling to businesses who need VAT/GST invoices
+
+**You can skip this if:**
+- Only selling where you're not required to collect tax
+- Below tax registration thresholds
+- Handling tax separately
+
+Not sure? Check [Stripe Tax docs](https://docs.stripe.com/tax) or consult a tax professional.
+
+## Pricing
+
+Enabling tax adds Stripe fees:
+
+| Feature | Fee | When |
+|---------|-----|------|
+| Stripe Tax | 0.5% of transaction | Only in registered regions |
+| Stripe Invoicing | ~0.4-0.5% per invoice | Required for tax records |
+
+**No tax config = no extra fees.**
+
+---
+
+## Quick Start
+
+### 1. Add tax config
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  tax: {
+    automaticTax: true,
+  },
+});
+```
+
+### 2. Set up Stripe Dashboard
+
+1. **Enable Stripe Tax**: [Dashboard → Settings → Tax](https://dashboard.stripe.com/settings/tax)
+2. **Add tax registrations**: Add each country/region where you're registered
+3. **Set business address**: Dashboard → Settings → Business details
+
+That's it! Tax is calculated at checkout based on customer location.
+
+---
+
+## Configuration Options
+
+### No Tax (Default)
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  // No tax config
+});
+```
+
+- No tax calculation, no extra fees
+- Best for apps where you don't need to collect tax
+
+### B2C with Tax
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  tax: {
+    automaticTax: true,
+  },
+});
+```
+
+- Tax calculated based on customer location
+- Best for consumer apps with sales tax/VAT requirements
+
+### B2B with Tax IDs
+
+```typescript
+const billing = new Billing({
+  billingConfig,
+  tax: {
+    automaticTax: true,
+    taxIdCollection: true,
+    billingAddressCollection: "required",
+  },
+});
+```
+
+Everything above, plus:
+- Customers can enter business tax IDs (VAT, GST, EIN)
+- Valid tax IDs enable reverse charge for cross-border EU B2B
+- Tax IDs appear on invoices
+- Best for SaaS selling to businesses
+
+---
+
+## How Tax Works
+
+1. **Customer enters address** at checkout
+2. **Stripe calculates tax** based on your registrations + customer location
+3. **Tax is applied:**
+   - Consumers → Standard rate (19% Germany, sales tax US, etc.)
+   - B2B cross-border with tax ID → Reverse charge (0%)
+   - B2B same country with tax ID → Standard rate still applies
+
+**Note:** Without a registration for a region, tax shows as $0.
+
+---
+
+## Testing
+
+### Test tax calculation
+
+1. Add test tax registration in [Stripe Dashboard](https://dashboard.stripe.com/test/settings/tax/registrations)
+2. Complete checkout with address in that region
+3. Verify tax is calculated
+
+### Test tax IDs
+
+| Type | Valid | Invalid |
+|------|-------|---------|
+| EU VAT | `DE123456789` | `DE000000000` |
+| UK VAT | `GB123456789` | `GB000000000` |
+
+See [Stripe test tax IDs](https://docs.stripe.com/billing/customer/tax-ids#test-tax-ids).
+
+---
+
+## Reference
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `automaticTax` | `boolean` | `false` | Enable Stripe Tax |
+| `taxIdCollection` | `boolean` | `false` | Let customers enter tax IDs |
+| `billingAddressCollection` | `"auto"` \| `"required"` | `"auto"` | When to collect address |
+
+### Customer Portal
+
+Enable tax features in [Dashboard → Customer Portal](https://dashboard.stripe.com/settings/billing/portal):
+- Billing address updates
+- Tax ID management (if `taxIdCollection` enabled)
+
+### Supported Tax ID Types
+
+EU VAT, UK VAT, US EIN, Australian ABN, Canadian GST/HST, and [more](https://docs.stripe.com/billing/customer/tax-ids#supported-tax-id-types).
+
+
+---
+
+# TEAM-BILLING
+
+# Team Billing
+
+Bill organizations instead of individuals.
+
+## When to Use
+
+- You want to bill a company/team, not individual users
+- One subscription covers multiple team members
+- Optionally charge per seat ($X/user/month)
+
+---
+
+## Setup
+
+Add `resolveOrg` to your billing config:
+
+```typescript
+// lib/billing.ts
+import { Billing } from "stripe-no-webhooks";
+import billingConfig from "../billing.config";
+
+export const billing = new Billing({
+  billingConfig,
+  successUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+  cancelUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+
+  resolveUser: async () => {
+    const { userId } = await auth();
+    return userId ? { id: userId } : null;
+  },
+
+  // Return org ID when doing org billing
+  resolveOrg: async () => {
+    const session = await getSession();
+    return session.currentOrgId ?? null;  // null = bill user, string = bill org
+  },
+});
+```
+
+When `resolveOrg` returns an org ID:
+- The org becomes the Stripe customer
+- Subscriptions are tied to the org, not the user
+- Credits/wallet go to the org (shared pool)
+
+---
+
+## Checkout
+
+The frontend is the same—no org ID needed:
+
+```typescript
+checkout({ planName: "Team", interval: "month" });
+```
+
+The server uses your `resolveOrg` function to determine which org to bill.
+
+---
+
+## Check Org Subscription
+
+```typescript
+// Check if org has active subscription
+const subscription = await billing.subscriptions.get({ userId: orgId });
+
+if (subscription?.status === "active") {
+  // Org is subscribed
+}
+```
+
+Note: For org billing, pass the `orgId` as `userId` to subscription methods.
+
+---
+
+## Credit Distribution
+
+Two modes via `grantTo` config:
+
+| Mode | Credits go to | Use case |
+|------|---------------|----------|
+| `"subscriber"` (default) | The org (shared pool) | Team shares a quota |
+| `"seat-users"` | Each team member | Individual quotas |
+
+### Shared Pool (Default)
+
+All team members consume from the org's balance:
+
+```typescript
+// Check org's balance
+const balance = await billing.credits.getBalance({
+  userId: orgId,  // org ID
+  key: "api_calls",
+});
+
+// Consume from org's pool
+await billing.credits.consume({
+  userId: orgId,  // org ID
+  key: "api_calls",
+  amount: 1,
+});
+```
+
+### Per-Seat Credits
+
+Each team member gets their own allocation:
+
+```typescript
+// lib/billing.ts
+export const billing = new Billing({
+  billingConfig,
+  credits: { grantTo: "seat-users" },
+});
+```
+
+Manage seats:
+
+```typescript
+// Add member (grants them credits)
+await billing.seats.add({ userId: "user_123", orgId: "org_456" });
+
+// Remove member (revokes their credits)
+await billing.seats.remove({ userId: "user_123", orgId: "org_456" });
+
+// Consume from individual's balance
+await billing.credits.consume({
+  userId: "user_123",  // user ID, not org
+  key: "api_calls",
+  amount: 1,
+});
+```
+
+---
+
+## Per-Seat Pricing
+
+Charge per team member ($X/user/month):
+
+```typescript
+{
+  name: "Team",
+  price: [{ amount: 1000, currency: "usd", interval: "month" }],  // $10/seat/month
+  perSeat: true,
+}
+```
+
+When `perSeat: true`:
+- `seats.add()` increments subscription quantity (prorated)
+- `seats.remove()` decrements subscription quantity (prorated)
+
+The first seat is the user who subscribes.
