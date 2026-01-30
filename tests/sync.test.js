@@ -12,25 +12,23 @@ import {
 } from "./test-utils.js";
 
 const BILLING_CONFIG_TEMPLATE = `
-import { BillingConfig } from "stripe-no-webhooks";
+import { defineConfig } from "stripe-no-webhooks";
 
-const billingConfig: BillingConfig = {
+export default defineConfig({
   test: {
     plans: [],
   },
   production: {
     plans: [],
   },
-};
-
-export default billingConfig;
+});
 `;
 
 function createBillingConfig(testPlans = [], productionPlans = []) {
   return `
-import { BillingConfig } from "stripe-no-webhooks";
+import { defineConfig } from "stripe-no-webhooks";
 
-const billingConfig: BillingConfig = {
+export default defineConfig({
   test: {
     plans: ${JSON.stringify(testPlans, null, 4).replace(/"(\w+)":/g, "$1:")},
   },
@@ -40,9 +38,7 @@ const billingConfig: BillingConfig = {
       "$1:"
     )},
   },
-};
-
-export default billingConfig;
+});
 `;
 }
 
@@ -813,18 +809,16 @@ describe("sync command - usage/meter sync", () => {
 
   function createBillingConfigWithFeatures(testPlans = []) {
     return `
-import { BillingConfig } from "stripe-no-webhooks";
+import { defineConfig } from "stripe-no-webhooks";
 
-const billingConfig: BillingConfig = {
+export default defineConfig({
   test: {
     plans: ${JSON.stringify(testPlans, null, 4).replace(/"(\w+)":/g, "$1:")},
   },
   production: {
     plans: [],
   },
-};
-
-export default billingConfig;
+});
 `;
   }
 
@@ -1191,5 +1185,44 @@ export default billingConfig;
 
     const eventNames = meters.map((m) => m.event_name).sort();
     expect(eventNames).toEqual(["api_calls", "storage_gb"]);
+  });
+
+  test("properly quotes feature keys with hyphens", async () => {
+    const config = createBillingConfigWithFeatures([
+      {
+        name: "Pro Plan",
+        price: [{ amount: 2000, currency: "usd", interval: "month" }],
+        features: {
+          "ai-chat": {
+            displayName: "AI Chat",
+            pricePerCredit: 5,
+            trackUsage: true,
+          },
+        },
+      },
+    ]);
+    fs.writeFileSync(path.join(tempDir, "billing.config.ts"), config);
+
+    const result = await sync({
+      cwd: tempDir,
+      env: { STRIPE_SECRET_KEY: STRIPE_VALID_TEST_KEY },
+      logger: mockLogger,
+      exitOnError: false,
+      StripeClass: function () {
+        return stripe;
+      },
+    });
+
+    expect(result.success).toBe(true);
+
+    // Verify the config was updated with quoted key
+    const updatedConfig = fs.readFileSync(
+      path.join(tempDir, "billing.config.ts"),
+      "utf8"
+    );
+    // Key should be quoted since it contains a hyphen
+    expect(updatedConfig).toContain('"ai-chat"');
+    // Should be valid TypeScript (no syntax errors from unquoted hyphenated key)
+    expect(updatedConfig).not.toMatch(/[^"']ai-chat[^"']/);
   });
 });
