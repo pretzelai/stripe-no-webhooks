@@ -225,9 +225,9 @@ export const billing = new Billing({
 Because Stripe data is already synced to your database, reads (`list` / `retrieve`) can be served from Postgres instead of the Stripe API. `StripeProxy` is a drop-in replacement for the `stripe` SDK that does exactly that:
 
 ```typescript
-import { StripeProxy } from "stripe-no-webhooks";
+import { StripeProxy as Stripe } from "stripe-no-webhooks";
 
-const stripe = new StripeProxy(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const products = await stripe.products.list({ limit: 100 });     // served from DB
 const customer = await stripe.customers.retrieve("cus_123");     // served from DB
