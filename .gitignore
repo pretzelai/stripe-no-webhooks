@@ -3,3 +3,4 @@ node_modules
 dist
 local-docs
 stripe-no-webhooks-*.tgz
+.DS_Store
