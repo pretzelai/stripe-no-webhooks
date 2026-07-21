@@ -118,7 +118,7 @@ function webhookSecretBox(secret, environment) {
       envVar +
       RESET +
       COLORS.green +
-      " ".repeat(width - envVar.length - 4) +
+      " ".repeat(Math.max(0, width - envVar.length - 4)) +
       "┃" +
       RESET
   );
