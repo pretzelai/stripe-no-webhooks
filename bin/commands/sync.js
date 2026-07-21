@@ -279,17 +279,6 @@ async function syncMeters(stripe, plans, mode, logger) {
 
 // --- TypeScript Config Parsing (for billing.config.ts) ---
 
-function findMatchingBrace(content, startIndex) {
-  let depth = 0;
-  for (let i = startIndex; i < content.length; i++) {
-    if (content[i] === "{" || content[i] === "[") depth++;
-    else if (content[i] === "}" || content[i] === "]") {
-      if (--depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
 function tsObjectToJson(ts) {
   return ts
     .replace(/\/\/.*$/gm, "") // Remove single-line comments
@@ -299,15 +288,30 @@ function tsObjectToJson(ts) {
 }
 
 function extractBillingConfigObject(content) {
-  const match = content.match(
-    /const\s+billingConfig\s*:\s*BillingConfig\s*=\s*\{/
-  );
-  if (!match) return null;
-  const start = match.index + match[0].length - 1;
-  const end = findMatchingBrace(content, start);
-  return end === -1
-    ? null
-    : { raw: content.substring(start, end + 1), start, end: end + 1 };
+  // Find the config object start - look for defineConfig({ or BillingConfig = {
+  let start = -1;
+
+  // Try defineConfig( pattern first
+  const defineMatch = content.indexOf("defineConfig(");
+  if (defineMatch !== -1) {
+    start = content.indexOf("{", defineMatch);
+  }
+
+  // Fall back to BillingConfig = pattern
+  if (start === -1) {
+    const constMatch = content.indexOf("BillingConfig");
+    if (constMatch !== -1) {
+      start = content.indexOf("{", constMatch);
+    }
+  }
+
+  if (start === -1) return null;
+
+  // Find the last } in the file (end of config)
+  const end = content.lastIndexOf("}");
+  if (end === -1 || end <= start) return null;
+
+  return { raw: content.substring(start, end + 1), start, end: end + 1 };
 }
 
 function parseBillingConfig(content, mode, logger = console) {
@@ -331,6 +335,15 @@ function parseBillingConfig(content, mode, logger = console) {
 
 // --- TypeScript Config Formatting ---
 
+function needsQuotes(key) {
+  // Valid JS identifier: starts with letter/$/_, contains only letters/digits/$/_
+  return !/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key);
+}
+
+function formatKey(key) {
+  return needsQuotes(key) ? `"${key}"` : key;
+}
+
 function toTsObjectLiteral(value, indent = 0) {
   const spaces = "  ".repeat(indent);
   const childSpaces = "  ".repeat(indent + 1);
@@ -349,7 +362,7 @@ function toTsObjectLiteral(value, indent = 0) {
   const entries = Object.entries(value);
   if (!entries.length) return "{}";
   const props = entries.map(
-    ([k, v]) => `${k}: ${toTsObjectLiteral(v, indent + 1)}`
+    ([k, v]) => `${formatKey(k)}: ${toTsObjectLiteral(v, indent + 1)}`
   );
   return `{\n${childSpaces}${props.join(`,\n${childSpaces}`)},\n${spaces}}`;
 }
@@ -1049,7 +1062,6 @@ module.exports = {
   sync,
   setupWebhooks,
   // Export for testing
-  findMatchingBrace,
   tsObjectToJson,
   extractBillingConfigObject,
   parseBillingConfig,

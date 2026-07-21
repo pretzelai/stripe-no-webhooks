@@ -220,6 +220,28 @@ export const billing = new Billing({
 
 ---
 
+## Faster Stripe reads with StripeProxy
+
+Because Stripe data is already synced to your database, reads (`list` / `retrieve`) can be served from Postgres instead of the Stripe API. `StripeProxy` is a drop-in replacement for the `stripe` SDK that does exactly that:
+
+```typescript
+import { StripeProxy as Stripe } from "stripe-no-webhooks";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+const products = await stripe.products.list({ limit: 100 });     // served from DB
+const customer = await stripe.customers.retrieve("cus_123");     // served from DB
+const subscription = await stripe.subscriptions.create({ ... }); // forwarded to Stripe
+```
+
+- **Reads** (`list`, `retrieve`) hit the DB first, and fall back to the Stripe API on any miss or error.
+- **Writes** (`create`, `update`, `del`) are forwarded directly to Stripe unchanged.
+- Same method signatures and return types as the official `stripe` SDK.
+
+Picks up `STRIPE_SECRET_KEY` and `DATABASE_URL` from env by default. See [benchmark-stripe-proxy/](./benchmark-stripe-proxy/) for a benchmark harness.
+
+---
+
 ## Generate a Pricing Page
 
 ```bash
